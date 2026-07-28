@@ -177,12 +177,10 @@ func (s *serverHandler) HandleUniStream(reader *bufio.Reader) (err error) {
 			writeClosed.Store(true)
 		}
 	case HeartbeatType:
-		var heartbeat Heartbeat
-		heartbeat, err = ReadHeartbeatWithHead(commandHead, reader)
+		_, err = ReadHeartbeatWithHead(commandHead, reader)
 		if err != nil {
 			return
 		}
-		heartbeat.BytesLen()
 	}
 	return
 }
@@ -213,5 +211,7 @@ func (s *serverUDPPacket) Drop() {
 	s.packet.DATA = nil
 }
 
-var _ C.UDPPacket = (*serverUDPPacket)(nil)
-var _ C.UDPPacketInAddr = (*serverUDPPacket)(nil)
+var (
+	_ C.UDPPacket       = (*serverUDPPacket)(nil)
+	_ C.UDPPacketInAddr = (*serverUDPPacket)(nil)
+)

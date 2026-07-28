@@ -49,7 +49,7 @@ func dnsReadConfig() (servers []string, err error) {
 				if sa.ZoneId != 0 {
 					ip = ip.WithZone(strconv.FormatInt(int64(sa.ZoneId), 10))
 				}
-				//continue
+				// continue
 			default:
 				// Unexpected type.
 				continue

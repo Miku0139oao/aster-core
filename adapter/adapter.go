@@ -196,7 +196,6 @@ func (p *Proxy) URLTest(ctx context.Context, url string, expectedStatus utils.In
 		if state.history.Len() > defaultHistoriesNum {
 			state.history.Pop()
 		}
-
 	}()
 
 	unifiedDelay := UnifiedDelay.Load()
@@ -249,7 +248,6 @@ func (p *Proxy) URLTest(ctx context.Context, url string, expectedStatus utils.In
 	defer client.CloseIdleConnections()
 
 	resp, err := client.Do(req)
-
 	if err != nil {
 		return
 	}

@@ -212,12 +212,10 @@ func (t *clientImpl) handleMessage(quicConn *quic.Conn) (err error) {
 					}
 				}
 			case HeartbeatType:
-				var heartbeat Heartbeat
-				heartbeat, err = ReadHeartbeatWithHead(commandHead, reader)
+				_, err = ReadHeartbeatWithHead(commandHead, reader)
 				if err != nil {
 					return
 				}
-				heartbeat.BytesLen()
 			}
 			return
 		}()

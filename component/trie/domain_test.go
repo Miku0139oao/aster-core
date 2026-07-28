@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/Miku0139oao/aster-core/component/trie"
+
 	"github.com/stretchr/testify/assert"
 )
 

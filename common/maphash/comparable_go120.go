@@ -51,9 +51,11 @@ type seedTyp struct {
 	s uint64
 }
 
-type iTFlag uint8
-type iKind uint8
-type iNameOff int32
+type (
+	iTFlag   uint8
+	iKind    uint8
+	iNameOff int32
+)
 
 // TypeOff is the offset to a type from moduledata.types.  See resolveTypeOff in runtime.
 type iTypeOff int32
@@ -124,8 +126,10 @@ func noescape(p unsafe.Pointer) unsafe.Pointer {
 	return unsafe.Pointer(x ^ 0)
 }
 
-var alwaysFalse bool
-var escapeSink any
+var (
+	alwaysFalse bool
+	escapeSink  any
+)
 
 // escape forces any pointers in x to escape to the heap.
 func escape[T any](x T) T {

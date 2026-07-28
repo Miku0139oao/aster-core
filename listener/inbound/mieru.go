@@ -9,11 +9,11 @@ import (
 	C "github.com/Miku0139oao/aster-core/constant"
 	"github.com/Miku0139oao/aster-core/listener/mieru"
 	"github.com/Miku0139oao/aster-core/log"
-	"google.golang.org/protobuf/proto"
 
 	mieruserver "github.com/enfein/mieru/v3/apis/server"
 	mierutp "github.com/enfein/mieru/v3/apis/trafficpattern"
 	mierupb "github.com/enfein/mieru/v3/pkg/appctl/appctlpb"
+	"google.golang.org/protobuf/proto"
 )
 
 type Mieru struct {

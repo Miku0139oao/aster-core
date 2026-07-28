@@ -57,6 +57,7 @@ func (l *patchTestListener) Listen(C.Tunnel) error {
 	}
 	return l.listenErr
 }
+
 func (l *patchTestListener) Close() error {
 	l.closeCall++
 	if l.events != nil {
@@ -207,6 +208,7 @@ func (l *patchNetListener) Accept() (net.Conn, error) {
 	<-l.closed
 	return nil, net.ErrClosed
 }
+
 func (l *patchNetListener) Close() error {
 	l.closeCall++
 	closed := false
@@ -236,6 +238,7 @@ func (c *patchListenConfig) Listen(context.Context, string, string) (net.Listene
 	c.listeners = append(c.listeners, listener)
 	return listener, nil
 }
+
 func (*patchListenConfig) ListenPacket(context.Context, string, string) (net.PacketConn, error) {
 	return nil, errors.New("unexpected packet listener")
 }

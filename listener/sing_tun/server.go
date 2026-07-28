@@ -22,7 +22,6 @@ import (
 	LC "github.com/Miku0139oao/aster-core/listener/config"
 	"github.com/Miku0139oao/aster-core/listener/sing"
 	"github.com/Miku0139oao/aster-core/log"
-	"golang.org/x/exp/constraints"
 
 	tun "github.com/metacubex/sing-tun"
 	"github.com/metacubex/sing/common"
@@ -30,14 +29,16 @@ import (
 	E "github.com/metacubex/sing/common/exceptions"
 	F "github.com/metacubex/sing/common/format"
 	"github.com/metacubex/sing/common/ranges"
-
 	"go4.org/netipx"
+	"golang.org/x/exp/constraints"
 	"golang.org/x/exp/maps"
 	"golang.org/x/exp/slices"
 )
 
-var InterfaceName = "Meta"
-var EnforceBindInterface = false
+var (
+	InterfaceName        = "Meta"
+	EnforceBindInterface = false
+)
 
 type Listener struct {
 	closed  bool
@@ -157,7 +158,7 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 	if options.FileDescriptor > 0 {
 		if tunnelName, err := getTunnelName(int32(options.FileDescriptor)); err == nil {
 			tunName = tunnelName // sing-tun must have the truth tun interface name even it from a fd
-			//forwarderBindInterface = true
+			// forwarderBindInterface = true
 			log.Debugln("[TUN] use tun name %s for fd %d", tunnelName, options.FileDescriptor)
 		} else {
 			log.Warnln("[TUN] get tun name failed for fd %d, fallback to use tun interface name %s", options.FileDescriptor, tunName)

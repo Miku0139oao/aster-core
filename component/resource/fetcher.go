@@ -17,8 +17,10 @@ import (
 	"github.com/samber/lo"
 )
 
-type Parser[V any] func([]byte) (V, error)
-type BundleFile func() (fs.File, error)
+type (
+	Parser[V any] func([]byte) (V, error)
+	BundleFile    func() (fs.File, error)
+)
 
 type Fetcher[V any] struct {
 	ctx          context.Context
@@ -57,16 +59,16 @@ func (f *Fetcher[V]) Initial() (V, error) {
 	if stat, fErr := os.Stat(f.vehicle.Path()); fErr == nil {
 		// local file exists, use it first
 		buf, err := os.ReadFile(f.vehicle.Path())
-		modTime := stat.ModTime()
-		contents, _, err := f.loadBuf(buf, utils.MakeHash(buf), false)
-		f.updatedAt = modTime // reset updatedAt to file's modTime
-
 		if err == nil {
-			err = f.startPullLoop(time.Since(modTime) > f.interval)
-			if err != nil {
-				return lo.Empty[V](), err
+			modTime := stat.ModTime()
+			contents, _, loadErr := f.loadBuf(buf, utils.MakeHash(buf), false)
+			f.updatedAt = modTime // reset updatedAt to file's modTime
+			if loadErr == nil {
+				if err = f.startPullLoop(time.Since(modTime) > f.interval); err != nil {
+					return lo.Empty[V](), err
+				}
+				return contents, nil
 			}
-			return contents, nil
 		}
 	}
 
@@ -76,20 +78,21 @@ func (f *Fetcher[V]) Initial() (V, error) {
 		if file, fErr := f.bundleFile(); fErr == nil {
 			defer file.Close()
 			buf, err := io.ReadAll(file)
-			var modTime time.Time
-			if stat, sErr := file.Stat(); sErr == nil {
-				modTime = stat.ModTime()
-			}
-			contents, _, err := f.loadBuf(buf, utils.MakeHash(buf), true)
-			f.updatedAt = modTime // reset updatedAt to file's modTime
-
 			if err == nil {
-				log.Infoln("[Provider] %s extract successful from bundle file", f.Name())
-				err = f.startPullLoop(time.Since(modTime) > f.interval)
-				if err != nil {
-					return lo.Empty[V](), err
+				var modTime time.Time
+				if stat, sErr := file.Stat(); sErr == nil {
+					modTime = stat.ModTime()
 				}
-				return contents, nil
+				var contents V
+				contents, _, err = f.loadBuf(buf, utils.MakeHash(buf), true)
+				f.updatedAt = modTime // reset updatedAt to file's modTime
+				if err == nil {
+					log.Infoln("[Provider] %s extract successful from bundle file", f.Name())
+					if err = f.startPullLoop(time.Since(modTime) > f.interval); err != nil {
+						return lo.Empty[V](), err
+					}
+					return contents, nil
+				}
 			}
 			log.Warnln("[Provider] %s read bundle file error: %s", f.Name(), err.Error())
 		} else {

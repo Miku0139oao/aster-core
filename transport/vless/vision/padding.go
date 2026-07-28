@@ -25,7 +25,7 @@ func ApplyPadding(buffer *buf.Buffer, command byte, userUUID *[]byte, paddingTLS
 	var paddingLen int32
 	if contentLen < 900 {
 		if paddingTLS {
-			//log.Debugln("long padding")
+			// log.Debugln("long padding")
 			paddingLen = randv2.Int32N(500) + 900 - contentLen
 		} else {
 			paddingLen = randv2.Int32N(256)

@@ -335,6 +335,6 @@ func NewInlineProvider(name string, behavior P.RuleBehavior, payload []string, p
 		ip,
 	}
 
-	//runtime.SetFinalizer(wrapper, (*InlineProvider).Close)
+	// runtime.SetFinalizer(wrapper, (*InlineProvider).Close)
 	return wrapper
 }

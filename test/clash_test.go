@@ -16,13 +16,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/client"
-	"github.com/docker/go-connections/nat"
 	"github.com/Miku0139oao/aster-core/adapter/outbound"
 	C "github.com/Miku0139oao/aster-core/constant"
 	"github.com/Miku0139oao/aster-core/hub/executor"
 	"github.com/Miku0139oao/aster-core/transport/socks5"
+
+	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/client"
+	"github.com/docker/go-connections/nat"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

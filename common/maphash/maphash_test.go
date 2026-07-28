@@ -359,7 +359,6 @@ func testWriteComparableNoEqual[T comparable](t *testing.T, v1, v2 T) {
 	if h1.Sum64() == h2.Sum64() {
 		t.Fatalf("WriteComparable(seed, %v) == WriteComparable(seed, %v)", v1, v2)
 	}
-
 }
 
 func testWriteComparable[T comparable](t *testing.T, v T, v2 ...T) {
@@ -450,8 +449,10 @@ func TestComparableAllocations(t *testing.T) {
 }
 
 // Make sure a Hash implements the hash.Hash and hash.Hash64 interfaces.
-var _ hash.Hash = &Hash{}
-var _ hash.Hash64 = &Hash{}
+var (
+	_ hash.Hash   = &Hash{}
+	_ hash.Hash64 = &Hash{}
+)
 
 func benchmarkSize(b *testing.B, size int) {
 	h := &Hash{}

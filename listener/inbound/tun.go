@@ -66,9 +66,11 @@ type TunOption struct {
 	SendMsgX bool `inbound:"sendmsgx,omitempty"`
 }
 
-var _ encoding.TextUnmarshaler = (*netip.Addr)(nil)   // ensure netip.Addr can decode direct by structure package
-var _ encoding.TextUnmarshaler = (*netip.Prefix)(nil) // ensure netip.Prefix can decode direct by structure package
-var _ encoding.TextUnmarshaler = (*C.TUNStack)(nil)   // ensure C.TUNStack can decode direct by structure package
+var (
+	_ encoding.TextUnmarshaler = (*netip.Addr)(nil)   // ensure netip.Addr can decode direct by structure package
+	_ encoding.TextUnmarshaler = (*netip.Prefix)(nil) // ensure netip.Prefix can decode direct by structure package
+	_ encoding.TextUnmarshaler = (*C.TUNStack)(nil)   // ensure C.TUNStack can decode direct by structure package
+)
 
 func (o TunOption) Equal(config C.InboundConfig) bool {
 	return optionToString(o) == optionToString(config)

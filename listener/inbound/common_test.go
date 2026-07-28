@@ -34,22 +34,24 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-var httpPath = "/inbound_test"
-var httpData = make([]byte, 2*pool.RelayBufferSize)
-var remoteAddr = netip.MustParseAddr("1.2.3.4")
-var userUUID = utils.NewUUIDV4().String()
-var tlsCertificate, tlsPrivateKey, tlsFingerprint, _ = ca.NewRandomTLSKeyPair(ca.KeyPairTypeP256)
-var tlsAuthCertificate, tlsAuthPrivateKey, _, _ = ca.NewRandomTLSKeyPair(ca.KeyPairTypeP256)
-var tlsConfigCert, _ = tls.X509KeyPair([]byte(tlsCertificate), []byte(tlsPrivateKey))
-var tlsConfig = &tls.Config{Certificates: []tls.Certificate{tlsConfigCert}, NextProtos: []string{"h2", "http/1.1"}}
-var tlsClientConfig, _ = ca.GetTLSConfig(ca.Option{Fingerprint: tlsFingerprint})
-var realityPrivateKey, realityPublickey string
-var realityDest = "itunes.apple.com"
-var realityShortid = "10f897e26c4b9478"
-var realityRealDial = false
-var echPublicSni = "public.sni"
-var echConfigBase64, echKeyPem, _ = ech.GenECHConfig(echPublicSni)
-var winGo120 = runtime.GOOS == "windows" && strings.HasPrefix(runtime.Version(), "go1.20")
+var (
+	httpPath                                         = "/inbound_test"
+	httpData                                         = make([]byte, 2*pool.RelayBufferSize)
+	remoteAddr                                       = netip.MustParseAddr("1.2.3.4")
+	userUUID                                         = utils.NewUUIDV4().String()
+	tlsCertificate, tlsPrivateKey, tlsFingerprint, _ = ca.NewRandomTLSKeyPair(ca.KeyPairTypeP256)
+	tlsAuthCertificate, tlsAuthPrivateKey, _, _      = ca.NewRandomTLSKeyPair(ca.KeyPairTypeP256)
+	tlsConfigCert, _                                 = tls.X509KeyPair([]byte(tlsCertificate), []byte(tlsPrivateKey))
+	tlsConfig                                        = &tls.Config{Certificates: []tls.Certificate{tlsConfigCert}, NextProtos: []string{"h2", "http/1.1"}}
+	tlsClientConfig, _                               = ca.GetTLSConfig(ca.Option{Fingerprint: tlsFingerprint})
+	realityPrivateKey, realityPublickey              string
+	realityDest                                      = "itunes.apple.com"
+	realityShortid                                   = "10f897e26c4b9478"
+	realityRealDial                                  = false
+	echPublicSni                                     = "public.sni"
+	echConfigBase64, echKeyPem, _                    = ech.GenECHConfig(echPublicSni)
+	winGo120                                         = runtime.GOOS == "windows" && strings.HasPrefix(runtime.Version(), "go1.20")
+)
 
 func init() {
 	rand.Read(httpData)
@@ -170,8 +172,10 @@ func (c *WaitCloseConn) Close() error {
 	return err
 }
 
-var _ C.Tunnel = (*TestTunnel)(nil)
-var _ net.Listener = (*TestTunnelListener)(nil)
+var (
+	_ C.Tunnel     = (*TestTunnel)(nil)
+	_ net.Listener = (*TestTunnelListener)(nil)
+)
 
 func NewHttpTestTunnel() *TestTunnel {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -189,7 +193,7 @@ func NewHttpTestTunnel() *TestTunnel {
 		io.Copy(io.Discard, r.Body)
 		render.Data(w, r, httpData[:size])
 	})
-	//h2Server := &http.Http2Server{}
+	// h2Server := &http.Http2Server{}
 	server := http.Server{Handler: r}
 	//_ = http.Http2ConfigureServer(&server, h2Server)
 	go server.Serve(ln)
@@ -341,8 +345,8 @@ func NewHttpTestTunnel() *TestTunnel {
 						return
 					}
 				}
-				//ctx, cancel := context.WithTimeout(ctx, C.DefaultTLSTimeout)
-				//defer cancel()
+				// ctx, cancel := context.WithTimeout(ctx, C.DefaultTLSTimeout)
+				// defer cancel()
 				if err := tlsConn.HandshakeContext(ctx); err != nil {
 					return
 				}

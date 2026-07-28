@@ -23,9 +23,7 @@ const (
 	dirMode  os.FileMode = 0o755
 )
 
-var (
-	etag = false
-)
+var etag = false
 
 func ETag() bool {
 	return etag

@@ -21,8 +21,10 @@ import (
 	"github.com/metacubex/tls"
 )
 
-var ErrNotHandshakeComplete = errors.New("tls connection not handshake complete")
-var ErrNotTLS13 = errors.New("XTLS Vision based on TLS 1.3 outer connection")
+var (
+	ErrNotHandshakeComplete = errors.New("tls connection not handshake complete")
+	ErrNotTLS13             = errors.New("XTLS Vision based on TLS 1.3 outer connection")
+)
 
 func NewConn(conn net.Conn, tlsConn net.Conn, userUUID uuid.UUID) (*Conn, error) {
 	c := &Conn{
@@ -42,36 +44,36 @@ func NewConn(conn net.Conn, tlsConn net.Conn, userUUID uuid.UUID) (*Conn, error)
 	for {
 		switch underlying := upstream.(type) {
 		case *gotls.Conn:
-			//log.Debugln("type tls")
+			// log.Debugln("type tls")
 			tlsConn = underlying
 			c.netConn = underlying.NetConn()
 			t = reflect.TypeOf(underlying).Elem()
 			p = unsafe.Pointer(underlying)
 			break
 		case *tls.Conn:
-			//log.Debugln("type tls")
+			// log.Debugln("type tls")
 			tlsConn = underlying
 			c.netConn = underlying.NetConn()
 			t = reflect.TypeOf(underlying).Elem()
 			p = unsafe.Pointer(underlying)
 			break
 		case *tlsC.Conn:
-			//log.Debugln("type *tlsC.Conn")
+			// log.Debugln("type *tlsC.Conn")
 			tlsConn = underlying
 			c.netConn = underlying.NetConn()
 			t = reflect.TypeOf(underlying).Elem()
 			p = unsafe.Pointer(underlying)
 			break
 		case *tlsC.UConn:
-			//log.Debugln("type *tlsC.UConn")
+			// log.Debugln("type *tlsC.UConn")
 			tlsConn = underlying
 			c.netConn = underlying.NetConn()
 			t = reflect.TypeOf(underlying.Conn).Elem()
-			//log.Debugln("t:%v", t)
+			// log.Debugln("t:%v", t)
 			p = unsafe.Pointer(underlying.Conn)
 			break
 		case *encryption.CommonConn:
-			//log.Debugln("type *encryption.CommonConn")
+			// log.Debugln("type *encryption.CommonConn")
 			tlsConn = underlying
 			c.netConn = underlying.Conn
 			t = reflect.TypeOf(underlying).Elem()

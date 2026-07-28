@@ -12,12 +12,9 @@ on:
       - ".github/ISSUE_TEMPLATE/**"
     branches:
       - main
-  pull_request:
-    branches:
-      - main
 concurrency:
   group: "${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && 'release' || github.ref }}"
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: false
 
 permissions:
   contents: read

@@ -1,9 +1,9 @@
 package config
 
 import (
-	"github.com/Miku0139oao/aster-core/listener/sing"
-
 	"encoding/json"
+
+	"github.com/Miku0139oao/aster-core/listener/sing"
 )
 
 type TuicServer struct {

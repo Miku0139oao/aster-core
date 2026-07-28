@@ -16,11 +16,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Miku0139oao/aster-core/component/dialer"
+
 	"github.com/coreos/go-iptables/iptables"
 	"github.com/metacubex/gopacket"
 	"github.com/metacubex/gopacket/layers"
-
-	"github.com/Miku0139oao/aster-core/component/dialer"
 )
 
 var (

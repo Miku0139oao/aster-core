@@ -7,8 +7,10 @@ import (
 	C "github.com/Miku0139oao/aster-core/constant"
 )
 
-var lanAllowedIPs []netip.Prefix
-var lanDisAllowedIPs []netip.Prefix
+var (
+	lanAllowedIPs    []netip.Prefix
+	lanDisAllowedIPs []netip.Prefix
+)
 
 func SetAllowedIPs(prefixes []netip.Prefix) {
 	lanAllowedIPs = prefixes

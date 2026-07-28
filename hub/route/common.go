@@ -135,9 +135,9 @@ func wsWriteServerMessage(w io.Writer, op byte, p []byte) error {
 	// Make slice of bytes with capacity 14 that could hold any header.
 	bts := make([]byte, 14)
 
-	bts[0] |= 0x80   //FIN
-	bts[0] |= 0 << 4 //RSV
-	bts[0] |= op     //OPCODE
+	bts[0] |= 0x80   // FIN
+	bts[0] |= 0 << 4 // RSV
+	bts[0] |= op     // OPCODE
 
 	var n int
 	switch {

@@ -77,5 +77,7 @@ func (l singInfoToDebugLogger) Info(args ...any) {
 	Debugln(fmt.Sprint(args...))
 }
 
-var SingLogger L.ContextLogger = singLogger{}
-var SingInfoToDebugLogger L.ContextLogger = singInfoToDebugLogger{}
+var (
+	SingLogger            L.ContextLogger = singLogger{}
+	SingInfoToDebugLogger L.ContextLogger = singInfoToDebugLogger{}
+)

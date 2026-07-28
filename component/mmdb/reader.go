@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/Miku0139oao/aster-core/log"
+
 	"github.com/oschwald/maxminddb-golang"
 )
 

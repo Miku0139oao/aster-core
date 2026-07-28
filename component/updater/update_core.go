@@ -146,7 +146,7 @@ func (u *CoreUpdater) Update(currentExePath string, channel string, force bool) 
 	backupDir := filepath.Join(workDir, "aster-backup")
 	updateDir := filepath.Join(workDir, "aster-update")
 	packagePath := filepath.Join(updateDir, packageName)
-	//log.Infoln(packagePath)
+	// log.Infoln(packagePath)
 
 	updateExeName := coreBaseName
 	if runtime.GOOS == "windows" {

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	LC "github.com/Miku0139oao/aster-core/listener/config"
+
 	"github.com/stretchr/testify/require"
 )
 

@@ -213,6 +213,8 @@ func anyTLSManagedUsers(users []C.ManagedUser) (map[string]string, error) {
 	return updated, nil
 }
 
-var _ C.InboundListener = (*AnyTLS)(nil)
-var _ C.ManagedUserListener = (*AnyTLS)(nil)
-var _ C.ManagedUserStager = (*AnyTLS)(nil)
+var (
+	_ C.InboundListener     = (*AnyTLS)(nil)
+	_ C.ManagedUserListener = (*AnyTLS)(nil)
+	_ C.ManagedUserStager   = (*AnyTLS)(nil)
+)

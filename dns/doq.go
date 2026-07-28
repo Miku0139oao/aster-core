@@ -331,6 +331,9 @@ func (doq *dnsOverQUIC) openConnection(ctx context.Context) (quicConn *quic.Conn
 	}
 
 	p, err := strconv.Atoi(port)
+	if err != nil {
+		return nil, err
+	}
 	udpAddr := net.UDPAddr{IP: net.ParseIP(ip), Port: p}
 	packetConn, err := doq.dialer.ListenPacket(ctx, "udp", addr)
 	if err != nil {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/Miku0139oao/aster-core/component/resolver/hosts"
 	"github.com/Miku0139oao/aster-core/component/trie"
+
 	"github.com/metacubex/randv2"
 )
 

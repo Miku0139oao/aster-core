@@ -38,6 +38,7 @@ func (l *testInboundListener) ConfiguredUsers() []C.ManagedUser { return nil }
 func (l *testInboundListener) CurrentManagedUsers() []C.ManagedUser {
 	return nil
 }
+
 func (l *testInboundListener) UpdateManagedUsers([]C.ManagedUser) error {
 	return nil
 }

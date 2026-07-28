@@ -8,6 +8,7 @@ import (
 	"github.com/Miku0139oao/aster-core/adapter/outbound"
 	"github.com/Miku0139oao/aster-core/listener/inbound"
 	"github.com/Miku0139oao/aster-core/transport/sudoku"
+
 	"github.com/stretchr/testify/assert"
 )
 

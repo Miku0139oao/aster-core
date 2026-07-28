@@ -25,9 +25,7 @@ const (
 	dualStackFallbackTimeout = 300 * time.Millisecond
 )
 
-var (
-	tcpConcurrent = atomic.NewBool(false)
-)
+var tcpConcurrent = atomic.NewBool(false)
 
 func SetTcpConcurrent(concurrent bool) {
 	tcpConcurrent.Store(concurrent)

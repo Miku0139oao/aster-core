@@ -23,11 +23,10 @@ import (
 
 	amnezia "github.com/metacubex/amneziawg-go/device"
 	wireguard "github.com/metacubex/sing-wireguard"
-	"github.com/metacubex/wireguard-go/device"
-
 	"github.com/metacubex/sing/common/debug"
 	E "github.com/metacubex/sing/common/exceptions"
 	M "github.com/metacubex/sing/common/metadata"
+	"github.com/metacubex/wireguard-go/device"
 )
 
 type wireguardGoDevice interface {

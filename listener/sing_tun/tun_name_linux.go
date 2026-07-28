@@ -2,9 +2,10 @@ package sing_tun
 
 import (
 	"fmt"
-	"golang.org/x/sys/unix"
 	"syscall"
 	"unsafe"
+
+	"golang.org/x/sys/unix"
 )
 
 const ifReqSize = unix.IFNAMSIZ + 64

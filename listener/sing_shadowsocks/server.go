@@ -155,7 +155,7 @@ func New(config LC.ShadowsocksServer, lc C.InboundListenConfig, tunnel C.Tunnel,
 		addr := addr
 
 		if config.Udp {
-			//UDP
+			// UDP
 			ul, err := lc.ListenPacket(context.Background(), "udp", addr)
 			if err != nil {
 				return nil, err
@@ -215,7 +215,7 @@ func New(config LC.ShadowsocksServer, lc C.InboundListenConfig, tunnel C.Tunnel,
 			}()
 		}
 
-		//TCP
+		// TCP
 		l, err := lc.Listen(context.Background(), "tcp", addr)
 		if err != nil {
 			return nil, err

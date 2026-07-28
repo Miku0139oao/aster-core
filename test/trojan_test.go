@@ -6,9 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
 	"github.com/Miku0139oao/aster-core/adapter/outbound"
 	C "github.com/Miku0139oao/aster-core/constant"
+
+	"github.com/docker/docker/api/types/container"
 	"github.com/stretchr/testify/require"
 )
 

@@ -73,6 +73,7 @@ func (c *httpServerConn) Close() error {
 		// is interrupted, then drain the writer before ServeHTTP can return.
 		_ = http.NewResponseController(c.w).SetWriteDeadline(time.Now())
 		c.mu.Lock()
+		//nolint:staticcheck // The empty critical section waits for an in-flight writer to release mu.
 		c.mu.Unlock()
 	})
 	return c.reader.Close()

@@ -54,14 +54,7 @@ const (
 
 func DefaultALPN() []string { return []string{"h2", "http/1.1"} }
 
-func New(config LC.Hysteria2RealmServer, lc C.InboundListenConfig, tunnel C.Tunnel, additions ...inbound.Addition) (sl *Listener, err error) {
-	if len(additions) == 0 {
-		additions = []inbound.Addition{
-			inbound.WithInName("DEFAULT-HYSTERIA2-REALM"),
-			inbound.WithSpecialRules(""),
-		}
-	}
-
+func New(config LC.Hysteria2RealmServer, lc C.InboundListenConfig, tunnel C.Tunnel, _ ...inbound.Addition) (sl *Listener, err error) {
 	pat, err := regexp.Compile(config.RealmNamePattern)
 	if err != nil {
 		return nil, fmt.Errorf("invalid realm name pattern %q: %v", config.RealmNamePattern, err)
@@ -118,7 +111,7 @@ func New(config LC.Hysteria2RealmServer, lc C.InboundListenConfig, tunnel C.Tunn
 	for _, addr := range strings.Split(config.Listen, ",") {
 		addr := addr
 
-		//TCP
+		// TCP
 		l, err := lc.Listen(context.Background(), "tcp", addr)
 		if err != nil {
 			return nil, err

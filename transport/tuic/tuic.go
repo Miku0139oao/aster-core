@@ -7,8 +7,10 @@ import (
 	v5 "github.com/Miku0139oao/aster-core/transport/tuic/v5"
 )
 
-type ClientOptionV4 = v4.ClientOption
-type ClientOptionV5 = v5.ClientOption
+type (
+	ClientOptionV4 = v4.ClientOption
+	ClientOptionV5 = v5.ClientOption
+)
 
 type Client = types.Client
 
@@ -24,13 +26,17 @@ type DialFunc = types.DialFunc
 
 var TooManyOpenStreams = types.TooManyOpenStreams
 
-const DefaultStreamReceiveWindow = common.DefaultStreamReceiveWindow
-const DefaultConnectionReceiveWindow = common.DefaultConnectionReceiveWindow
+const (
+	DefaultStreamReceiveWindow     = common.DefaultStreamReceiveWindow
+	DefaultConnectionReceiveWindow = common.DefaultConnectionReceiveWindow
+)
 
-var GenTKN = v4.GenTKN
-var PacketOverHeadV4 = v4.PacketOverHead
-var PacketOverHeadV5 = v5.PacketOverHead
-var MaxFragSizeV5 = v5.MaxFragSize
+var (
+	GenTKN           = v4.GenTKN
+	PacketOverHeadV4 = v4.PacketOverHead
+	PacketOverHeadV5 = v5.PacketOverHead
+	MaxFragSizeV5    = v5.MaxFragSize
+)
 
 type UdpRelayMode = types.UdpRelayMode
 

@@ -1,4 +1,5 @@
 name: Test
+
 on:
   push:
     paths-ignore:
@@ -17,23 +18,18 @@ permissions:
 jobs:
   test:
     strategy:
-      matrix:
-        os:
-          - 'ubuntu-latest' # amd64 linux
-          - 'windows-latest' # amd64 windows
-          - 'macos-latest' # arm64 macos
-          - 'ubuntu-24.04-arm' # arm64 linux
-          - 'windows-11-arm' # arm64 windows
-          - 'macos-26-intel' # amd64 macos
-        go-version:
-          - '1.26'
-          - '1.25'
-          - '1.24'
-          - '1.23'
-          - '1.22'
-          - '1.21'
-          - '1.20'
       fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, go-version: "1.20", gvisor: true }
+          - { os: ubuntu-latest, go-version: "1.21", gvisor: false }
+          - { os: ubuntu-latest, go-version: "1.22", gvisor: false }
+          - { os: ubuntu-latest, go-version: "1.23", gvisor: false }
+          - { os: ubuntu-latest, go-version: "1.24", gvisor: false }
+          - { os: ubuntu-latest, go-version: "1.25", gvisor: false }
+          - { os: ubuntu-latest, go-version: "1.26", gvisor: true }
+          - { os: windows-latest, go-version: "1.26", gvisor: false }
+          - { os: macos-latest, go-version: "1.26", gvisor: false }
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -41,9 +37,7 @@ jobs:
     env:
       CGO_ENABLED: 0
       GOTOOLCHAIN: local
-      # Fix mingw trying to be smart and converting paths https://github.com/moby/moby/issues/24029#issuecomment-250412919
       MSYS_NO_PATHCONV: true
-      # Skip mihomo inbound interop test
       SKIP_INTEROP_TEST: 1
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -56,16 +50,55 @@ jobs:
       - name: Verify Go installation
         run: go version
 
-      - name: Verify Go env
-        run: go env
-
-      - name: Remove inbound test for macOS
+      - name: Remove inbound tests on macOS
         if: ${{ runner.os == 'macOS' }}
-        run: |
-          rm -rf listener/inbound/*_test.go
+        run: rm -f listener/inbound/*_test.go
 
       - name: Test
-        run: go test ./... -v -count=1
+        run: go test ./... -count=1
 
-      - name: Test with tag with_gvisor
-        run: go test ./... -v -count=1 -tags "with_gvisor"
+      - name: Test with gVisor
+        if: ${{ matrix.gvisor }}
+        run: go test ./... -count=1 -tags "with_gvisor"
+
+  lint:
+    runs-on: ubuntu-latest
+    env:
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
+        with:
+          go-version: "1.26"
+
+      - name: Install pinned golangci-lint
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
+
+      - name: Lint
+        run: golangci-lint run --timeout=10m
+
+  race:
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: 1
+      GOTOOLCHAIN: local
+      SKIP_INTEROP_TEST: 1
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
+        with:
+          go-version: "1.26"
+
+      - name: Targeted race tests
+        run: >-
+          go test -race
+          ./common/net
+          ./component/aster
+          ./hub/route
+          ./listener/anytls
+          ./listener/sing_vless
+          ./tunnel/statistic

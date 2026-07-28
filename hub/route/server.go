@@ -168,7 +168,6 @@ func router(isDebug bool, secret string, dohServer string, cors Cors, asterPolic
 		}
 		r.Mount("/upgrade", upgradeRouter())
 		addExternalRouters(r)
-
 	})
 
 	if uiPath != "" {

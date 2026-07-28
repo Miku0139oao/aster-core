@@ -158,6 +158,7 @@ func TestUpdateUsersClosesConnectionsWithoutUsersMu(t *testing.T) {
 	locked := make(chan struct{})
 	go func() {
 		listener.usersMu.Lock()
+		//nolint:staticcheck // The empty critical section verifies that UpdateUsers released usersMu before closing.
 		listener.usersMu.Unlock()
 		close(locked)
 	}()

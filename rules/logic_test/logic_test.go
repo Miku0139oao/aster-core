@@ -3,11 +3,10 @@ package logic_test
 import (
 	"testing"
 
-	// https://github.com/golang/go/wiki/CodeReviewComments#import-dot
-	. "github.com/Miku0139oao/aster-core/rules/logic"
-
 	C "github.com/Miku0139oao/aster-core/constant"
 	"github.com/Miku0139oao/aster-core/rules"
+	// https://github.com/golang/go/wiki/CodeReviewComments#import-dot
+	. "github.com/Miku0139oao/aster-core/rules/logic"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -25,10 +24,10 @@ func TestAND(t *testing.T) {
 	}, C.RuleMatchHelper{})
 	assert.Equal(t, true, m)
 
-	and, err = NewAND("(DOMAIN,baidu.com),(NETWORK,TCP),(DST-PORT,10001-65535))", "DIRECT", ParseRule)
+	_, err = NewAND("(DOMAIN,baidu.com),(NETWORK,TCP),(DST-PORT,10001-65535))", "DIRECT", ParseRule)
 	assert.NotEqual(t, nil, err)
 
-	and, err = NewAND("((AND,(DOMAIN,baidu.com),(NETWORK,TCP)),(NETWORK,TCP),(DST-PORT,10001-65535))", "DIRECT", ParseRule)
+	_, err = NewAND("((AND,(DOMAIN,baidu.com),(NETWORK,TCP)),(NETWORK,TCP),(DST-PORT,10001-65535))", "DIRECT", ParseRule)
 	assert.Equal(t, nil, err)
 }
 

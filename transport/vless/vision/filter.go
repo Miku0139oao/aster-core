@@ -38,7 +38,7 @@ func (vc *Conn) FilterTLS(buffer []byte) (index int) {
 			if buffer[0] == 22 && buffer[1] == 3 && buffer[2] == 3 {
 				vc.isTLS = true
 				if buffer[5] == tlsHandshakeTypeServerHello {
-					//log.Debugln("isTLS12orAbove")
+					// log.Debugln("isTLS12orAbove")
 					vc.remainingServerHello = binary.BigEndian.Uint16(buffer[index+3:]) + 5
 					vc.isTLS12orAbove = true
 					if lenP-index >= 79 && vc.remainingServerHello >= 79 {

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Miku0139oao/aster-core/common/utils"
+
 	"github.com/openacid/low/bitmap"
 )
 
@@ -134,7 +135,6 @@ func (ss *DomainSet) Has(key string) bool {
 	}
 
 	return getBit(ss.leaves, nodeId) != 0
-
 }
 
 func (ss *DomainSet) keys(f func(key string) bool) {

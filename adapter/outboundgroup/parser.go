@@ -5,14 +5,14 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/dlclark/regexp2"
-
 	"github.com/Miku0139oao/aster-core/adapter/provider"
 	"github.com/Miku0139oao/aster-core/common/structure"
 	"github.com/Miku0139oao/aster-core/common/utils"
 	C "github.com/Miku0139oao/aster-core/constant"
 	P "github.com/Miku0139oao/aster-core/constant/provider"
 	"github.com/Miku0139oao/aster-core/log"
+
+	"github.com/dlclark/regexp2"
 )
 
 var (

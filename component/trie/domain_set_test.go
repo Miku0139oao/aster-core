@@ -1,11 +1,12 @@
 package trie_test
 
 import (
-	"golang.org/x/exp/slices"
 	"testing"
 
 	"github.com/Miku0139oao/aster-core/component/trie"
+
 	"github.com/stretchr/testify/assert"
+	"golang.org/x/exp/slices"
 )
 
 func testDump(t *testing.T, tree *trie.DomainTrie[struct{}], set *trie.DomainSet) {

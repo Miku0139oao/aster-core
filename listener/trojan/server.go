@@ -226,7 +226,7 @@ func New(config LC.TrojanServer, lc C.InboundListenConfig, tunnel C.Tunnel, addi
 	for _, addr := range strings.Split(config.Listen, ",") {
 		addr := addr
 
-		//TCP
+		// TCP
 		l, err := lc.Listen(context.Background(), "tcp", addr)
 		if err != nil {
 			return nil, err
@@ -310,20 +310,20 @@ func (l *Listener) HandleConn(conn net.Conn, tunnel C.Tunnel, additions ...inbou
 
 	var key [trojan.KeyLength]byte
 	if _, err := io.ReadFull(conn, key[:]); err != nil {
-		//log.Warnln("read key error: %s", err.Error())
+		// log.Warnln("read key error: %s", err.Error())
 		return
 	}
 
 	if user, ok := l.keys[key]; ok {
 		additions = append(additions, inbound.WithInUser(user))
 	} else {
-		//log.Warnln("no such key")
+		// log.Warnln("no such key")
 		return
 	}
 
 	var crlf [2]byte
 	if _, err := io.ReadFull(conn, crlf[:]); err != nil {
-		//log.Warnln("read crlf error: %s", err.Error())
+		// log.Warnln("read crlf error: %s", err.Error())
 		return
 	}
 
@@ -337,34 +337,34 @@ func (l *Listener) handleConn(inMux bool, conn net.Conn, tunnel C.Tunnel, additi
 
 	command, err := socks5.ReadByte(conn)
 	if err != nil {
-		//log.Warnln("read command error: %s", err.Error())
+		// log.Warnln("read command error: %s", err.Error())
 		return
 	}
 
 	switch command {
 	case trojan.CommandTCP, trojan.CommandUDP, trojan.CommandMux:
 	default:
-		//log.Warnln("unknown command: %d", command)
+		// log.Warnln("unknown command: %d", command)
 		return
 	}
 
 	target, err := socks5.ReadAddr0(conn)
 	if err != nil {
-		//log.Warnln("read target error: %s", err.Error())
+		// log.Warnln("read target error: %s", err.Error())
 		return
 	}
 
 	if !inMux {
 		var crlf [2]byte
 		if _, err := io.ReadFull(conn, crlf[:]); err != nil {
-			//log.Warnln("read crlf error: %s", err.Error())
+			// log.Warnln("read crlf error: %s", err.Error())
 			return
 		}
 	}
 
 	switch command {
 	case trojan.CommandTCP:
-		//tunnel.HandleTCPConn(inbound.NewSocket(target, conn, C.TROJAN, additions...))
+		// tunnel.HandleTCPConn(inbound.NewSocket(target, conn, C.TROJAN, additions...))
 		l.handler.HandleSocket(target, conn, additions...)
 	case trojan.CommandUDP:
 		pc := trojan.NewPacketConn(conn)
@@ -392,14 +392,14 @@ func (l *Listener) handleConn(inMux bool, conn net.Conn, tunnel C.Tunnel, additi
 		}
 	case trojan.CommandMux:
 		if inMux {
-			//log.Warnln("invalid command: %d", command)
+			// log.Warnln("invalid command: %d", command)
 			return
 		}
 		smuxConfig := smux.DefaultConfig()
 		smuxConfig.KeepAliveDisabled = true
 		session, err := smux.Server(conn, smuxConfig)
 		if err != nil {
-			//log.Warnln("smux server error: %s", err.Error())
+			// log.Warnln("smux server error: %s", err.Error())
 			return
 		}
 		defer session.Close()

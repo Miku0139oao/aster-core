@@ -381,7 +381,7 @@ func (sl *skipListFunc[K, V]) findNode(key K) *skipListNode[K, V] {
 }
 
 func (sl *skipListFunc[K, V]) lowerBound(key K) *skipListNode[K, V] {
-	var prev = &sl.head
+	prev := &sl.head
 	for i := sl.level - 1; i >= 0; i-- {
 		cur := prev.next[i]
 		for ; cur != nil; cur = cur.next[i] {

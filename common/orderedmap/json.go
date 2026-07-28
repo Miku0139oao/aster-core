@@ -90,7 +90,7 @@ func (om *OrderedMap[K, V]) UnmarshalJSON(data []byte) error {
 
 		keyStr, ok := tok.(string)
 		if !ok {
-			return fmt.Errorf("key must be a string, got %T\n", tok)
+			return fmt.Errorf("key must be a string, got %T", tok)
 		}
 
 		var key K

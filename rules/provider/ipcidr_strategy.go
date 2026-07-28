@@ -16,7 +16,7 @@ import (
 type ipcidrStrategy struct {
 	count   int
 	cidrSet *cidr.IpCidrSet
-	//trie    *trie.IpCidrTrie
+	// trie    *trie.IpCidrTrie
 }
 
 func (i *ipcidrStrategy) Behavior() P.RuleBehavior {
@@ -42,7 +42,7 @@ func (i *ipcidrStrategy) Reset() {
 }
 
 func (i *ipcidrStrategy) Insert(rule string) {
-	//err := i.trie.AddIpCidrForString(rule)
+	// err := i.trie.AddIpCidrForString(rule)
 	err := i.cidrSet.AddIpCidrForString(rule)
 	if err != nil {
 		log.Warnln("invalid Ipcidr:[%s]", rule)

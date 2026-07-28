@@ -271,6 +271,8 @@ func vlessManagedUsers(users []C.ManagedUser) []LC.VlessUser {
 	return updated
 }
 
-var _ C.InboundListener = (*Vless)(nil)
-var _ C.ManagedUserListener = (*Vless)(nil)
-var _ C.ManagedUserStager = (*Vless)(nil)
+var (
+	_ C.InboundListener     = (*Vless)(nil)
+	_ C.ManagedUserListener = (*Vless)(nil)
+	_ C.ManagedUserStager   = (*Vless)(nil)
+)

@@ -75,7 +75,7 @@ func GetRealityConn(ctx context.Context, conn net.Conn, fingerprint UClientHello
 		hello.SessionId[1] = 8
 		hello.SessionId[2] = 2
 
-		//log.Debugln("REALITY hello.sessionId[:16]: %v", hello.SessionId[:16])
+		// log.Debugln("REALITY hello.sessionId[:16]: %v", hello.SessionId[:16])
 
 		keyShareKeys := uConn.HandshakeState.State13.KeyShareKeys
 		if keyShareKeys == nil {
@@ -112,8 +112,8 @@ func GetRealityConn(ctx context.Context, conn net.Conn, fingerprint UClientHello
 		aeadCipher, _ := cipher.NewGCM(aesBlock)
 		aeadCipher.Seal(hello.SessionId[:0], hello.Random[20:], hello.SessionId[:16], hello.Raw)
 		copy(hello.Raw[39:], hello.SessionId)
-		//log.Debugln("REALITY hello.sessionId: %v", hello.SessionId)
-		//log.Debugln("REALITY uConn.AuthKey: %v", authKey)
+		// log.Debugln("REALITY hello.sessionId: %v", hello.SessionId)
+		// log.Debugln("REALITY uConn.AuthKey: %v", authKey)
 
 		err = uConn.HandshakeContext(ctx)
 		if err != nil {

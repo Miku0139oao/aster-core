@@ -242,5 +242,7 @@ func (p *serverUDPPacket) InAddr() net.Addr {
 	return p.assoc.LocalAddr()
 }
 
-var _ C.UDPPacket = (*serverUDPPacket)(nil)
-var _ C.UDPPacketInAddr = (*serverUDPPacket)(nil)
+var (
+	_ C.UDPPacket       = (*serverUDPPacket)(nil)
+	_ C.UDPPacketInAddr = (*serverUDPPacket)(nil)
+)

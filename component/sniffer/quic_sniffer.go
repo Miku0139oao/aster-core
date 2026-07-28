@@ -14,7 +14,6 @@ import (
 	"github.com/Miku0139oao/aster-core/common/pool"
 	"github.com/Miku0139oao/aster-core/common/utils"
 	"github.com/Miku0139oao/aster-core/constant"
-	C "github.com/Miku0139oao/aster-core/constant"
 	"github.com/Miku0139oao/aster-core/constant/sniffer"
 
 	"github.com/metacubex/quic-go/quicvarint"
@@ -45,8 +44,10 @@ var (
 	errNotQuicInitial = errors.New("not QUIC initial packet")
 )
 
-var _ sniffer.Sniffer = (*QuicSniffer)(nil)
-var _ sniffer.MultiPacketSniffer = (*QuicSniffer)(nil)
+var (
+	_ sniffer.Sniffer            = (*QuicSniffer)(nil)
+	_ sniffer.MultiPacketSniffer = (*QuicSniffer)(nil)
+)
 
 type QuicSniffer struct {
 	*BaseSniffer
@@ -58,7 +59,7 @@ func NewQuicSniffer(snifferConfig SnifferConfig) (*QuicSniffer, error) {
 		ports = utils.IntRanges[uint16]{utils.NewRange[uint16](443, 443)}
 	}
 	return &QuicSniffer{
-		BaseSniffer: NewBaseSniffer(ports, C.UDP),
+		BaseSniffer: NewBaseSniffer(ports, constant.UDP),
 	}, nil
 }
 
@@ -66,8 +67,8 @@ func (sniffer *QuicSniffer) Protocol() string {
 	return "quic"
 }
 
-func (sniffer *QuicSniffer) SupportNetwork() C.NetWork {
-	return C.UDP
+func (sniffer *QuicSniffer) SupportNetwork() constant.NetWork {
+	return constant.UDP
 }
 
 func (sniffer *QuicSniffer) SniffData(b []byte) (string, error) {
@@ -239,7 +240,7 @@ func (q *quicPacketSender) readQuicData(b []byte) error {
 	if hdrLen+4+16 > len(b) {
 		return errNotQuic
 	}
-	
+
 	mask := cache.Extend(block.BlockSize())
 	block.Encrypt(mask, b[hdrLen+4:hdrLen+4+16])
 	firstByte := b[0]

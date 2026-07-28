@@ -1,11 +1,12 @@
 package faketcp
 
 import (
-	"github.com/Miku0139oao/aster-core/transport/hysteria/obfs"
 	"net"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/Miku0139oao/aster-core/transport/hysteria/obfs"
 )
 
 const udpBufferSize = 65535

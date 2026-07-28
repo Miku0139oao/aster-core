@@ -3,7 +3,6 @@ package dns
 import (
 	"context"
 	"fmt"
-	"github.com/Miku0139oao/aster-core/component/resolver"
 	"net"
 	"runtime"
 	"sync"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/Miku0139oao/aster-core/common/deque"
 	"github.com/Miku0139oao/aster-core/component/ca"
+	"github.com/Miku0139oao/aster-core/component/resolver"
 	C "github.com/Miku0139oao/aster-core/constant"
 
 	"github.com/metacubex/tls"

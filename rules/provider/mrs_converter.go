@@ -25,12 +25,9 @@ func ConvertToMrs(buf []byte, behavior P.RuleBehavior, format P.RuleFormat, w io
 		if format == P.MrsRule { // export to TextRule
 			_strategy.DumpMrs(func(key string) bool {
 				_, err = fmt.Fprintln(w, key)
-				if err != nil {
-					return false
-				}
-				return true
+				return err == nil
 			})
-			return nil
+			return err
 		}
 
 		var encoder *zstd.Encoder
@@ -100,7 +97,7 @@ func ConvertMain(args []string) {
 			panic(err)
 		}
 
-		targetFile, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+		targetFile, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 		if err != nil {
 			panic(err)
 		}

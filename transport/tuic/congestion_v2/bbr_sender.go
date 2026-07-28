@@ -9,7 +9,6 @@ import (
 	"github.com/metacubex/quic-go"
 	"github.com/metacubex/quic-go/congestion"
 	"github.com/metacubex/quic-go/monotime"
-
 	"github.com/metacubex/randv2"
 )
 
