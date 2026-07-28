@@ -179,6 +179,36 @@ func TestConnectionTrackingListenerRemovesAndClosesAcceptedConnections(t *testin
 	assertPeerClosed(t, client2)
 }
 
+func TestHandleContextListenerReleasesSuccessfulTrackedConnection(t *testing.T) {
+	base := newFakeListener()
+	tracking := NewConnectionTrackingListener(base)
+	listener := NewHandleContextListener(context.Background(), tracking, func(_ context.Context, conn stdnet.Conn) (stdnet.Conn, error) {
+		return conn, nil
+	}, nil)
+	server, client := stdnet.Pipe()
+	defer client.Close()
+	base.connections <- server
+
+	conn, err := listener.Accept()
+	require.NoError(t, err)
+	require.Empty(t, tracking.conns)
+
+	tracking.CloseConnections()
+	require.NoError(t, conn.SetDeadline(time.Now().Add(time.Second)))
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := client.Write([]byte{1})
+		writeDone <- err
+	}()
+	var value [1]byte
+	_, err = conn.Read(value[:])
+	require.NoError(t, err)
+	require.NoError(t, <-writeDone)
+	require.Equal(t, byte(1), value[0])
+	require.NoError(t, conn.Close())
+	require.NoError(t, listener.Close())
+}
+
 func TestConnectionTrackingListenerClosesAcceptThatLosesCloseRace(t *testing.T) {
 	server, client := stdnet.Pipe()
 	defer client.Close()

@@ -4,6 +4,8 @@ import (
 	"sync"
 	"testing"
 
+	C "github.com/Miku0139oao/aster-core/constant"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -13,6 +15,42 @@ type trafficObserverTest struct {
 	userID   string
 	upload   int64
 	download int64
+}
+
+type trackerManagerTest struct {
+	Tracker
+	id   string
+	info *TrackerInfo
+}
+
+func (t *trackerManagerTest) ID() string         { return t.id }
+func (t *trackerManagerTest) Info() *TrackerInfo { return t.info }
+
+func TestManagerTracksConnectionCountsByPrincipal(t *testing.T) {
+	manager := &Manager{}
+	first := &trackerManagerTest{
+		id:   "first",
+		info: &TrackerInfo{Metadata: &C.Metadata{InName: "vless-in", InUser: "user-id"}},
+	}
+	second := &trackerManagerTest{
+		id:   "second",
+		info: &TrackerInfo{Metadata: &C.Metadata{InName: "vless-in", InUser: "user-id"}},
+	}
+
+	manager.Join(first)
+	manager.Join(first)
+	manager.Join(second)
+	require.Equal(t, 2, manager.ConnectionCount())
+	require.Equal(t, map[Principal]int{{Inbound: "vless-in", UserID: "user-id"}: 2}, manager.ActiveConnectionsByPrincipal())
+
+	manager.Leave(first)
+	manager.Leave(first)
+	require.Equal(t, 1, manager.ConnectionCount())
+	require.Equal(t, 1, manager.ActiveConnectionsByPrincipal()[Principal{Inbound: "vless-in", UserID: "user-id"}])
+
+	manager.Leave(second)
+	require.Zero(t, manager.ConnectionCount())
+	require.Empty(t, manager.ActiveConnectionsByPrincipal())
 }
 
 func (o *trafficObserverTest) RecordTraffic(inbound, userID string, upload, download int64) {

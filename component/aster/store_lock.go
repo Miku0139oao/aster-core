@@ -9,7 +9,7 @@ func lockStore(path string) (func(), error) {
 	lockPath := path + ".lock"
 	if info, err := os.Lstat(lockPath); err == nil {
 		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-			return nil, fmt.Errorf("Aster store lock is not a regular file: %s", lockPath)
+			return nil, fmt.Errorf("aster store lock is not a regular file: %s", lockPath)
 		}
 	} else if !os.IsNotExist(err) {
 		return nil, err

@@ -101,7 +101,7 @@ func readStore(path string) (*Store, error) {
 		return nil, err
 	}
 	if pathInfo.Mode()&os.ModeSymlink != 0 || !pathInfo.Mode().IsRegular() {
-		return nil, fmt.Errorf("Aster state is not a regular file: %s", path)
+		return nil, fmt.Errorf("aster state is not a regular file: %s", path)
 	}
 	if err := validateStoreFileSecurity(path, pathInfo); err != nil {
 		return nil, err
@@ -116,17 +116,17 @@ func readStore(path string) (*Store, error) {
 		return nil, err
 	}
 	if !os.SameFile(pathInfo, info) {
-		return nil, fmt.Errorf("Aster state changed while opening: %s", path)
+		return nil, fmt.Errorf("aster state changed while opening: %s", path)
 	}
 	if info.Size() > maxStoreSize {
-		return nil, fmt.Errorf("Aster state exceeds %d bytes", maxStoreSize)
+		return nil, fmt.Errorf("aster state exceeds %d bytes", maxStoreSize)
 	}
 	data, err := io.ReadAll(io.LimitReader(file, maxStoreSize+1))
 	if err != nil {
 		return nil, err
 	}
 	if len(data) > maxStoreSize {
-		return nil, fmt.Errorf("Aster state exceeds %d bytes", maxStoreSize)
+		return nil, fmt.Errorf("aster state exceeds %d bytes", maxStoreSize)
 	}
 	store := newStore()
 	if err := json.Unmarshal(data, store); err != nil {
@@ -170,7 +170,7 @@ func prepareStoreDirectory(path string) error {
 		return err
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-		return fmt.Errorf("Aster store parent is not a directory: %s", dir)
+		return fmt.Errorf("aster store parent is not a directory: %s", dir)
 	}
 	return validateStoreDirectorySecurity(dir, info)
 }
@@ -187,18 +187,18 @@ func saveStoreLocked(path string, store *Store) error {
 	if store.Generation == math.MaxUint64 {
 		return fmt.Errorf("%w: Aster store generation exhausted", ErrConflict)
 	}
-	candidate := cloneStore(store)
+	candidate := *store
 	candidate.Generation++
-	if err := validateStore(candidate); err != nil {
+	if err := validateStore(&candidate); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(candidate, "", "  ")
+	data, err := json.Marshal(&candidate)
 	if err != nil {
 		return err
 	}
 	data = append(data, '\n')
 	if len(data) > maxStoreSize {
-		return fmt.Errorf("Aster state exceeds %d bytes", maxStoreSize)
+		return fmt.Errorf("aster state exceeds %d bytes", maxStoreSize)
 	}
 
 	firstPath, secondPath := path+".bak", path
@@ -262,6 +262,26 @@ func syncDirectory(path string) error {
 		return err
 	}
 	return nil
+}
+
+func cloneStoreForListener(store *Store, inbound string) *Store {
+	cloned := &Store{
+		Version:       store.Version,
+		Generation:    store.Generation,
+		Listeners:     make(map[string]*ListenerState, len(store.Listeners)),
+		Subscriptions: make(map[string]string, len(store.Subscriptions)),
+	}
+	for name, listener := range store.Listeners {
+		cloned.Listeners[name] = listener
+	}
+	if listener := store.Listeners[inbound]; listener != nil {
+		clonedListener := cloneListenerState(listener)
+		cloned.Listeners[inbound] = &clonedListener
+	}
+	for userID, token := range store.Subscriptions {
+		cloned.Subscriptions[userID] = token
+	}
+	return cloned
 }
 
 func cloneStore(store *Store) *Store {

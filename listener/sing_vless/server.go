@@ -280,12 +280,12 @@ func New(config LC.VlessServer, lc C.InboundListenConfig, tunnel C.Tunnel, addit
 	for _, addr := range strings.Split(config.Listen, ",") {
 		addr := addr
 
-		//TCP
+		// TCP
 		l, err := lc.Listen(context.Background(), "tcp", addr)
 		if err != nil {
 			return nil, err
 		}
-		if shadowTLSBuilder != nil || restlsBuilder != nil || jlsBuilder != nil || realityBuilder != nil || httpServer.Handler != nil {
+		if shadowTLSBuilder != nil || restlsBuilder != nil || jlsBuilder != nil || realityBuilder != nil {
 			transport := N.NewConnectionTrackingListener(l)
 			sl.transports = append(sl.transports, transport)
 			l = transport

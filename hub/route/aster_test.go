@@ -40,12 +40,15 @@ func (l *asterRouteTestListener) Config() C.InboundConfig { return asterRouteTes
 func (l *asterRouteTestListener) ManagedUserSchema() C.ManagedUserSchema {
 	return C.ManagedUserSchema{Protocol: "vless", Credential: "uuid", Flow: true}
 }
+
 func (l *asterRouteTestListener) ConfiguredUsers() []C.ManagedUser {
 	return append([]C.ManagedUser(nil), l.configured...)
 }
+
 func (l *asterRouteTestListener) CurrentManagedUsers() []C.ManagedUser {
 	return append([]C.ManagedUser(nil), l.current...)
 }
+
 func (l *asterRouteTestListener) UpdateManagedUsers(users []C.ManagedUser) error {
 	l.current = append([]C.ManagedUser(nil), users...)
 	return nil
@@ -102,6 +105,25 @@ func TestAsterRoutesUseIndependentAuthentication(t *testing.T) {
 			require.Equal(t, test.status, response.Code)
 		})
 	}
+}
+
+func TestAsterOverviewAdvertisesUnsupportedCapabilities(t *testing.T) {
+	setupAsterRouteTest(t)
+	handler := router(false, "", "", Cors{}, asterRoutePolicy{adminAllowed: true})
+
+	request := httptest.NewRequest("GET", "http://controller.example/api/admin/overview", nil)
+	request.Header.Set("Authorization", "Bearer 0123456789abcdef0123456789abcdef")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	require.Equal(t, 200, response.Code)
+
+	var overview struct {
+		Capabilities map[string]bool `json:"capabilities"`
+		Users        map[string]any  `json:"users"`
+	}
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &overview))
+	require.Equal(t, map[string]bool{"quota": false, "expiration": false}, overview.Capabilities)
+	require.NotContains(t, overview.Users, "expired")
 }
 
 func TestDebugRoutesUseControllerAuthentication(t *testing.T) {
@@ -171,6 +193,8 @@ func TestAsterUserCRUDAndCredentialRedaction(t *testing.T) {
 	handler.ServeHTTP(response, request)
 	require.Equal(t, 200, response.Code)
 	require.NotContains(t, response.Body.String(), records[0].User.UUID)
+	require.NotContains(t, response.Body.String(), "quota_bytes")
+	require.NotContains(t, response.Body.String(), "expires_at")
 
 	payload, err := json.Marshal(map[string]any{
 		"inbound":  managed.name,

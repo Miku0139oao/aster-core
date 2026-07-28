@@ -43,8 +43,6 @@ type asterUserView struct {
 	Password          string `json:"password,omitempty"`
 	Flow              string `json:"flow,omitempty"`
 	Enabled           bool   `json:"enabled"`
-	QuotaBytes        int64  `json:"quota_bytes"`
-	ExpiresAt         int64  `json:"expires_at"`
 	UploadBytes       int64  `json:"upload_bytes"`
 	DownloadBytes     int64  `json:"download_bytes"`
 	TrafficGeneration uint64 `json:"traffic_generation"`
@@ -54,11 +52,6 @@ type asterUserView struct {
 	Revision          int64  `json:"revision"`
 	AppliedRevision   int64  `json:"applied_revision"`
 	SubscriptionURL   string `json:"subscription_url,omitempty"`
-}
-
-type asterConnectionKey struct {
-	inbound string
-	userID  string
 }
 
 type asterInboundSummary struct {
@@ -102,7 +95,7 @@ func asterAdminMiddleware(secure bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 			writer.Header().Set("Cache-Control", "no-store")
-			if !asterManager.Default.Status().Enabled {
+			if !asterManager.Default.Enabled() {
 				http.NotFound(writer, request)
 				return
 			}
@@ -155,24 +148,19 @@ func requestFromLoopbackAddress(remoteAddress string) bool {
 }
 
 func getAsterOverview(writer http.ResponseWriter, request *http.Request) {
-	users, err := asterManager.Default.ListUsers("")
-	if err != nil {
-		writeAsterManagerError(writer, request, err)
-		return
-	}
-	inbounds, err := asterInboundSummaries()
+	snapshot, err := asterManager.Default.ManagementSnapshot("")
 	if err != nil {
 		writeAsterManagerError(writer, request, err)
 		return
 	}
 	var enabled int
-	for _, user := range users {
-		if user.Enabled {
+	for _, record := range snapshot.Users {
+		if record.User.Enabled {
 			enabled++
 		}
 	}
 	upload, download := statistic.DefaultManager.Total()
-	connections := statistic.DefaultManager.Snapshot().Connections
+	connectionCount := statistic.DefaultManager.ConnectionCount()
 	var memory runtime.MemStats
 	runtime.ReadMemStats(&memory)
 	now := time.Now()
@@ -187,13 +175,14 @@ func getAsterOverview(writer http.ResponseWriter, request *http.Request) {
 			"memory_bytes": memory.Sys, "goroutines": runtime.NumGoroutine(),
 		},
 		"traffic": render.M{
-			"uplink_total": upload, "downlink_total": download, "active_connections": len(connections),
+			"uplink_total": upload, "downlink_total": download, "active_connections": connectionCount,
 		},
 		"users": render.M{
-			"total": len(users), "enabled": enabled, "disabled": len(users) - enabled, "expired": 0,
+			"total": len(snapshot.Users), "enabled": enabled, "disabled": len(snapshot.Users) - enabled,
 		},
+		"capabilities":           render.M{"quota": false, "expiration": false},
 		"authentication_enabled": true,
-		"inbounds":               inbounds,
+		"inbounds":               makeAsterInboundSummaries(snapshot.Listeners),
 	})
 }
 
@@ -217,23 +206,18 @@ func getAsterInbounds(writer http.ResponseWriter, request *http.Request) {
 }
 
 func listAsterUsers(writer http.ResponseWriter, request *http.Request) {
-	records, err := asterManager.Default.ListUserRecords(request.URL.Query().Get("inbound"))
+	snapshot, err := asterManager.Default.ManagementSnapshot(request.URL.Query().Get("inbound"))
 	if err != nil {
 		writeAsterManagerError(writer, request, err)
 		return
 	}
 	connections := asterActiveConnections()
-	views := make([]asterUserView, 0, len(records))
-	for _, record := range records {
-		views = append(views, makeAsterUserView(record.User, record.Revision, connections[asterConnectionKey{inbound: record.User.Inbound, userID: record.User.ID}], false))
+	views := make([]asterUserView, 0, len(snapshot.Users))
+	for _, record := range snapshot.Users {
+		views = append(views, makeAsterUserView(record.User, record.Revision, connections[statistic.Principal{Inbound: record.User.Inbound, UserID: record.User.ID}], false))
 		views[len(views)-1].AppliedRevision = record.AppliedRevision
 	}
-	inbounds, err := asterInboundSummaries()
-	if err != nil {
-		writeAsterManagerError(writer, request, err)
-		return
-	}
-	render.JSON(writer, request, render.M{"users": views, "inbounds": inbounds})
+	render.JSON(writer, request, render.M{"users": views, "inbounds": makeAsterInboundSummaries(snapshot.Listeners)})
 }
 
 func getAsterUser(writer http.ResponseWriter, request *http.Request) {
@@ -242,7 +226,7 @@ func getAsterUser(writer http.ResponseWriter, request *http.Request) {
 		writeAsterManagerError(writer, request, err)
 		return
 	}
-	view := makeAsterUserView(user, revision, asterActiveConnections()[asterConnectionKey{inbound: user.Inbound, userID: user.ID}], true)
+	view := makeAsterUserView(user, revision, asterActiveConnections()[statistic.Principal{Inbound: user.Inbound, UserID: user.ID}], true)
 	view.SubscriptionURL, _ = asterManager.Default.SubscriptionURL(user.ID)
 	render.JSON(writer, request, view)
 }
@@ -282,7 +266,7 @@ func updateAsterUser(writer http.ResponseWriter, request *http.Request) {
 		writeAsterManagerError(writer, request, err)
 		return
 	}
-	view := makeAsterUserView(updated, revision, asterActiveConnections()[asterConnectionKey{inbound: updated.Inbound, userID: updated.ID}], true)
+	view := makeAsterUserView(updated, revision, asterActiveConnections()[statistic.Principal{Inbound: updated.Inbound, UserID: updated.ID}], true)
 	view.SubscriptionURL, _ = asterManager.Default.SubscriptionURL(updated.ID)
 	render.JSON(writer, request, view)
 }
@@ -310,7 +294,7 @@ func resetAsterUserTraffic(writer http.ResponseWriter, request *http.Request) {
 		writeAsterManagerError(writer, request, err)
 		return
 	}
-	view := makeAsterUserView(user, revision, asterActiveConnections()[asterConnectionKey{inbound: user.Inbound, userID: user.ID}], true)
+	view := makeAsterUserView(user, revision, asterActiveConnections()[statistic.Principal{Inbound: user.Inbound, UserID: user.ID}], true)
 	view.SubscriptionURL, _ = asterManager.Default.SubscriptionURL(user.ID)
 	render.JSON(writer, request, view)
 }
@@ -357,6 +341,10 @@ func asterInboundSummaries() ([]asterInboundSummary, error) {
 	if err != nil {
 		return nil, err
 	}
+	return makeAsterInboundSummaries(listeners), nil
+}
+
+func makeAsterInboundSummaries(listeners []asterManager.ListenerState) []asterInboundSummary {
 	summaries := make([]asterInboundSummary, 0, len(listeners))
 	for _, listener := range listeners {
 		credential := "password"
@@ -377,7 +365,7 @@ func asterInboundSummaries() ([]asterInboundSummary, error) {
 		}
 		summaries = append(summaries, summary)
 	}
-	return summaries, nil
+	return summaries
 }
 
 func makeAsterUserView(user asterManager.User, revision int64, connections int, includeCredentials bool) asterUserView {
@@ -394,14 +382,8 @@ func makeAsterUserView(user asterManager.User, revision int64, connections int, 
 	return view
 }
 
-func asterActiveConnections() map[asterConnectionKey]int {
-	connections := make(map[asterConnectionKey]int)
-	for _, connection := range statistic.DefaultManager.Snapshot().Connections {
-		if connection.Metadata != nil && connection.Metadata.InName != "" && connection.Metadata.InUser != "" {
-			connections[asterConnectionKey{inbound: connection.Metadata.InName, userID: connection.Metadata.InUser}]++
-		}
-	}
-	return connections
+func asterActiveConnections() map[statistic.Principal]int {
+	return statistic.DefaultManager.ActiveConnectionsByPrincipal()
 }
 
 func decodeAsterUserInput(writer http.ResponseWriter, request *http.Request) (asterUserInput, bool) {

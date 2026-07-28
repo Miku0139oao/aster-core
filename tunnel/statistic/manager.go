@@ -2,6 +2,7 @@ package statistic
 
 import (
 	"os"
+	"sync"
 	stdatomic "sync/atomic"
 	"time"
 
@@ -35,8 +36,15 @@ type Manager struct {
 	uploadTotal   atomic.Int64
 	downloadTotal atomic.Int64
 	pid           int32
-	memory        uint64
+	memory        stdatomic.Uint64
 	observer      stdatomic.Pointer[trafficObserverHolder]
+	principalMu   sync.RWMutex
+	principals    map[Principal]int
+}
+
+type Principal struct {
+	Inbound string
+	UserID  string
 }
 
 type TrafficObserver interface {
@@ -48,11 +56,51 @@ type trafficObserverHolder struct {
 }
 
 func (m *Manager) Join(c Tracker) {
-	m.connections.Store(c.ID(), c)
+	if _, loaded := m.connections.LoadOrStore(c.ID(), c); loaded {
+		return
+	}
+	m.updatePrincipalConnections(c, 1)
 }
 
 func (m *Manager) Leave(c Tracker) {
-	m.connections.Delete(c.ID())
+	stored, loaded := m.connections.LoadAndDelete(c.ID())
+	if !loaded {
+		return
+	}
+	m.updatePrincipalConnections(stored, -1)
+}
+
+func (m *Manager) updatePrincipalConnections(c Tracker, delta int) {
+	info := c.Info()
+	if info == nil || info.Metadata == nil || info.Metadata.InName == "" || info.Metadata.InUser == "" {
+		return
+	}
+	key := Principal{Inbound: info.Metadata.InName, UserID: info.Metadata.InUser}
+	m.principalMu.Lock()
+	if m.principals == nil {
+		m.principals = make(map[Principal]int)
+	}
+	next := m.principals[key] + delta
+	if next <= 0 {
+		delete(m.principals, key)
+	} else {
+		m.principals[key] = next
+	}
+	m.principalMu.Unlock()
+}
+
+func (m *Manager) ConnectionCount() int {
+	return m.connections.Size()
+}
+
+func (m *Manager) ActiveConnectionsByPrincipal() map[Principal]int {
+	m.principalMu.RLock()
+	connections := make(map[Principal]int, len(m.principals))
+	for principal, count := range m.principals {
+		connections[principal] = count
+	}
+	m.principalMu.RUnlock()
+	return connections
 }
 
 func (m *Manager) Get(id string) (c Tracker) {
@@ -116,7 +164,7 @@ func (m *Manager) Total() (up, down int64) {
 
 func (m *Manager) Memory() uint64 {
 	m.updateMemory()
-	return m.memory
+	return m.memory.Load()
 }
 
 func (m *Manager) Snapshot() *Snapshot {
@@ -129,7 +177,7 @@ func (m *Manager) Snapshot() *Snapshot {
 		UploadTotal:   m.uploadTotal.Load(),
 		DownloadTotal: m.downloadTotal.Load(),
 		Connections:   connections,
-		Memory:        m.memory,
+		Memory:        m.memory.Load(),
 	}
 }
 
@@ -138,7 +186,7 @@ func (m *Manager) updateMemory() {
 	if err != nil {
 		return
 	}
-	m.memory = stat.RSS
+	m.memory.Store(stat.RSS)
 }
 
 func (m *Manager) ResetStatistic() {

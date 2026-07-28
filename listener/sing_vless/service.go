@@ -61,7 +61,7 @@ func NewService[T comparable](handler Handler) *Service[T] {
 
 func (s *Service[T]) UpdateUsers(userList []T, userUUIDList []string, userFlowList []string) error {
 	if len(userList) != len(userUUIDList) || len(userList) != len(userFlowList) {
-		return errors.New("VLESS user, UUID, and flow lists must have equal lengths")
+		return errors.New("vless user, UUID, and flow lists must have equal lengths")
 	}
 	userMap := make(map[[16]byte]userCredential[T], len(userList))
 	for i, userName := range userList {
@@ -252,7 +252,7 @@ func (s *Service[T]) newConnection(ctx context.Context, conn net.Conn, metadata 
 	if s.closed.Load() || !pendingActive || !valid || currentCredential != credential {
 		s.usersMu.Unlock()
 		_ = pending.conn.Close()
-		return errors.New("VLESS credentials changed during authentication")
+		return errors.New("vless credentials changed during authentication")
 	}
 	s.pending.Delete(pending)
 	active := &activeConnection[T]{conn: pending.conn, uuid: requestUUID, credential: credential}

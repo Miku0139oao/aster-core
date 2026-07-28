@@ -83,29 +83,29 @@ func validateStoreObjectSecurity(path string, directory bool) error {
 		return fmt.Errorf("query Aster store security for %s: %w", path, err)
 	}
 	if descriptor == nil || !descriptor.IsValid() {
-		return fmt.Errorf("Aster store security descriptor is invalid: %s", path)
+		return fmt.Errorf("aster store security descriptor is invalid: %s", path)
 	}
 	control, revision, err := descriptor.Control()
 	if err != nil || revision != 1 || control&windows.SE_SELF_RELATIVE == 0 || control&windows.SE_DACL_PRESENT == 0 {
-		return fmt.Errorf("Aster store security descriptor is malformed: %s", path)
+		return fmt.Errorf("aster store security descriptor is malformed: %s", path)
 	}
 
 	descriptorStart := unsafe.Pointer(descriptor)
 	descriptorSize := uintptr(descriptor.Length())
 	owner, _, err := descriptor.Owner()
 	if err != nil || owner == nil {
-		return fmt.Errorf("Aster store owner is unavailable: %s", path)
+		return fmt.Errorf("aster store owner is unavailable: %s", path)
 	}
 	if _, ok := storeSIDLength(descriptorStart, descriptorSize, unsafe.Pointer(owner)); !ok {
-		return fmt.Errorf("Aster store owner SID is malformed: %s", path)
+		return fmt.Errorf("aster store owner SID is malformed: %s", path)
 	}
 	if !owner.Equals(userSID) {
-		return fmt.Errorf("Aster store object is not owned by the current user: %s", path)
+		return fmt.Errorf("aster store object is not owned by the current user: %s", path)
 	}
 
 	dacl, _, err := descriptor.DACL()
 	if err != nil || dacl == nil {
-		return fmt.Errorf("Aster store DACL is missing or null: %s", path)
+		return fmt.Errorf("aster store DACL is missing or null: %s", path)
 	}
 	return validateStoreDACL(path, descriptorStart, descriptorSize, dacl, userSID, directory)
 }
@@ -114,14 +114,14 @@ func validateStoreDACL(path string, descriptorStart unsafe.Pointer, descriptorSi
 	aclStart := unsafe.Pointer(dacl)
 	aclHeaderSize := unsafe.Sizeof(storeACLHeader{})
 	if !storeMemoryContains(descriptorStart, descriptorSize, aclStart, aclHeaderSize) {
-		return fmt.Errorf("Aster store DACL is malformed: %s", path)
+		return fmt.Errorf("aster store DACL is malformed: %s", path)
 	}
 	header := (*storeACLHeader)(unsafe.Pointer(dacl))
 	aclSize := uintptr(header.size)
 	if (header.revision != storeACLRevision && header.revision != storeACLRevisionDS) ||
 		aclSize < aclHeaderSize || !storeMemoryContains(descriptorStart, descriptorSize, aclStart, aclSize) ||
 		uintptr(header.aceCount) > (aclSize-aclHeaderSize)/unsafe.Sizeof(windows.ACE_HEADER{}) {
-		return fmt.Errorf("Aster store DACL is malformed: %s", path)
+		return fmt.Errorf("aster store DACL is malformed: %s", path)
 	}
 
 	nextACEOffset := aclHeaderSize
@@ -131,33 +131,33 @@ func validateStoreDACL(path string, descriptorStart unsafe.Pointer, descriptorSi
 			return fmt.Errorf("read Aster store DACL entry %d for %s: %w", i, path, err)
 		}
 		if ace == nil {
-			return fmt.Errorf("Aster store DACL entry %d is null: %s", i, path)
+			return fmt.Errorf("aster store DACL entry %d is null: %s", i, path)
 		}
 		aceStart := unsafe.Pointer(ace)
 		if !storeMemoryContains(aclStart, aclSize, aceStart, unsafe.Sizeof(windows.ACE_HEADER{})) ||
 			uintptr(aceStart)-uintptr(aclStart) != nextACEOffset {
-			return fmt.Errorf("Aster store DACL entry %d is malformed: %s", i, path)
+			return fmt.Errorf("aster store DACL entry %d is malformed: %s", i, path)
 		}
 		aceSize := uintptr(ace.Header.AceSize)
 		if aceSize%4 != 0 || !storeMemoryContains(aclStart, aclSize, aceStart, aceSize) {
-			return fmt.Errorf("Aster store DACL entry %d is malformed: %s", i, path)
+			return fmt.Errorf("aster store DACL entry %d is malformed: %s", i, path)
 		}
 		nextACEOffset += aceSize
 
 		if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE && ace.Header.AceType != windows.ACCESS_DENIED_ACE_TYPE {
-			return fmt.Errorf("Aster store DACL entry %d has an unsupported type: %s", i, path)
+			return fmt.Errorf("aster store DACL entry %d has an unsupported type: %s", i, path)
 		}
 		if ace.Header.AceFlags & ^uint8(windows.VALID_INHERIT_FLAGS) != 0 {
-			return fmt.Errorf("Aster store DACL entry %d has invalid flags: %s", i, path)
+			return fmt.Errorf("aster store DACL entry %d has invalid flags: %s", i, path)
 		}
 		sidOffset := unsafe.Offsetof(windows.ACCESS_ALLOWED_ACE{}.SidStart)
 		if sidOffset > aceSize {
-			return fmt.Errorf("Aster store DACL entry %d has a malformed SID: %s", i, path)
+			return fmt.Errorf("aster store DACL entry %d has a malformed SID: %s", i, path)
 		}
 		sidStart := unsafe.Add(aceStart, sidOffset)
 		sidSize, ok := storeSIDLength(aceStart, aceSize, sidStart)
 		if !ok || sidOffset+sidSize != aceSize {
-			return fmt.Errorf("Aster store DACL entry %d has a malformed SID: %s", i, path)
+			return fmt.Errorf("aster store DACL entry %d has a malformed SID: %s", i, path)
 		}
 		aceSID := (*windows.SID)(sidStart)
 
@@ -169,13 +169,13 @@ func validateStoreDACL(path string, descriptorStart unsafe.Pointer, descriptorSi
 		}
 		// Object-inheritable allows become effective on newly created temp and lock files.
 		if directory && ace.Header.AceFlags&windows.OBJECT_INHERIT_ACE != 0 && ace.Mask != 0 {
-			return fmt.Errorf("Aster store DACL grants untrusted SID %s unsafe inherited access: %s", aceSID.String(), path)
+			return fmt.Errorf("aster store DACL grants untrusted SID %s unsafe inherited access: %s", aceSID.String(), path)
 		}
 		if ace.Header.AceFlags&windows.INHERIT_ONLY_ACE != 0 {
 			continue
 		}
 		if (!directory && ace.Mask != 0) || (directory && ace.Mask&storeDirectoryWriteMask != 0) {
-			return fmt.Errorf("Aster store DACL grants untrusted SID %s unsafe access: %s", aceSID.String(), path)
+			return fmt.Errorf("aster store DACL grants untrusted SID %s unsafe access: %s", aceSID.String(), path)
 		}
 	}
 	return nil

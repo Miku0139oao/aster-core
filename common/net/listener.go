@@ -99,6 +99,7 @@ func (l *handleContextListener) Accept() (net.Conn, error) {
 		delete(l.inFlight, result.rawID)
 		l.mu.Unlock()
 		if !closed {
+			releaseConnectionTracking(result.raw)
 			return result.conn, nil
 		}
 		closeHandledConns(result.conn, result.raw)
@@ -185,6 +186,16 @@ type trackedConn struct {
 	err      error
 }
 
+type connectionTrackingReleaser interface {
+	releaseConnectionTracking()
+}
+
+func releaseConnectionTracking(conn net.Conn) {
+	if releaser, ok := conn.(connectionTrackingReleaser); ok {
+		releaser.releaseConnectionTracking()
+	}
+}
+
 func NewConnectionTrackingListener(listener net.Listener) *ConnectionTrackingListener {
 	return &ConnectionTrackingListener{
 		Listener: listener,
@@ -235,9 +246,13 @@ func (l *ConnectionTrackingListener) Close() error {
 func (c *trackedConn) Close() error {
 	c.once.Do(func() {
 		c.err = c.Conn.Close()
-		c.listener.mu.Lock()
-		delete(c.listener.conns, c)
-		c.listener.mu.Unlock()
+		c.releaseConnectionTracking()
 	})
 	return c.err
+}
+
+func (c *trackedConn) releaseConnectionTracking() {
+	c.listener.mu.Lock()
+	delete(c.listener.conns, c)
+	c.listener.mu.Unlock()
 }

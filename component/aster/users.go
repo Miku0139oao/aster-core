@@ -34,6 +34,57 @@ type UserRecord struct {
 	AppliedRevision int64 `json:"applied_revision"`
 }
 
+type ManagementSnapshot struct {
+	Listeners []ListenerState
+	Users     []UserRecord
+}
+
+type userLocation struct {
+	inbound string
+	index   int
+}
+
+func (m *Manager) ManagementSnapshot(inbound string) (ManagementSnapshot, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.config == nil {
+		return ManagementSnapshot{}, ErrDisabled
+	}
+	m.syncTrafficLocked()
+
+	snapshot := ManagementSnapshot{
+		Listeners: make([]ListenerState, 0, len(m.config.ManagedListeners)),
+	}
+	for _, listenerName := range m.config.ManagedListeners {
+		state := m.store.Listeners[listenerName]
+		if state == nil {
+			continue
+		}
+		snapshot.Listeners = append(snapshot.Listeners, cloneListenerState(state))
+		if inbound != "" && listenerName != inbound {
+			continue
+		}
+		for _, user := range state.Users {
+			snapshot.Users = append(snapshot.Users, UserRecord{
+				User: *user, Revision: state.Revision, AppliedRevision: state.AppliedRevision,
+			})
+		}
+	}
+	sort.Slice(snapshot.Listeners, func(i, j int) bool {
+		return snapshot.Listeners[i].Name < snapshot.Listeners[j].Name
+	})
+	sort.Slice(snapshot.Users, func(i, j int) bool {
+		if snapshot.Users[i].User.Inbound != snapshot.Users[j].User.Inbound {
+			return snapshot.Users[i].User.Inbound < snapshot.Users[j].User.Inbound
+		}
+		if snapshot.Users[i].User.Name != snapshot.Users[j].User.Name {
+			return snapshot.Users[i].User.Name < snapshot.Users[j].User.Name
+		}
+		return snapshot.Users[i].User.ID < snapshot.Users[j].User.ID
+	})
+	return snapshot, nil
+}
+
 func (m *Manager) ListListeners() ([]ListenerState, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -119,14 +170,14 @@ func (m *Manager) GetUser(userID string) (User, int64, error) {
 	if m.config == nil {
 		return User{}, 0, ErrDisabled
 	}
-	m.syncTrafficLocked()
-	_, state, user := findUser(m.store, userID)
+	_, state, user := m.indexedUserLocked(userID)
 	if user == nil {
 		return User{}, 0, ErrNotFound
 	}
 	if _, managed := m.runtime.Load().managed[user.Inbound]; !managed {
 		return User{}, 0, ErrNotFound
 	}
+	m.syncUserTrafficLocked(user)
 	return *user, state.Revision, nil
 }
 
@@ -185,7 +236,7 @@ func (m *Manager) CreateUser(input CreateUserInput, expectedRevision int64) (Use
 	if err != nil {
 		return User{}, 0, err
 	}
-	_, _, created := findUser(m.store, createdID)
+	_, _, created := m.indexedUserLocked(createdID)
 	return *created, state.Revision, nil
 }
 
@@ -195,7 +246,7 @@ func (m *Manager) UpdateUser(userID string, input UpdateUserInput, expectedRevis
 	if m.config == nil {
 		return User{}, 0, ErrDisabled
 	}
-	inbound, _, existing := findUser(m.store, userID)
+	inbound, _, existing := m.indexedUserLocked(userID)
 	if existing == nil {
 		return User{}, 0, ErrNotFound
 	}
@@ -226,7 +277,7 @@ func (m *Manager) UpdateUser(userID string, input UpdateUserInput, expectedRevis
 	if err != nil {
 		return User{}, 0, err
 	}
-	_, _, updated := findUser(m.store, userID)
+	_, _, updated := m.indexedUserLocked(userID)
 	return *updated, state.Revision, nil
 }
 
@@ -236,7 +287,7 @@ func (m *Manager) DeleteUser(userID string, expectedRevision int64) (int64, erro
 	if m.config == nil {
 		return 0, ErrDisabled
 	}
-	inbound, _, existing := findUser(m.store, userID)
+	inbound, _, existing := m.indexedUserLocked(userID)
 	if existing == nil {
 		return 0, ErrNotFound
 	}
@@ -265,7 +316,7 @@ func (m *Manager) ResetTraffic(userID string, expectedRevision int64) (User, int
 	if m.config == nil {
 		return User{}, 0, ErrDisabled
 	}
-	inbound, _, existing := findUser(m.store, userID)
+	inbound, _, existing := m.indexedUserLocked(userID)
 	if existing == nil {
 		return User{}, 0, ErrNotFound
 	}
@@ -283,7 +334,7 @@ func (m *Manager) ResetTraffic(userID string, expectedRevision int64) (User, int
 	if err != nil {
 		return User{}, 0, err
 	}
-	_, _, updated := findUser(m.store, userID)
+	_, _, updated := m.indexedUserLocked(userID)
 	return *updated, state.Revision, nil
 }
 
@@ -293,7 +344,7 @@ func (m *Manager) RotateSubscription(userID string, expectedRevision int64) (str
 	if m.config == nil {
 		return "", 0, ErrDisabled
 	}
-	inbound, _, existing := findUser(m.store, userID)
+	inbound, _, existing := m.indexedUserLocked(userID)
 	if existing == nil {
 		return "", 0, ErrNotFound
 	}
@@ -327,7 +378,7 @@ func (m *Manager) SubscriptionUser(token string) (User, error) {
 	if m.config == nil || m.store.Subscriptions[userID] != token {
 		return User{}, ErrNotFound
 	}
-	_, _, user := findUser(m.store, userID)
+	_, _, user := m.indexedUserLocked(userID)
 	if user == nil || !user.Enabled {
 		return User{}, ErrNotFound
 	}
@@ -343,7 +394,7 @@ func (m *Manager) SubscriptionToken(userID string) (string, error) {
 	if m.config == nil {
 		return "", ErrDisabled
 	}
-	_, _, user := findUser(m.store, userID)
+	_, _, user := m.indexedUserLocked(userID)
 	if user == nil {
 		return "", ErrNotFound
 	}
@@ -372,7 +423,7 @@ func (m *Manager) mutateListenerLocked(inbound string, expectedRevision int64, m
 		}
 	}()
 	m.syncTrafficLocked()
-	candidate := cloneStore(m.store)
+	candidate := cloneStoreForListener(m.store, inbound)
 	candidateState := candidate.Listeners[inbound]
 	if err := mutate(candidate, candidateState); err != nil {
 		return nil, err
@@ -408,9 +459,45 @@ func (m *Manager) mutateListenerLocked(inbound string, expectedRevision int64, m
 	}
 
 	m.store = candidate
+	m.reindexListenerLocked(current, candidateState)
 	m.publishLocked()
 	committed = true
 	return candidateState, nil
+}
+
+func buildUserIndex(store *Store) map[string]userLocation {
+	index := make(map[string]userLocation)
+	for inbound, state := range store.Listeners {
+		for position, user := range state.Users {
+			index[user.ID] = userLocation{inbound: inbound, index: position}
+		}
+	}
+	return index
+}
+
+func (m *Manager) indexedUserLocked(userID string) (string, *ListenerState, *User) {
+	location, exists := m.userIndex[userID]
+	if !exists {
+		return "", nil, nil
+	}
+	state := m.store.Listeners[location.inbound]
+	if state == nil || location.index < 0 || location.index >= len(state.Users) {
+		return "", nil, nil
+	}
+	user := state.Users[location.index]
+	if user == nil || user.ID != userID {
+		return "", nil, nil
+	}
+	return location.inbound, state, user
+}
+
+func (m *Manager) reindexListenerLocked(previous, current *ListenerState) {
+	for _, user := range previous.Users {
+		delete(m.userIndex, user.ID)
+	}
+	for position, user := range current.Users {
+		m.userIndex[user.ID] = userLocation{inbound: current.Name, index: position}
+	}
 }
 
 func findUser(store *Store, userID string) (string, *ListenerState, *User) {

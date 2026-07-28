@@ -43,20 +43,17 @@ func (m *Manager) RecordTraffic(inbound, userID string, upload, download int64) 
 }
 
 func (runtime *runtimeState) acquireRecorder() bool {
-	for {
-		state := runtime.recorders.Load()
-		if state&runtimeRetiring != 0 {
-			return false
-		}
-		if runtime.recorders.CompareAndSwap(state, state+1) {
-			return true
-		}
+	state := runtime.recorders.Add(1)
+	if state&runtimeRetiring == 0 {
+		return true
 	}
+	runtime.releaseRecorder()
+	return false
 }
 
 func (runtime *runtimeState) releaseRecorder() {
 	if runtime.recorders.Add(^uint64(0)) == runtimeRetiring {
-		close(runtime.drained)
+		runtime.drainOnce.Do(func() { close(runtime.drained) })
 	}
 }
 
@@ -69,7 +66,7 @@ func (runtime *runtimeState) retireRecorders() {
 		}
 		if runtime.recorders.CompareAndSwap(state, state|runtimeRetiring) {
 			if state == 0 {
-				close(runtime.drained)
+				runtime.drainOnce.Do(func() { close(runtime.drained) })
 			}
 			<-runtime.drained
 			return
@@ -120,6 +117,16 @@ func addTraffic(counter *atomic.Int64, value int64) {
 
 func (m *Manager) syncTrafficLocked() {
 	syncTrafficStore(m.store, m.runtime.Load())
+}
+
+func (m *Manager) syncUserTrafficLocked(user *User) {
+	runtime := m.runtime.Load()
+	counter := runtime.traffic[trafficKey{inbound: user.Inbound, userID: user.ID}]
+	if counter == nil || counter.generation != user.TrafficGeneration {
+		return
+	}
+	user.UploadBytes = counter.upload.Load()
+	user.DownloadBytes = counter.download.Load()
 }
 
 func syncTrafficStore(store *Store, runtime *runtimeState) {

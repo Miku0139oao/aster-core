@@ -51,12 +51,15 @@ func (l *managedTestListener) Config() C.InboundConfig { return managedTestConfi
 func (l *managedTestListener) ManagedUserSchema() C.ManagedUserSchema {
 	return l.schema
 }
+
 func (l *managedTestListener) ConfiguredUsers() []C.ManagedUser {
 	return append([]C.ManagedUser(nil), l.configured...)
 }
+
 func (l *managedTestListener) CurrentManagedUsers() []C.ManagedUser {
 	return l.users()
 }
+
 func (l *managedTestListener) UpdateManagedUsers(users []C.ManagedUser) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -72,16 +75,19 @@ func (l *managedTestListener) UpdateManagedUsers(users []C.ManagedUser) error {
 	l.current = append([]C.ManagedUser(nil), users...)
 	return nil
 }
+
 func (l *managedTestListener) isClosed() bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.closed
 }
+
 func (l *managedTestListener) users() []C.ManagedUser {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return append([]C.ManagedUser(nil), l.current...)
 }
+
 func (l *managedTestListener) updateCount() int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -174,6 +180,51 @@ func TestManagerReconcileMutateAndTraffic(t *testing.T) {
 	require.Equal(t, []C.ManagedUser{{
 		PrincipalID: "legacy", Name: "legacy", UUID: "6d27a52f-4539-4ac1-9bd4-b8e05e53c197",
 	}}, managed.users())
+}
+
+func TestManagerSnapshotAndUserIndexTrackMutations(t *testing.T) {
+	managed := newManagedVLESSTestListener()
+	registerManagedTestListener(t, managed)
+	manager := NewManager()
+	storePath := filepath.Join(t.TempDir(), "aster-state.json")
+	require.NoError(t, manager.Configure(managerTestConfig(storePath, managed.name)))
+	t.Cleanup(func() { _ = manager.Configure(nil) })
+
+	records, err := manager.ListUserRecords(managed.name)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	created, revision, err := manager.CreateUser(
+		CreateUserInput{Inbound: managed.name, Name: "indexed"},
+		records[0].Revision,
+	)
+	require.NoError(t, err)
+
+	location, exists := manager.userIndex[created.ID]
+	require.True(t, exists)
+	require.Equal(t, managed.name, location.inbound)
+	indexed, indexedRevision, err := manager.GetUser(created.ID)
+	require.NoError(t, err)
+	require.Equal(t, created.ID, indexed.ID)
+	require.Equal(t, revision, indexedRevision)
+
+	snapshot, err := manager.ManagementSnapshot(managed.name)
+	require.NoError(t, err)
+	require.Len(t, snapshot.Listeners, 1)
+	require.Len(t, snapshot.Users, 2)
+	require.Equal(t, snapshot.Listeners[0].Revision, snapshot.Users[0].Revision)
+	require.Equal(t, snapshot.Listeners[0].Revision, snapshot.Users[1].Revision)
+
+	revision, err = manager.DeleteUser(created.ID, revision)
+	require.NoError(t, err)
+	_, exists = manager.userIndex[created.ID]
+	require.False(t, exists)
+	_, _, err = manager.GetUser(created.ID)
+	require.ErrorIs(t, err, ErrNotFound)
+
+	remaining, _, err := manager.GetUser(records[0].User.ID)
+	require.NoError(t, err)
+	require.Equal(t, records[0].User.ID, remaining.ID)
+	require.Positive(t, revision)
 }
 
 func TestManagerTrafficRecordingDoesNotWaitForPersistence(t *testing.T) {
@@ -415,6 +466,42 @@ func TestManagerMutationRollsBackRuntimeAndDirtyState(t *testing.T) {
 	persisted, err := readValidatedStore(storePath)
 	require.NoError(t, err)
 	require.Len(t, persisted.Listeners[managed.name].Users, 1)
+}
+
+func TestRetiredRuntimeRejectsLateRecorders(t *testing.T) {
+	runtime := newRuntimeState()
+	runtime.retireRecorders()
+	for i := 0; i < 10; i++ {
+		require.False(t, runtime.acquireRecorder())
+	}
+}
+
+func BenchmarkManagerRecordTraffic(b *testing.B) {
+	manager := NewManager()
+	runtime := newRuntimeState()
+	key := trafficKey{inbound: "vless-in", userID: "user-id"}
+	runtime.traffic[key] = &trafficCounter{generation: 1}
+	manager.runtime.Store(runtime)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		manager.RecordTraffic(key.inbound, key.userID, 1500, 0)
+	}
+}
+
+func BenchmarkManagerRecordTrafficParallel(b *testing.B) {
+	manager := NewManager()
+	runtime := newRuntimeState()
+	key := trafficKey{inbound: "vless-in", userID: "user-id"}
+	runtime.traffic[key] = &trafficCounter{generation: 1}
+	manager.runtime.Store(runtime)
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			manager.RecordTraffic(key.inbound, key.userID, 1500, 0)
+		}
+	})
 }
 
 func TestManagerAllowsPreviouslyManagedListenerRemoval(t *testing.T) {

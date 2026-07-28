@@ -89,22 +89,36 @@ func TestListenerRevokesConnectionsBlockedInTransportHandshake(t *testing.T) {
 	}
 }
 
-func TestListenerUserUpdateClosesHTTPPhysicalConnection(t *testing.T) {
+func TestListenerUserUpdatePreservesHTTPPhysicalConnectionAfterTransportHandoff(t *testing.T) {
 	base := newVLESSFakeListener()
 	transport := N.NewConnectionTrackingListener(base)
+	wrapped := N.NewHandleContextListener(context.Background(), transport, func(_ context.Context, conn net.Conn) (net.Conn, error) {
+		return conn, nil
+	}, nil)
 	listener := &Listener{
 		service:    NewService[string](nil),
-		listeners:  []net.Listener{transport},
+		listeners:  []net.Listener{wrapped},
 		transports: []*N.ConnectionTrackingListener{transport},
 	}
 	server, client := net.Pipe()
 	defer client.Close()
 	base.connections <- server
-	_, err := transport.Accept()
+	accepted, err := wrapped.Accept()
 	require.NoError(t, err)
+	defer accepted.Close()
 
 	require.NoError(t, listener.UpdateUsers(nil))
-	assertVLESSPeerClosed(t, client)
+	require.NoError(t, accepted.SetDeadline(time.Now().Add(time.Second)))
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := client.Write([]byte{1})
+		writeDone <- err
+	}()
+	var value [1]byte
+	_, err = accepted.Read(value[:])
+	require.NoError(t, err)
+	require.NoError(t, <-writeDone)
+	require.Equal(t, byte(1), value[0])
 	require.NoError(t, listener.Close())
 }
 

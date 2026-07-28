@@ -25,7 +25,7 @@ func (m *Manager) SubscriptionURL(userID string) (string, error) {
 	if m.config.PublicBaseURL == "" {
 		return "", nil
 	}
-	_, _, user := findUser(m.store, userID)
+	_, _, user := m.indexedUserLocked(userID)
 	if user == nil || !user.Enabled {
 		return "", ErrNotFound
 	}
@@ -76,7 +76,7 @@ func (m *Manager) SubscriptionLink(token string) (string, error) {
 	if candidate := m.store.Subscriptions[userID]; subtle.ConstantTimeCompare([]byte(candidate), []byte(token)) != 1 {
 		return "", ErrNotFound
 	}
-	_, _, user := findUser(m.store, userID)
+	_, _, user := m.indexedUserLocked(userID)
 	if user == nil || !user.Enabled {
 		return "", ErrNotFound
 	}

@@ -115,3 +115,22 @@ func TestStoreRejectsExhaustedGeneration(t *testing.T) {
 	store.Generation = math.MaxUint64
 	require.Error(t, validateStore(store))
 }
+
+func TestCloneStoreForListenerOnlyDeepCopiesTarget(t *testing.T) {
+	store := validTestStore(t, "target")
+	store.Listeners["other"] = &ListenerState{
+		ID: "other-id", Name: "other", Protocol: "vless", Revision: 1, AppliedRevision: 1,
+		Users: []*User{{ID: "other-user", Inbound: "other", Protocol: "vless", Name: "other"}},
+	}
+	store.Subscriptions["other-user"] = "other-token"
+
+	cloned := cloneStoreForListener(store, "vless-in")
+	require.NotSame(t, store.Listeners["vless-in"], cloned.Listeners["vless-in"])
+	require.NotSame(t, store.Listeners["vless-in"].Users[0], cloned.Listeners["vless-in"].Users[0])
+	require.Same(t, store.Listeners["other"], cloned.Listeners["other"])
+
+	cloned.Listeners["vless-in"].Users[0].Name = "changed"
+	cloned.Subscriptions["user-id"] = "changed-token"
+	require.Equal(t, "target", store.Listeners["vless-in"].Users[0].Name)
+	require.NotEqual(t, cloned.Subscriptions["user-id"], store.Subscriptions["user-id"])
+}

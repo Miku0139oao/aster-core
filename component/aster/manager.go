@@ -21,10 +21,10 @@ import (
 )
 
 var (
-	ErrDisabled = errors.New("Aster management is disabled")
-	ErrNotFound = errors.New("Aster resource not found")
-	ErrConflict = errors.New("Aster revision conflict")
-	ErrInvalid  = errors.New("invalid Aster request")
+	ErrDisabled = errors.New("aster management is disabled")
+	ErrNotFound = errors.New("aster resource not found")
+	ErrConflict = errors.New("aster revision conflict")
+	ErrInvalid  = errors.New("invalid aster request")
 )
 
 type Config struct {
@@ -60,6 +60,7 @@ type runtimeState struct {
 	subscriptions map[string]string
 	recorders     atomic.Uint64
 	drained       chan struct{}
+	drainOnce     sync.Once
 }
 
 type Manager struct {
@@ -67,6 +68,7 @@ type Manager struct {
 	trafficMu    sync.RWMutex
 	config       *Config
 	store        *Store
+	userIndex    map[string]userLocation
 	storePath    string
 	storeUnlock  func()
 	persistStore func(string, *Store) error
@@ -81,6 +83,7 @@ var Default = NewManager()
 func NewManager() *Manager {
 	manager := &Manager{
 		store:        newStore(),
+		userIndex:    make(map[string]userLocation),
 		persistStore: saveStoreLocked,
 		instances:    make(map[string]uintptr),
 	}
@@ -160,6 +163,7 @@ func (m *Manager) Configure(config *Config) error {
 	if sameStore {
 		m.config = config
 		m.store = store
+		m.userIndex = buildUserIndex(store)
 		m.storePath = config.StorePath
 		m.instances = instances
 		m.publishLocked()
@@ -194,6 +198,7 @@ func (m *Manager) Configure(config *Config) error {
 		acquiredUnlock = nil
 		m.config = config
 		m.store = store
+		m.userIndex = buildUserIndex(store)
 		m.storePath = config.StorePath
 		m.instances = instances
 		if oldUnlock != nil {
@@ -370,6 +375,7 @@ func (m *Manager) releaseStoreLocked() {
 		m.storeUnlock = nil
 	}
 	m.store = newStore()
+	m.userIndex = make(map[string]userLocation)
 	m.storePath = ""
 }
 
@@ -399,7 +405,7 @@ func applyChanges(changes []listenerChange) error {
 	return nil
 }
 
-var errRollbackFailed = errors.New("Aster listener rollback failed")
+var errRollbackFailed = errors.New("aster listener rollback failed")
 
 func rollbackChanges(changes []listenerChange) error {
 	var rollbackErr error
@@ -649,6 +655,10 @@ func (m *Manager) Status() Status {
 		PublicBaseURL:    runtime.publicBaseURL,
 		ManagedListeners: listeners,
 	}
+}
+
+func (m *Manager) Enabled() bool {
+	return len(m.runtime.Load().secret) != 0
 }
 
 func (m *Manager) Authenticate(secret string) bool {
