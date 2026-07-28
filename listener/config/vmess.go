@@ -3,9 +3,9 @@ package config
 import (
 	"encoding/json"
 
-	"github.com/metacubex/mihomo/listener/reality"
-	"github.com/metacubex/mihomo/listener/sing"
-	"github.com/metacubex/mihomo/transport/tlsmirror"
+	"github.com/Miku0139oao/aster-core/listener/reality"
+	"github.com/Miku0139oao/aster-core/listener/sing"
+	"github.com/Miku0139oao/aster-core/transport/tlsmirror"
 )
 
 type VmessUser struct {

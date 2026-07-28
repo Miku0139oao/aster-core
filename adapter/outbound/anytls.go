@@ -8,11 +8,11 @@ import (
 	"strings"
 	"time"
 
-	N "github.com/metacubex/mihomo/common/net"
-	"github.com/metacubex/mihomo/component/proxydialer"
-	C "github.com/metacubex/mihomo/constant"
-	"github.com/metacubex/mihomo/transport/anytls"
-	"github.com/metacubex/mihomo/transport/vmess"
+	N "github.com/Miku0139oao/aster-core/common/net"
+	"github.com/Miku0139oao/aster-core/component/proxydialer"
+	C "github.com/Miku0139oao/aster-core/constant"
+	"github.com/Miku0139oao/aster-core/transport/anytls"
+	"github.com/Miku0139oao/aster-core/transport/vmess"
 
 	M "github.com/metacubex/sing/common/metadata"
 	"github.com/metacubex/sing/common/uot"
@@ -36,6 +36,7 @@ type AnyTLSOption struct {
 	ShadowTLSOpts            ShadowTLSOptions `proxy:"shadow-tls-opts,omitempty"`
 	RestlsOpts               RestlsOptions    `proxy:"restls-opts,omitempty"`
 	JLSOpts                  JLSOptions       `proxy:"jls-opts,omitempty"`
+	RealityOpts              RealityOptions   `proxy:"reality-opts,omitempty"`
 	ClientFingerprint        string           `proxy:"client-fingerprint,omitempty"`
 	SkipCertVerify           bool             `proxy:"skip-cert-verify,omitempty"`
 	NameCertVerify           string           `proxy:"name-cert-verify,omitempty"`
@@ -135,7 +136,11 @@ func NewAnyTLS(option AnyTLSOption) (*AnyTLS, error) {
 	if err != nil {
 		return nil, err
 	}
-	securityModes := make([]string, 0, 3)
+	realityConfig, err := option.RealityOpts.Parse()
+	if err != nil {
+		return nil, err
+	}
+	securityModes := make([]string, 0, 4)
 	if shadowTLSConfig != nil {
 		securityModes = append(securityModes, "ShadowTLS")
 	}
@@ -144,6 +149,9 @@ func NewAnyTLS(option AnyTLSOption) (*AnyTLS, error) {
 	}
 	if jlsConfig != nil {
 		securityModes = append(securityModes, "JLS")
+	}
+	if realityConfig != nil {
+		securityModes = append(securityModes, "REALITY")
 	}
 	if len(securityModes) > 1 {
 		return nil, errors.New("security modes are mutually exclusive: " + strings.Join(securityModes, ", "))
@@ -161,6 +169,7 @@ func NewAnyTLS(option AnyTLSOption) (*AnyTLS, error) {
 		ShadowTLS:         shadowTLSConfig,
 		Restls:            restlsConfig,
 		JLS:               jlsConfig,
+		Reality:           realityConfig,
 	}
 	if tlsConfig.Host == "" {
 		tlsConfig.Host = option.Server

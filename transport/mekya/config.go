@@ -1,6 +1,6 @@
 package mekya
 
-import "github.com/metacubex/mihomo/transport/mkcp"
+import "github.com/Miku0139oao/aster-core/transport/mkcp"
 
 type Config struct {
 	KCP                            mkcp.Config

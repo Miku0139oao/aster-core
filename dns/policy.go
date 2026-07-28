@@ -1,8 +1,8 @@
 package dns
 
 import (
-	"github.com/metacubex/mihomo/component/trie"
-	C "github.com/metacubex/mihomo/constant"
+	"github.com/Miku0139oao/aster-core/component/trie"
+	C "github.com/Miku0139oao/aster-core/constant"
 )
 
 type dnsPolicy interface {

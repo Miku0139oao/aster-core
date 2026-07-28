@@ -1,8 +1,8 @@
 package inbound
 
 import (
-	"github.com/metacubex/mihomo/common/utils"
-	LC "github.com/metacubex/mihomo/listener/config"
+	"github.com/Miku0139oao/aster-core/common/utils"
+	LC "github.com/Miku0139oao/aster-core/listener/config"
 )
 
 type JLSConfig struct {

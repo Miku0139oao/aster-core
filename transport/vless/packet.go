@@ -2,42 +2,74 @@ package vless
 
 import (
 	"encoding/binary"
+	"fmt"
 	"io"
 	"net"
+	"sync"
 
-	"github.com/metacubex/mihomo/common/pool"
+	"github.com/Miku0139oao/aster-core/common/pool"
 )
 
 type PacketConn struct {
 	net.Conn
-	rAddr net.Addr
+	rAddr   net.Addr
+	readMu  sync.Mutex
+	writeMu sync.Mutex
 }
 
 func (c *PacketConn) WriteTo(b []byte, addr net.Addr) (int, error) {
-	err := binary.Write(c.Conn, binary.BigEndian, uint16(len(b)))
-	if err != nil {
-		return 0, err
+	if len(b) > int(^uint16(0)) {
+		return 0, fmt.Errorf("VLESS packet exceeds maximum size: %d", len(b))
 	}
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 
-	return c.Conn.Write(b)
+	var header [2]byte
+	binary.BigEndian.PutUint16(header[:], uint16(len(b)))
+	buffers := net.Buffers{header[:], b}
+	written, err := buffers.WriteTo(c.Conn)
+	payloadWritten := written - int64(len(header))
+	if payloadWritten < 0 {
+		payloadWritten = 0
+	} else if payloadWritten > int64(len(b)) {
+		payloadWritten = int64(len(b))
+	}
+	if err == nil && written != int64(len(header)+len(b)) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		_ = c.Conn.Close()
+	}
+	return int(payloadWritten), err
 }
 
 func (c *PacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
-	var length uint16
-	err := binary.Read(c.Conn, binary.BigEndian, &length)
+	c.readMu.Lock()
+	defer c.readMu.Unlock()
+
+	length, err := c.readPacketLength()
 	if err != nil {
 		return 0, nil, err
 	}
 	if len(b) < int(length) {
+		if _, err = io.CopyN(io.Discard, c.Conn, int64(length)); err != nil {
+			_ = c.Conn.Close()
+			return 0, nil, err
+		}
 		return 0, nil, io.ErrShortBuffer
 	}
 	n, err := io.ReadFull(c.Conn, b[:length])
+	if err != nil {
+		_ = c.Conn.Close()
+	}
 	return n, c.rAddr, err
 }
 
 func (c *PacketConn) WaitReadFrom() (data []byte, put func(), addr net.Addr, err error) {
-	var length uint16
-	err = binary.Read(c.Conn, binary.BigEndian, &length)
+	c.readMu.Lock()
+	defer c.readMu.Unlock()
+
+	length, err := c.readPacketLength()
 	if err != nil {
 		return
 	}
@@ -47,6 +79,7 @@ func (c *PacketConn) WaitReadFrom() (data []byte, put func(), addr net.Addr, err
 	}
 	n, err := io.ReadFull(c.Conn, readBuf)
 	if err != nil {
+		_ = c.Conn.Close()
 		put()
 		put = nil
 		return
@@ -54,4 +87,16 @@ func (c *PacketConn) WaitReadFrom() (data []byte, put func(), addr net.Addr, err
 	data = readBuf[:n]
 	addr = c.rAddr
 	return
+}
+
+func (c *PacketConn) readPacketLength() (uint16, error) {
+	var header [2]byte
+	n, err := io.ReadFull(c.Conn, header[:])
+	if err != nil {
+		if n > 0 {
+			_ = c.Conn.Close()
+		}
+		return 0, err
+	}
+	return binary.BigEndian.Uint16(header[:]), nil
 }

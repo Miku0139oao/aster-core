@@ -8,11 +8,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/metacubex/mihomo/common/atomic"
-	mihomoHttp "github.com/metacubex/mihomo/component/http"
-	"github.com/metacubex/mihomo/component/mmdb"
-	C "github.com/metacubex/mihomo/constant"
-	"github.com/metacubex/mihomo/log"
+	"github.com/Miku0139oao/aster-core/common/atomic"
+	mihomoHttp "github.com/Miku0139oao/aster-core/component/http"
+	"github.com/Miku0139oao/aster-core/component/mmdb"
+	C "github.com/Miku0139oao/aster-core/constant"
+	"github.com/Miku0139oao/aster-core/log"
 
 	"github.com/metacubex/http"
 )

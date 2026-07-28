@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	mihomoHttp "github.com/metacubex/mihomo/component/http"
+	mihomoHttp "github.com/Miku0139oao/aster-core/component/http"
 
 	"github.com/metacubex/http"
 )

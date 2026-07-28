@@ -5,23 +5,26 @@ import (
 	"errors"
 	"net"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/metacubex/mihomo/adapter/inbound"
-	"github.com/metacubex/mihomo/component/ca"
-	"github.com/metacubex/mihomo/component/ech"
-	C "github.com/metacubex/mihomo/constant"
-	LC "github.com/metacubex/mihomo/listener/config"
-	"github.com/metacubex/mihomo/listener/jls"
-	"github.com/metacubex/mihomo/listener/reality"
-	"github.com/metacubex/mihomo/listener/restls"
-	"github.com/metacubex/mihomo/listener/shadowtls"
-	"github.com/metacubex/mihomo/listener/sing"
-	"github.com/metacubex/mihomo/ntp"
-	"github.com/metacubex/mihomo/transport/gun"
-	"github.com/metacubex/mihomo/transport/vless/encryption"
-	mihomoVMess "github.com/metacubex/mihomo/transport/vmess"
-	"github.com/metacubex/mihomo/transport/xhttp"
+	"github.com/Miku0139oao/aster-core/adapter/inbound"
+	N "github.com/Miku0139oao/aster-core/common/net"
+	"github.com/Miku0139oao/aster-core/component/ca"
+	"github.com/Miku0139oao/aster-core/component/ech"
+	C "github.com/Miku0139oao/aster-core/constant"
+	LC "github.com/Miku0139oao/aster-core/listener/config"
+	"github.com/Miku0139oao/aster-core/listener/jls"
+	"github.com/Miku0139oao/aster-core/listener/reality"
+	"github.com/Miku0139oao/aster-core/listener/restls"
+	"github.com/Miku0139oao/aster-core/listener/shadowtls"
+	"github.com/Miku0139oao/aster-core/listener/sing"
+	"github.com/Miku0139oao/aster-core/ntp"
+	"github.com/Miku0139oao/aster-core/transport/gun"
+	"github.com/Miku0139oao/aster-core/transport/vless/encryption"
+	mihomoVMess "github.com/Miku0139oao/aster-core/transport/vmess"
+	"github.com/Miku0139oao/aster-core/transport/xhttp"
 
 	"github.com/metacubex/http"
 	"github.com/metacubex/sing/common"
@@ -31,11 +34,26 @@ import (
 )
 
 type Listener struct {
-	closed     bool
+	closed     atomic.Bool
 	config     LC.VlessServer
 	listeners  []net.Listener
+	httpServer *http.Server
 	service    *Service[string]
 	decryption *encryption.ServerInstance
+	transports []*N.ConnectionTrackingListener
+}
+
+type closeOnceListener struct {
+	net.Listener
+	once sync.Once
+	err  error
+}
+
+func (l *closeOnceListener) Close() error {
+	l.once.Do(func() {
+		l.err = l.Listener.Close()
+	})
+	return l.err
 }
 
 func New(config LC.VlessServer, lc C.InboundListenConfig, tunnel C.Tunnel, additions ...inbound.Addition) (sl *Listener, err error) {
@@ -56,7 +74,7 @@ func New(config LC.VlessServer, lc C.InboundListenConfig, tunnel C.Tunnel, addit
 	}
 
 	service := NewService[string](h)
-	service.UpdateUsers(
+	err = service.UpdateUsers(
 		common.Map(config.Users, func(it LC.VlessUser) string {
 			return it.Username
 		}),
@@ -66,26 +84,28 @@ func New(config LC.VlessServer, lc C.InboundListenConfig, tunnel C.Tunnel, addit
 		common.Map(config.Users, func(it LC.VlessUser) string {
 			return it.Flow
 		}))
+	if err != nil {
+		return nil, err
+	}
 
 	sl = &Listener{config: config, service: service}
+	created := sl
+	defer func() {
+		if err != nil {
+			_ = created.Close()
+		}
+	}()
 
 	sl.decryption, err = encryption.NewServer(config.Decryption)
 	if err != nil {
 		return nil, err
-	}
-	if sl.decryption != nil {
-		defer func() { // decryption must be closed to avoid the goroutine leak
-			if err != nil {
-				_ = sl.decryption.Close()
-				sl.decryption = nil
-			}
-		}()
 	}
 
 	httpServer := http.Server{
 		IdleTimeout: 30 * time.Second,
 		Protocols:   new(http.Protocols),
 	}
+	sl.httpServer = &httpServer
 	tlsConfig := &tls.Config{Time: ntp.Now}
 	var shadowTLSBuilder *shadowtls.Builder
 	var restlsBuilder *restls.Builder
@@ -142,6 +162,9 @@ func New(config LC.VlessServer, lc C.InboundListenConfig, tunnel C.Tunnel, addit
 	}
 	if len(securityModes) > 1 {
 		return nil, errors.New("security modes are mutually exclusive: " + strings.Join(securityModes, ", "))
+	}
+	if len(securityModes) == 0 && sl.decryption == nil && !config.AllowInsecure {
+		return nil, errors.New("disallow using Vless without any certificates/shadow-tls/res-tls/jls/reality/decryption/allow-insecure config")
 	}
 	if config.RealityConfig.PrivateKey != "" {
 		realityBuilder, err = config.RealityConfig.Build(tunnel)
@@ -262,6 +285,11 @@ func New(config LC.VlessServer, lc C.InboundListenConfig, tunnel C.Tunnel, addit
 		if err != nil {
 			return nil, err
 		}
+		if shadowTLSBuilder != nil || restlsBuilder != nil || jlsBuilder != nil || realityBuilder != nil || httpServer.Handler != nil {
+			transport := N.NewConnectionTrackingListener(l)
+			sl.transports = append(sl.transports, transport)
+			l = transport
+		}
 		if shadowTLSBuilder != nil {
 			l = shadowTLSBuilder.NewListener(l)
 		} else if restlsBuilder != nil {
@@ -272,8 +300,9 @@ func New(config LC.VlessServer, lc C.InboundListenConfig, tunnel C.Tunnel, addit
 			l = realityBuilder.NewListener(l)
 		} else if tlsConfig.GetCertificate != nil {
 			l = tls.NewListener(l, tlsConfig)
-		} else if sl.decryption == nil && !config.AllowInsecure {
-			return nil, errors.New("disallow using Vless without any certificates/shadow-tls/res-tls/jls/reality/decryption/allow-insecure config")
+		}
+		if httpServer.Handler != nil {
+			l = &closeOnceListener{Listener: l}
 		}
 		sl.listeners = append(sl.listeners, l)
 
@@ -285,7 +314,7 @@ func New(config LC.VlessServer, lc C.InboundListenConfig, tunnel C.Tunnel, addit
 			for {
 				c, err := l.Accept()
 				if err != nil {
-					if sl.closed {
+					if sl.closed.Load() {
 						break
 					}
 					continue
@@ -300,7 +329,9 @@ func New(config LC.VlessServer, lc C.InboundListenConfig, tunnel C.Tunnel, addit
 }
 
 func (l *Listener) Close() error {
-	l.closed = true
+	l.closed.Store(true)
+	l.service.Close()
+	l.closeTransportConnections()
 	var retErr error
 	for _, lis := range l.listeners {
 		err := lis.Close()
@@ -308,10 +339,40 @@ func (l *Listener) Close() error {
 			retErr = err
 		}
 	}
+	if l.httpServer != nil {
+		if err := l.httpServer.Close(); err != nil {
+			retErr = errors.Join(retErr, err)
+		}
+	}
 	if l.decryption != nil {
 		_ = l.decryption.Close()
 	}
 	return retErr
+}
+
+func (l *Listener) UpdateUsers(users []LC.VlessUser) error {
+	err := l.service.UpdateUsers(
+		common.Map(users, func(it LC.VlessUser) string {
+			return it.Username
+		}),
+		common.Map(users, func(it LC.VlessUser) string {
+			return it.UUID
+		}),
+		common.Map(users, func(it LC.VlessUser) string {
+			return it.Flow
+		}),
+	)
+	if err != nil {
+		return err
+	}
+	l.closeTransportConnections()
+	return nil
+}
+
+func (l *Listener) closeTransportConnections() {
+	for _, transport := range l.transports {
+		transport.CloseConnections()
+	}
 }
 
 func (l *Listener) Config() string {
@@ -326,20 +387,26 @@ func (l *Listener) AddrList() (addrList []net.Addr) {
 }
 
 func (l *Listener) HandleConn(conn net.Conn, tunnel C.Tunnel, additions ...inbound.Addition) {
+	rawConn := conn
+	defer rawConn.Close()
+	pending, err := l.service.trackPendingConnection(rawConn)
+	if err != nil {
+		return
+	}
+	defer l.service.untrackPendingConnection(pending)
+
 	ctx := sing.WithAdditions(context.TODO(), additions...)
 	if l.decryption != nil {
-		var err error
 		conn, err = l.decryption.Handshake(conn, nil)
 		if err != nil {
 			return
 		}
 	}
-	err := l.service.NewConnection(ctx, conn, metadata.Metadata{
+	err = l.service.newConnection(ctx, conn, metadata.Metadata{
 		Protocol: "vless",
 		Source:   metadata.SocksaddrFromNet(conn.RemoteAddr()),
-	})
+	}, pending)
 	if err != nil {
-		_ = conn.Close()
 		return
 	}
 }

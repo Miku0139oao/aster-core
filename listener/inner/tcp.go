@@ -4,8 +4,8 @@ import (
 	"errors"
 	"net"
 
-	N "github.com/metacubex/mihomo/common/net"
-	C "github.com/metacubex/mihomo/constant"
+	N "github.com/Miku0139oao/aster-core/common/net"
+	C "github.com/Miku0139oao/aster-core/constant"
 )
 
 var tunnel C.Tunnel

@@ -6,8 +6,8 @@ import (
 	"net"
 	"runtime"
 
-	"github.com/metacubex/mihomo/transport/tuic/common"
-	"github.com/metacubex/mihomo/transport/vmess"
+	"github.com/Miku0139oao/aster-core/transport/tuic/common"
+	"github.com/Miku0139oao/aster-core/transport/vmess"
 
 	"github.com/metacubex/http"
 	"github.com/metacubex/quic-go"

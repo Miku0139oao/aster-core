@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"strings"
 
-	C "github.com/metacubex/mihomo/constant"
-	LC "github.com/metacubex/mihomo/listener/config"
-	"github.com/metacubex/mihomo/listener/sudoku"
-	"github.com/metacubex/mihomo/log"
+	C "github.com/Miku0139oao/aster-core/constant"
+	LC "github.com/Miku0139oao/aster-core/listener/config"
+	"github.com/Miku0139oao/aster-core/listener/sudoku"
+	"github.com/Miku0139oao/aster-core/log"
 )
 
 type SudokuOption struct {
@@ -115,6 +115,7 @@ func (s *Sudoku) Listen(tunnel C.Tunnel) error {
 
 	var errs []error
 	lc := s.ListenConfig()
+	listeners := make([]*sudoku.Listener, 0, len(strings.Split(s.RawAddress(), ",")))
 	for _, addr := range strings.Split(s.RawAddress(), ",") {
 		conf := s.serverConf
 		conf.Listen = addr
@@ -124,11 +125,12 @@ func (s *Sudoku) Listen(tunnel C.Tunnel) error {
 			errs = append(errs, err)
 			continue
 		}
-		s.listeners = append(s.listeners, l)
+		listeners = append(listeners, l)
 	}
 	if len(errs) > 0 {
-		return errors.Join(errs...)
+		return errors.Join(errors.Join(errs...), closeSudokuListeners(listeners))
 	}
+	s.listeners = listeners
 
 	log.Infoln("Sudoku[%s] inbound listening at: %s", s.Name(), s.Address())
 	return nil
@@ -136,8 +138,14 @@ func (s *Sudoku) Listen(tunnel C.Tunnel) error {
 
 // Close implements constant.InboundListener
 func (s *Sudoku) Close() error {
+	listeners := s.listeners
+	s.listeners = nil
+	return closeSudokuListeners(listeners)
+}
+
+func closeSudokuListeners(listeners []*sudoku.Listener) error {
 	var errs []error
-	for _, l := range s.listeners {
+	for _, l := range listeners {
 		if err := l.Close(); err != nil {
 			errs = append(errs, err)
 		}

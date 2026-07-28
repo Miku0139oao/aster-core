@@ -1,7 +1,7 @@
 package route
 
 import (
-	"github.com/metacubex/mihomo/component/resolver"
+	"github.com/Miku0139oao/aster-core/component/resolver"
 
 	"github.com/metacubex/chi"
 	"github.com/metacubex/chi/render"

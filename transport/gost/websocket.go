@@ -4,9 +4,9 @@ import (
 	"context"
 	"net"
 
-	"github.com/metacubex/mihomo/component/ca"
-	"github.com/metacubex/mihomo/component/ech"
-	"github.com/metacubex/mihomo/transport/vmess"
+	"github.com/Miku0139oao/aster-core/component/ca"
+	"github.com/Miku0139oao/aster-core/component/ech"
+	"github.com/Miku0139oao/aster-core/transport/vmess"
 
 	"github.com/metacubex/http"
 	"github.com/metacubex/smux"

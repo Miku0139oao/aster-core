@@ -6,7 +6,7 @@ import (
 	"net/netip"
 	"syscall"
 
-	"github.com/metacubex/mihomo/component/iface"
+	"github.com/Miku0139oao/aster-core/component/iface"
 
 	"golang.org/x/sys/unix"
 )

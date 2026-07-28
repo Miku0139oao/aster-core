@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
-	C "github.com/metacubex/mihomo/constant"
-	LC "github.com/metacubex/mihomo/listener/config"
-	"github.com/metacubex/mihomo/listener/snell"
-	"github.com/metacubex/mihomo/log"
+	C "github.com/Miku0139oao/aster-core/constant"
+	LC "github.com/Miku0139oao/aster-core/listener/config"
+	"github.com/Miku0139oao/aster-core/listener/snell"
+	"github.com/Miku0139oao/aster-core/log"
 )
 
 type SnellOption struct {
@@ -81,17 +81,22 @@ func (s *Snell) Address() string {
 }
 
 func (s *Snell) Listen(tunnel C.Tunnel) error {
-	var err error
-	s.l, err = snell.New(s.snell, s.ListenConfig(), tunnel, s.Additions()...)
+	l, err := snell.New(s.snell, s.ListenConfig(), tunnel, s.Additions()...)
 	if err != nil {
 		return err
 	}
+	s.l = l
 	log.Infoln("Snell[%s] inbound listening at: %s", s.Name(), s.Address())
 	return nil
 }
 
 func (s *Snell) Close() error {
-	return s.l.Close()
+	l := s.l
+	s.l = nil
+	if l == nil {
+		return nil
+	}
+	return l.Close()
 }
 
 var _ C.InboundListener = (*Snell)(nil)

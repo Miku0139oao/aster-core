@@ -3,7 +3,7 @@ package age_test
 import (
 	"testing"
 
-	"github.com/metacubex/mihomo/component/age"
+	"github.com/Miku0139oao/aster-core/component/age"
 )
 
 func TestAge(t *testing.T) {

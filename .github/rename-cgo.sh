@@ -1,35 +1,23 @@
-#!/bin/bash
+#!/bin/sh
 
-FILENAMES=$(ls)
-for FILENAME in $FILENAMES
-do
-    if [[ $FILENAME =~ "darwin-10.16-arm64" ]];then
-        echo "rename darwin-10.16-arm64 $FILENAME"
-        mv $FILENAME mihomo-darwin-arm64-cgo
-    elif [[ $FILENAME =~ "darwin-10.16-amd64" ]];then
-        echo "rename darwin-10.16-amd64 $FILENAME"
-        mv $FILENAME mihomo-darwin-amd64-cgo
-    elif [[ $FILENAME =~ "windows-4.0-386" ]];then
-        echo "rename windows 386 $FILENAME"
-        mv $FILENAME mihomo-windows-386-cgo.exe
-    elif [[ $FILENAME =~ "windows-4.0-amd64" ]];then
-        echo "rename windows amd64 $FILENAME"
-        mv $FILENAME mihomo-windows-amd64-cgo.exe
-    elif [[ $FILENAME =~ "mihomo-linux-arm-5" ]];then
-        echo "rename mihomo-linux-arm-5 $FILENAME"
-        mv $FILENAME mihomo-linux-armv5-cgo
-    elif [[ $FILENAME =~ "mihomo-linux-arm-6" ]];then
-        echo "rename mihomo-linux-arm-6 $FILENAME"
-        mv $FILENAME mihomo-linux-armv6-cgo
-    elif [[ $FILENAME =~ "mihomo-linux-arm-7" ]];then
-        echo "rename mihomo-linux-arm-7 $FILENAME"
-        mv $FILENAME mihomo-linux-armv7-cgo
-    elif [[ $FILENAME =~ "linux" ]];then
-        echo "rename linux $FILENAME"
-        mv $FILENAME $FILENAME-cgo
-    elif [[ $FILENAME =~ "android" ]];then
-        echo "rename android $FILENAME"
-        mv $FILENAME $FILENAME-cgo
-    else echo "skip $FILENAME"
-    fi
+set -eu
+
+for filename in *; do
+  [ -e "$filename" ] || continue
+  case "$filename" in
+    *darwin-10.16-arm64*) target=aster-core-darwin-arm64-cgo ;;
+    *darwin-10.16-amd64*) target=aster-core-darwin-amd64-cgo ;;
+    *windows-4.0-386*) target=aster-core-windows-386-cgo.exe ;;
+    *windows-4.0-amd64*) target=aster-core-windows-amd64-cgo.exe ;;
+    *aster-core-linux-arm-5*) target=aster-core-linux-armv5-cgo ;;
+    *aster-core-linux-arm-6*) target=aster-core-linux-armv6-cgo ;;
+    *aster-core-linux-arm-7*) target=aster-core-linux-armv7-cgo ;;
+    *linux*|*android*) target=$filename-cgo ;;
+    *)
+      echo "skip $filename"
+      continue
+      ;;
+  esac
+  echo "rename $filename to $target"
+  mv -- "$filename" "$target"
 done

@@ -1,12 +1,14 @@
 package inbound
 
 import (
+	"errors"
 	"strings"
+	"sync"
 
-	C "github.com/metacubex/mihomo/constant"
-	LC "github.com/metacubex/mihomo/listener/config"
-	"github.com/metacubex/mihomo/listener/sing_vless"
-	"github.com/metacubex/mihomo/log"
+	C "github.com/Miku0139oao/aster-core/constant"
+	LC "github.com/Miku0139oao/aster-core/listener/config"
+	"github.com/Miku0139oao/aster-core/listener/sing_vless"
+	"github.com/Miku0139oao/aster-core/log"
 )
 
 type VlessOption struct {
@@ -91,9 +93,12 @@ func (o VlessOption) Equal(config C.InboundConfig) bool {
 
 type Vless struct {
 	*Base
-	config *VlessOption
-	l      C.MultiAddrListener
-	vs     LC.VlessServer
+	config             *VlessOption
+	l                  *sing_vless.Listener
+	vs                 LC.VlessServer
+	managedMu          sync.RWMutex
+	managedUsers       []C.ManagedUser
+	managedUsersStaged bool
 }
 
 func NewVless(options *VlessOption) (*Vless, error) {
@@ -109,7 +114,7 @@ func NewVless(options *VlessOption) (*Vless, error) {
 			Flow:     v.Flow,
 		}
 	}
-	return &Vless{
+	listener := &Vless{
 		Base:   base,
 		config: options,
 		vs: LC.VlessServer{
@@ -132,7 +137,9 @@ func NewVless(options *VlessOption) (*Vless, error) {
 			RealityConfig:   options.RealityConfig.Build(),
 			MuxOption:       options.MuxOption.Build(),
 		},
-	}, nil
+	}
+	listener.managedUsers = listener.ConfiguredUsers()
+	return listener, nil
 }
 
 // Config implements constant.InboundListener
@@ -153,18 +160,117 @@ func (v *Vless) Address() string {
 
 // Listen implements constant.InboundListener
 func (v *Vless) Listen(tunnel C.Tunnel) error {
-	var err error
-	v.l, err = sing_vless.New(v.vs, v.ListenConfig(), tunnel, v.Additions()...)
+	v.managedMu.Lock()
+	defer v.managedMu.Unlock()
+
+	users := append([]C.ManagedUser(nil), v.managedUsers...)
+	if v.managedUsersStaged {
+		users = nil
+	}
+	server := v.vs
+	server.Users = vlessManagedUsers(users)
+	listener, err := sing_vless.New(server, v.ListenConfig(), tunnel, v.Additions()...)
 	if err != nil {
 		return err
 	}
+	v.l = listener
+	v.managedUsers = users
+	v.managedUsersStaged = false
 	log.Infoln("Vless[%s] proxy listening at: %s", v.Name(), v.Address())
 	return nil
 }
 
 // Close implements constant.InboundListener
 func (v *Vless) Close() error {
-	return v.l.Close()
+	l := v.l
+	v.l = nil
+	if l == nil {
+		return nil
+	}
+	return l.Close()
+}
+
+func (v *Vless) UpdateUsers(users []LC.VlessUser) error {
+	if v.l == nil {
+		return errors.New("VLESS listener is not running")
+	}
+	return v.l.UpdateUsers(users)
+}
+
+func (v *Vless) ManagedUserSchema() C.ManagedUserSchema {
+	return C.ManagedUserSchema{Protocol: "vless", Credential: "uuid", Flow: true}
+}
+
+func (v *Vless) ConfiguredUsers() []C.ManagedUser {
+	users := make([]C.ManagedUser, len(v.config.Users))
+	for i, user := range v.config.Users {
+		users[i] = C.ManagedUser{
+			PrincipalID: user.Username,
+			Name:        user.Username,
+			UUID:        user.UUID,
+			Flow:        user.Flow,
+		}
+	}
+	return users
+}
+
+func (v *Vless) UpdateManagedUsers(users []C.ManagedUser) error {
+	v.managedMu.Lock()
+	defer v.managedMu.Unlock()
+
+	if !sameVlessManagedCredentials(v.managedUsers, users) {
+		if err := v.UpdateUsers(vlessManagedUsers(users)); err != nil {
+			return err
+		}
+	}
+	v.managedUsers = append([]C.ManagedUser(nil), users...)
+	v.managedUsersStaged = false
+	return nil
+}
+
+func sameVlessManagedCredentials(first, second []C.ManagedUser) bool {
+	if len(first) != len(second) {
+		return false
+	}
+	for i := range first {
+		firstID, secondID := first[i].PrincipalID, second[i].PrincipalID
+		if firstID == "" {
+			firstID = first[i].Name
+		}
+		if secondID == "" {
+			secondID = second[i].Name
+		}
+		if firstID != secondID || first[i].UUID != second[i].UUID || first[i].Flow != second[i].Flow {
+			return false
+		}
+	}
+	return true
+}
+
+func (v *Vless) StageManagedUsers() {
+	v.managedMu.Lock()
+	v.managedUsersStaged = true
+	v.managedMu.Unlock()
+}
+
+func (v *Vless) CurrentManagedUsers() []C.ManagedUser {
+	v.managedMu.RLock()
+	defer v.managedMu.RUnlock()
+	return append([]C.ManagedUser(nil), v.managedUsers...)
+}
+
+func vlessManagedUsers(users []C.ManagedUser) []LC.VlessUser {
+	updated := make([]LC.VlessUser, len(users))
+	for i, user := range users {
+		principalID := user.PrincipalID
+		if principalID == "" {
+			principalID = user.Name
+		}
+		updated[i] = LC.VlessUser{Username: principalID, UUID: user.UUID, Flow: user.Flow}
+	}
+	return updated
 }
 
 var _ C.InboundListener = (*Vless)(nil)
+var _ C.ManagedUserListener = (*Vless)(nil)
+var _ C.ManagedUserStager = (*Vless)(nil)

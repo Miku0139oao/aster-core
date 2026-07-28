@@ -3,9 +3,12 @@ package xhttp
 import (
 	"errors"
 	"io"
+	"net"
+	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/metacubex/mihomo/common/httputils"
+	"github.com/Miku0139oao/aster-core/common/httputils"
 )
 
 type Conn struct {
@@ -14,8 +17,11 @@ type Conn struct {
 	onClose func()
 	httputils.NetAddr
 
-	// deadlines
-	deadline *time.Timer
+	closeOnce  sync.Once
+	closeErr   error
+	closed     atomic.Bool
+	deadline   *time.Timer
+	deadlineMu sync.Mutex
 }
 
 func (c *Conn) Write(b []byte) (int, error) {
@@ -27,18 +33,32 @@ func (c *Conn) Read(b []byte) (int, error) {
 }
 
 func (c *Conn) Close() error {
-	err := c.writer.Close()
-	err2 := c.reader.Close()
-	if c.onClose != nil {
-		c.onClose()
-	}
-	return errors.Join(err, err2)
+	c.closeOnce.Do(func() {
+		c.closed.Store(true)
+		c.deadlineMu.Lock()
+		if c.deadline != nil {
+			c.deadline.Stop()
+			c.deadline = nil
+		}
+		c.deadlineMu.Unlock()
+
+		c.closeErr = errors.Join(c.writer.Close(), c.reader.Close())
+		if c.onClose != nil {
+			c.onClose()
+		}
+	})
+	return c.closeErr
 }
 
 func (c *Conn) SetReadDeadline(t time.Time) error  { return c.SetDeadline(t) }
 func (c *Conn) SetWriteDeadline(t time.Time) error { return c.SetDeadline(t) }
 
 func (c *Conn) SetDeadline(t time.Time) error {
+	c.deadlineMu.Lock()
+	defer c.deadlineMu.Unlock()
+	if c.closed.Load() {
+		return net.ErrClosed
+	}
 	if t.IsZero() {
 		if c.deadline != nil {
 			c.deadline.Stop()

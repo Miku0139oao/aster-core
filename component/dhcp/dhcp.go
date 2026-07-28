@@ -6,7 +6,7 @@ import (
 	"net"
 	"net/netip"
 
-	"github.com/metacubex/mihomo/component/iface"
+	"github.com/Miku0139oao/aster-core/component/iface"
 
 	"github.com/insomniacslk/dhcp/dhcpv4"
 )

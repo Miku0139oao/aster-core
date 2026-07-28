@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/metacubex/mihomo/transport/shadowsocks/shadowaead"
+	"github.com/Miku0139oao/aster-core/transport/shadowsocks/shadowaead"
 )
 
 const (

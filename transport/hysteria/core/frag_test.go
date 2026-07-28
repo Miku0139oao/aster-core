@@ -3,6 +3,8 @@ package core
 import (
 	"reflect"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func Test_fragUDPMessage(t *testing.T) {
@@ -139,6 +141,12 @@ func Test_fragUDPMessage(t *testing.T) {
 	}
 }
 
+func TestFragUDPMessageRejectsUnrepresentableFragments(t *testing.T) {
+	message := udpMessage{Host: "example.com", FragCount: 1, Data: make([]byte, 256)}
+	require.Nil(t, fragUDPMessage(message, message.HeaderSize()))
+	require.Nil(t, fragUDPMessage(message, message.HeaderSize()+1))
+}
+
 func Test_defragger_Feed(t *testing.T) {
 	d := &defragger{}
 	type args struct {
@@ -268,7 +276,15 @@ func Test_defragger_Feed(t *testing.T) {
 					Data:      []byte(" moto"),
 				},
 			},
-			nil,
+			&udpMessage{
+				SessionID: 123,
+				Host:      "test",
+				Port:      123,
+				MsgID:     777,
+				FragID:    0,
+				FragCount: 1,
+				Data:      []byte("hello moto"),
+			},
 		},
 		{
 			"frag 2 - 1/2 re",
@@ -283,15 +299,7 @@ func Test_defragger_Feed(t *testing.T) {
 					Data:      []byte("hello"),
 				},
 			},
-			&udpMessage{
-				SessionID: 123,
-				Host:      "test",
-				Port:      123,
-				MsgID:     777,
-				FragID:    0,
-				FragCount: 1,
-				Data:      []byte("hello moto"),
-			},
+			nil,
 		},
 	}
 	for _, tt := range tests {
@@ -301,4 +309,31 @@ func Test_defragger_Feed(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDefraggerHandlesInterleavedSessions(t *testing.T) {
+	d := new(defragger)
+	first := udpMessage{SessionID: 1, Host: "first", Port: 1, MsgID: 7, FragCount: 2}
+	second := udpMessage{SessionID: 2, Host: "second", Port: 2, MsgID: 7, FragCount: 2}
+
+	first.Data = []byte("first-")
+	require.Nil(t, d.Feed(first))
+	second.Data = []byte("second-")
+	require.Nil(t, d.Feed(second))
+
+	first.FragID = 1
+	first.Data = []byte("message")
+	require.Equal(t, []byte("first-message"), d.Feed(first).Data)
+	second.FragID = 1
+	second.Data = []byte("message")
+	require.Equal(t, []byte("second-message"), d.Feed(second).Data)
+}
+
+func TestDefraggerRejectsConflictingFragments(t *testing.T) {
+	d := new(defragger)
+	require.Nil(t, d.Feed(udpMessage{SessionID: 1, MsgID: 7, FragCount: 2, Data: []byte("first")}))
+	require.NotPanics(t, func() {
+		require.Nil(t, d.Feed(udpMessage{SessionID: 1, MsgID: 7, FragID: 2, FragCount: 3, Data: []byte("last")}))
+	})
+	require.Nil(t, d.Feed(udpMessage{SessionID: 1, MsgID: 0, FragCount: 2, Data: []byte("invalid")}))
 }

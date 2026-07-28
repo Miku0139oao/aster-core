@@ -9,10 +9,10 @@ import (
 	"net/netip"
 	"strconv"
 
-	N "github.com/metacubex/mihomo/common/net"
-	"github.com/metacubex/mihomo/component/ca"
-	C "github.com/metacubex/mihomo/constant"
-	"github.com/metacubex/mihomo/transport/socks5"
+	N "github.com/Miku0139oao/aster-core/common/net"
+	"github.com/Miku0139oao/aster-core/component/ca"
+	C "github.com/Miku0139oao/aster-core/constant"
+	"github.com/Miku0139oao/aster-core/transport/socks5"
 
 	"github.com/metacubex/tls"
 )

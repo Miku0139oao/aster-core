@@ -2,11 +2,12 @@ package statistic
 
 import (
 	"os"
+	stdatomic "sync/atomic"
 	"time"
 
-	"github.com/metacubex/mihomo/common/atomic"
-	"github.com/metacubex/mihomo/common/xsync"
-	"github.com/metacubex/mihomo/component/memory"
+	"github.com/Miku0139oao/aster-core/common/atomic"
+	"github.com/Miku0139oao/aster-core/common/xsync"
+	"github.com/Miku0139oao/aster-core/component/memory"
 )
 
 var DefaultManager *Manager
@@ -35,6 +36,15 @@ type Manager struct {
 	downloadTotal atomic.Int64
 	pid           int32
 	memory        uint64
+	observer      stdatomic.Pointer[trafficObserverHolder]
+}
+
+type TrafficObserver interface {
+	RecordTraffic(inbound, userID string, upload, download int64)
+}
+
+type trafficObserverHolder struct {
+	observer TrafficObserver
 }
 
 func (m *Manager) Join(c Tracker) {
@@ -66,6 +76,34 @@ func (m *Manager) PushUploaded(size int64) {
 func (m *Manager) PushDownloaded(size int64) {
 	m.downloadTemp.Add(size)
 	m.downloadTotal.Add(size)
+}
+
+func (m *Manager) PushUploadedFor(inbound, userID string, size int64) {
+	m.PushUploaded(size)
+	if userID == "" {
+		return
+	}
+	if observer := m.observer.Load(); observer != nil {
+		observer.observer.RecordTraffic(inbound, userID, size, 0)
+	}
+}
+
+func (m *Manager) PushDownloadedFor(inbound, userID string, size int64) {
+	m.PushDownloaded(size)
+	if userID == "" {
+		return
+	}
+	if observer := m.observer.Load(); observer != nil {
+		observer.observer.RecordTraffic(inbound, userID, 0, size)
+	}
+}
+
+func (m *Manager) SetTrafficObserver(observer TrafficObserver) {
+	if observer == nil {
+		m.observer.Store(nil)
+		return
+	}
+	m.observer.Store(&trafficObserverHolder{observer: observer})
 }
 
 func (m *Manager) Now() (up int64, down int64) {

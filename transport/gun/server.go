@@ -7,9 +7,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/metacubex/mihomo/common/buf"
-	"github.com/metacubex/mihomo/common/httputils"
-	N "github.com/metacubex/mihomo/common/net"
+	"github.com/Miku0139oao/aster-core/common/buf"
+	"github.com/Miku0139oao/aster-core/common/httputils"
+	N "github.com/Miku0139oao/aster-core/common/net"
 
 	"github.com/metacubex/http"
 )

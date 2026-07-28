@@ -12,12 +12,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/metacubex/mihomo/common/contextutils"
-	"github.com/metacubex/mihomo/common/pool"
-	"github.com/metacubex/mihomo/component/ca"
-	"github.com/metacubex/mihomo/component/resolver"
-	C "github.com/metacubex/mihomo/constant"
-	"github.com/metacubex/mihomo/log"
+	"github.com/Miku0139oao/aster-core/common/contextutils"
+	"github.com/Miku0139oao/aster-core/common/pool"
+	"github.com/Miku0139oao/aster-core/component/ca"
+	"github.com/Miku0139oao/aster-core/component/resolver"
+	C "github.com/Miku0139oao/aster-core/constant"
+	"github.com/Miku0139oao/aster-core/log"
 
 	"github.com/metacubex/quic-go"
 	"github.com/metacubex/tls"

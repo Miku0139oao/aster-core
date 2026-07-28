@@ -9,10 +9,10 @@ import (
 	"encoding/binary"
 	"sync"
 
-	"github.com/metacubex/mihomo/common/pool"
-	"github.com/metacubex/mihomo/log"
-	"github.com/metacubex/mihomo/ntp"
-	"github.com/metacubex/mihomo/transport/shadowsocks/core"
+	"github.com/Miku0139oao/aster-core/common/pool"
+	"github.com/Miku0139oao/aster-core/log"
+	"github.com/Miku0139oao/aster-core/ntp"
+	"github.com/Miku0139oao/aster-core/transport/shadowsocks/core"
 
 	"github.com/metacubex/randv2"
 )

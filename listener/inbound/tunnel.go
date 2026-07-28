@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	C "github.com/metacubex/mihomo/constant"
-	LT "github.com/metacubex/mihomo/listener/tunnel"
-	"github.com/metacubex/mihomo/log"
+	C "github.com/Miku0139oao/aster-core/constant"
+	LT "github.com/Miku0139oao/aster-core/listener/tunnel"
+	"github.com/Miku0139oao/aster-core/log"
 )
 
 type TunnelOption struct {
@@ -45,14 +45,20 @@ func (t *Tunnel) Config() C.InboundConfig {
 
 // Close implements constant.InboundListener
 func (t *Tunnel) Close() error {
+	tcpListeners, udpListeners := t.ttl, t.tul
+	t.ttl, t.tul = nil, nil
+	return closeTunnelListeners(tcpListeners, udpListeners)
+}
+
+func closeTunnelListeners(tcpListeners []*LT.Listener, udpListeners []*LT.PacketConn) error {
 	var errs []error
-	for _, l := range t.ttl {
+	for _, l := range tcpListeners {
 		err := l.Close()
 		if err != nil {
 			errs = append(errs, fmt.Errorf("close tcp listener %s err: %w", l.Address(), err))
 		}
 	}
-	for _, l := range t.tul {
+	for _, l := range udpListeners {
 		err := l.Close()
 		if err != nil {
 			errs = append(errs, fmt.Errorf("close udp listener %s err: %w", l.Address(), err))
@@ -79,27 +85,31 @@ func (t *Tunnel) Address() string {
 // Listen implements constant.InboundListener
 func (t *Tunnel) Listen(tunnel C.Tunnel) error {
 	lc := t.ListenConfig()
+	var tcpListeners []*LT.Listener
+	var udpListeners []*LT.PacketConn
 	for _, addr := range strings.Split(t.RawAddress(), ",") {
 		for _, network := range t.config.Network {
 			switch network {
 			case "tcp":
 				ttl, err := LT.New(addr, t.config.Target, t.config.SpecialProxy, lc, tunnel, t.Additions()...)
 				if err != nil {
-					return err
+					return errors.Join(err, closeTunnelListeners(tcpListeners, udpListeners))
 				}
-				t.ttl = append(t.ttl, ttl)
+				tcpListeners = append(tcpListeners, ttl)
 			case "udp":
 				tul, err := LT.NewUDP(addr, t.config.Target, t.config.SpecialProxy, lc, tunnel, t.Additions()...)
 				if err != nil {
-					return err
+					return errors.Join(err, closeTunnelListeners(tcpListeners, udpListeners))
 				}
-				t.tul = append(t.tul, tul)
+				udpListeners = append(udpListeners, tul)
 			default:
 				log.Warnln("unknown network type: %s, passed", network)
 				continue
 			}
 		}
 	}
+	t.ttl = tcpListeners
+	t.tul = udpListeners
 	log.Infoln("Tunnel[%s](%s)proxy listening at: %s", t.Name(), t.config.Target, t.Address())
 	return nil
 }

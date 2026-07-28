@@ -6,16 +6,16 @@ import (
 	"net"
 	"strings"
 
-	"github.com/metacubex/mihomo/adapter/inbound"
-	"github.com/metacubex/mihomo/common/sockopt"
-	"github.com/metacubex/mihomo/component/ca"
-	"github.com/metacubex/mihomo/component/ech"
-	C "github.com/metacubex/mihomo/constant"
-	LC "github.com/metacubex/mihomo/listener/config"
-	"github.com/metacubex/mihomo/listener/sing"
-	"github.com/metacubex/mihomo/log"
-	"github.com/metacubex/mihomo/ntp"
-	"github.com/metacubex/mihomo/transport/trusttunnel"
+	"github.com/Miku0139oao/aster-core/adapter/inbound"
+	"github.com/Miku0139oao/aster-core/common/sockopt"
+	"github.com/Miku0139oao/aster-core/component/ca"
+	"github.com/Miku0139oao/aster-core/component/ech"
+	C "github.com/Miku0139oao/aster-core/constant"
+	LC "github.com/Miku0139oao/aster-core/listener/config"
+	"github.com/Miku0139oao/aster-core/listener/sing"
+	"github.com/Miku0139oao/aster-core/log"
+	"github.com/Miku0139oao/aster-core/ntp"
+	"github.com/Miku0139oao/aster-core/transport/trusttunnel"
 
 	"github.com/metacubex/tls"
 )
@@ -101,8 +101,6 @@ func New(config LC.TrustTunnelServer, lc C.InboundListenConfig, tunnel C.Tunnel,
 	}
 
 	for _, addr := range strings.Split(config.Listen, ",") {
-		addr := addr
-
 		var (
 			tcpListener net.Listener
 			udpConn     net.PacketConn
@@ -110,22 +108,22 @@ func New(config LC.TrustTunnelServer, lc C.InboundListenConfig, tunnel C.Tunnel,
 		if listenTCP {
 			tcpListener, err = lc.Listen(context.Background(), "tcp", addr)
 			if err != nil {
-				_ = sl.Close()
-				return nil, err
+				return nil, errors.Join(err, sl.Close())
 			}
-			sl.listeners = append(sl.listeners, tcpListener)
 		}
 		if listenUDP {
 			udpConn, err = lc.ListenPacket(context.Background(), "udp", addr)
 			if err != nil {
-				_ = sl.Close()
-				return nil, err
+				var tcpCloseErr error
+				if tcpListener != nil {
+					tcpCloseErr = tcpListener.Close()
+				}
+				return nil, errors.Join(err, tcpCloseErr, sl.Close())
 			}
 
 			if err := sockopt.UDPReuseaddr(udpConn); err != nil {
 				log.Warnln("Failed to Reuse UDP Address: %s", err)
 			}
-			sl.udpListeners = append(sl.udpListeners, udpConn)
 		}
 
 		service := trusttunnel.NewService(trusttunnel.ServiceOptions{
@@ -138,13 +136,18 @@ func New(config LC.TrustTunnelServer, lc C.InboundListenConfig, tunnel C.Tunnel,
 			QUICBBRProfile:        config.BBRProfile,
 		})
 		service.UpdateUsers(config.Users)
+		sl.services = append(sl.services, service)
 		err = service.Start(tcpListener, udpConn, tlsConfig)
 		if err != nil {
-			_ = sl.Close()
-			return nil, err
+			return nil, errors.Join(err, sl.Close())
 		}
 
-		sl.services = append(sl.services, service)
+		if tcpListener != nil {
+			sl.listeners = append(sl.listeners, tcpListener)
+		}
+		if udpConn != nil {
+			sl.udpListeners = append(sl.udpListeners, udpConn)
+		}
 	}
 
 	return sl, nil
@@ -152,26 +155,17 @@ func New(config LC.TrustTunnelServer, lc C.InboundListenConfig, tunnel C.Tunnel,
 
 func (l *Listener) Close() error {
 	l.closed = true
-	var retErr error
-	for _, lis := range l.services {
-		err := lis.Close()
-		if err != nil {
-			retErr = err
+	services := l.services
+	l.services = nil
+	l.listeners = nil
+	l.udpListeners = nil
+	var errs []error
+	for _, service := range services {
+		if err := service.Close(); err != nil {
+			errs = append(errs, err)
 		}
 	}
-	for _, lis := range l.listeners {
-		err := lis.Close()
-		if err != nil {
-			retErr = err
-		}
-	}
-	for _, lis := range l.udpListeners {
-		err := lis.Close()
-		if err != nil {
-			retErr = err
-		}
-	}
-	return retErr
+	return errors.Join(errs...)
 }
 
 func (l *Listener) Config() string {

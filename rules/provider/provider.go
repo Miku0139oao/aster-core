@@ -9,12 +9,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/metacubex/mihomo/common/pool"
-	"github.com/metacubex/mihomo/common/yaml"
-	"github.com/metacubex/mihomo/component/resource"
-	C "github.com/metacubex/mihomo/constant"
-	P "github.com/metacubex/mihomo/constant/provider"
-	"github.com/metacubex/mihomo/rules/common"
+	"github.com/Miku0139oao/aster-core/common/pool"
+	"github.com/Miku0139oao/aster-core/common/yaml"
+	"github.com/Miku0139oao/aster-core/component/resource"
+	C "github.com/Miku0139oao/aster-core/constant"
+	P "github.com/Miku0139oao/aster-core/constant/provider"
+	"github.com/Miku0139oao/aster-core/rules/common"
 )
 
 var tunnel P.Tunnel

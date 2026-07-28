@@ -1,7 +1,7 @@
 package auth
 
 import (
-	"github.com/metacubex/mihomo/component/auth"
+	"github.com/Miku0139oao/aster-core/component/auth"
 )
 
 type authStore struct {

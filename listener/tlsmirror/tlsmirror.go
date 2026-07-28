@@ -6,11 +6,11 @@ import (
 	"runtime/debug"
 	"strings"
 
-	N "github.com/metacubex/mihomo/common/net"
-	C "github.com/metacubex/mihomo/constant"
-	"github.com/metacubex/mihomo/listener/inner"
-	"github.com/metacubex/mihomo/log"
-	"github.com/metacubex/mihomo/transport/tlsmirror"
+	N "github.com/Miku0139oao/aster-core/common/net"
+	C "github.com/Miku0139oao/aster-core/constant"
+	"github.com/Miku0139oao/aster-core/listener/inner"
+	"github.com/Miku0139oao/aster-core/log"
+	"github.com/Miku0139oao/aster-core/transport/tlsmirror"
 )
 
 type Config struct {

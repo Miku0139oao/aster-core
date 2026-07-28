@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/metacubex/mihomo/log"
+	"github.com/Miku0139oao/aster-core/log"
 )
 
 type SubscriptionInfo struct {

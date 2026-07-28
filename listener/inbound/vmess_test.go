@@ -5,9 +5,9 @@ import (
 	"net/netip"
 	"testing"
 
-	"github.com/metacubex/mihomo/adapter/outbound"
-	"github.com/metacubex/mihomo/listener/inbound"
-	"github.com/metacubex/mihomo/transport/tlsmirror"
+	"github.com/Miku0139oao/aster-core/adapter/outbound"
+	"github.com/Miku0139oao/aster-core/listener/inbound"
+	"github.com/Miku0139oao/aster-core/transport/tlsmirror"
 
 	"github.com/stretchr/testify/assert"
 )

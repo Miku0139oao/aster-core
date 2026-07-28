@@ -9,9 +9,9 @@ import (
 	"net"
 	"strconv"
 
-	N "github.com/metacubex/mihomo/common/net"
-	"github.com/metacubex/mihomo/component/ca"
-	C "github.com/metacubex/mihomo/constant"
+	N "github.com/Miku0139oao/aster-core/common/net"
+	"github.com/Miku0139oao/aster-core/component/ca"
+	C "github.com/Miku0139oao/aster-core/constant"
 
 	"github.com/metacubex/http"
 	"github.com/metacubex/tls"

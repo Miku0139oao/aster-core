@@ -3,10 +3,10 @@ package inbound
 import (
 	"strings"
 
-	C "github.com/metacubex/mihomo/constant"
-	LC "github.com/metacubex/mihomo/listener/config"
-	"github.com/metacubex/mihomo/listener/sing_shadowsocks"
-	"github.com/metacubex/mihomo/log"
+	C "github.com/Miku0139oao/aster-core/constant"
+	LC "github.com/Miku0139oao/aster-core/listener/config"
+	"github.com/Miku0139oao/aster-core/listener/sing_shadowsocks"
+	"github.com/Miku0139oao/aster-core/log"
 )
 
 type ShadowSocksOption struct {
@@ -87,18 +87,23 @@ func (s *ShadowSocks) Address() string {
 
 // Listen implements constant.InboundListener
 func (s *ShadowSocks) Listen(tunnel C.Tunnel) error {
-	var err error
-	s.l, err = sing_shadowsocks.New(s.ss, s.ListenConfig(), tunnel, s.Additions()...)
+	l, err := sing_shadowsocks.New(s.ss, s.ListenConfig(), tunnel, s.Additions()...)
 	if err != nil {
 		return err
 	}
+	s.l = l
 	log.Infoln("ShadowSocks[%s] proxy listening at: %s", s.Name(), s.Address())
 	return nil
 }
 
 // Close implements constant.InboundListener
 func (s *ShadowSocks) Close() error {
-	return s.l.Close()
+	l := s.l
+	s.l = nil
+	if l == nil {
+		return nil
+	}
+	return l.Close()
 }
 
 var _ C.InboundListener = (*ShadowSocks)(nil)

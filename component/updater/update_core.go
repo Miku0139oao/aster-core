@@ -4,6 +4,8 @@ import (
 	"archive/zip"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -14,26 +16,28 @@ import (
 	"sync"
 	"time"
 
-	"github.com/metacubex/mihomo/component/ca"
-	mihomoHttp "github.com/metacubex/mihomo/component/http"
-	C "github.com/metacubex/mihomo/constant"
-	"github.com/metacubex/mihomo/constant/features"
-	"github.com/metacubex/mihomo/log"
+	"github.com/Miku0139oao/aster-core/component/ca"
+	mihomoHttp "github.com/Miku0139oao/aster-core/component/http"
+	C "github.com/Miku0139oao/aster-core/constant"
+	"github.com/Miku0139oao/aster-core/constant/features"
+	"github.com/Miku0139oao/aster-core/log"
 
 	"github.com/metacubex/http"
+	"golang.org/x/mod/semver"
 )
 
 const (
-	baseReleaseURL    = "https://github.com/MetaCubeX/mihomo/releases/latest/download/"
-	versionReleaseURL = "https://github.com/MetaCubeX/mihomo/releases/latest/download/version.txt"
+	baseReleaseURL    = "https://github.com/Miku0139oao/aster-core/releases/latest/download/"
+	versionReleaseURL = "https://github.com/Miku0139oao/aster-core/releases/latest/download/version.txt"
 
-	baseAlphaURL    = "https://github.com/MetaCubeX/mihomo/releases/download/Prerelease-Alpha/"
-	versionAlphaURL = "https://github.com/MetaCubeX/mihomo/releases/download/Prerelease-Alpha/version.txt"
+	baseAlphaURL    = "https://github.com/Miku0139oao/aster-core/releases/download/Prerelease-main/"
+	versionAlphaURL = "https://github.com/Miku0139oao/aster-core/releases/download/Prerelease-main/version.txt"
 
 	// MaxPackageFileSize is a maximum package file length in bytes. The largest
 	// package whose size is limited by this constant currently has the size of
-	// approximately 32 MiB.
-	MaxPackageFileSize = 32 * 1024 * 1024
+	// approximately 34 MiB.
+	MaxPackageFileSize  = 64 * 1024 * 1024
+	maxMetadataFileSize = 1024 * 1024
 )
 
 const (
@@ -41,7 +45,7 @@ const (
 	AlphaChannel   = "alpha"
 )
 
-// CoreUpdater is the mihomo updater.
+// CoreUpdater is the Aster Core updater.
 // modify from https://github.com/AdguardTeam/AdGuardHome/blob/595484e0b3fb4c457f9bb727a6b94faa78a66c5f/internal/updater/updater.go
 type CoreUpdater struct {
 	mu sync.Mutex
@@ -50,30 +54,24 @@ type CoreUpdater struct {
 var DefaultCoreUpdater = CoreUpdater{}
 
 func (u *CoreUpdater) CoreBaseName() string {
+	if C.ReleaseAsset != "" {
+		return C.ReleaseAsset
+	}
 	switch runtime.GOARCH {
 	case "arm":
-		// mihomo-linux-armv5
-		return fmt.Sprintf("mihomo-%s-%sv%s", runtime.GOOS, runtime.GOARCH, features.GOARM)
+		return fmt.Sprintf("aster-core-%s-%sv%s", runtime.GOOS, runtime.GOARCH, features.GOARM)
 	case "arm64":
 		if runtime.GOOS == "android" {
-			// mihomo-android-arm64-v8
-			return fmt.Sprintf("mihomo-%s-%s-v8", runtime.GOOS, runtime.GOARCH)
+			return fmt.Sprintf("aster-core-%s-%s-v8", runtime.GOOS, runtime.GOARCH)
 		} else {
-			// mihomo-linux-arm64
-			return fmt.Sprintf("mihomo-%s-%s", runtime.GOOS, runtime.GOARCH)
+			return fmt.Sprintf("aster-core-%s-%s", runtime.GOOS, runtime.GOARCH)
 		}
 	case "mips", "mipsle":
-		// mihomo-linux-mips-hardfloat
-		return fmt.Sprintf("mihomo-%s-%s-%s", runtime.GOOS, runtime.GOARCH, features.GOMIPS)
+		return fmt.Sprintf("aster-core-%s-%s-%s", runtime.GOOS, runtime.GOARCH, features.GOMIPS)
 	case "amd64":
-		// mihomo-linux-amd64-v1
-		return fmt.Sprintf("mihomo-%s-%s-%s", runtime.GOOS, runtime.GOARCH, features.GOAMD64)
+		return fmt.Sprintf("aster-core-%s-%s-%s", runtime.GOOS, runtime.GOARCH, features.GOAMD64)
 	default:
-		// mihomo-linux-386
-		// mihomo-linux-mips64
-		// mihomo-linux-riscv64
-		// mihomo-linux-s390x
-		return fmt.Sprintf("mihomo-%s-%s", runtime.GOOS, runtime.GOARCH)
+		return fmt.Sprintf("aster-core-%s-%s", runtime.GOOS, runtime.GOARCH)
 	}
 }
 
@@ -88,16 +86,19 @@ func (u *CoreUpdater) Update(currentExePath string, channel string, force bool) 
 
 	baseURL := baseAlphaURL
 	versionURL := versionAlphaURL
+	isRelease := false
 	switch strings.ToLower(channel) {
 	case ReleaseChannel:
 		baseURL = baseReleaseURL
 		versionURL = versionReleaseURL
+		isRelease = true
 	case AlphaChannel:
 		break
 	default: // auto
 		if !strings.HasPrefix(C.Version, "alpha") {
 			baseURL = baseReleaseURL
 			versionURL = versionReleaseURL
+			isRelease = true
 		}
 	}
 
@@ -106,6 +107,12 @@ func (u *CoreUpdater) Update(currentExePath string, channel string, force bool) 
 		return fmt.Errorf("get latest version: %w", err)
 	}
 	log.Infoln("current version %s, latest version %s", C.Version, latestVersion)
+
+	if isRelease {
+		if err = validateReleaseUpdate(C.Version, latestVersion, force); err != nil {
+			return fmt.Errorf("update error: %w", err)
+		}
+	}
 
 	if latestVersion == C.Version && !force {
 		// don't change this output, some downstream dependencies on the upgrader's output fields
@@ -121,8 +128,8 @@ func (u *CoreUpdater) Update(currentExePath string, channel string, force bool) 
 	}()
 
 	// ---- prepare ----
-	mihomoBaseName := u.CoreBaseName()
-	packageName := mihomoBaseName + "-" + latestVersion
+	coreBaseName := u.CoreBaseName()
+	packageName := coreBaseName + "-" + latestVersion
 	if runtime.GOOS == "windows" {
 		packageName = packageName + ".zip"
 	} else {
@@ -130,14 +137,18 @@ func (u *CoreUpdater) Update(currentExePath string, channel string, force bool) 
 	}
 	packageURL := baseURL + packageName
 	log.Infoln("updater: updating using url: %s", packageURL)
+	expectedChecksum, err := u.getPackageChecksum(baseURL+"checksums.txt", packageName)
+	if err != nil {
+		return fmt.Errorf("get package checksum: %w", err)
+	}
 
 	workDir := filepath.Dir(currentExePath)
-	backupDir := filepath.Join(workDir, "meta-backup")
-	updateDir := filepath.Join(workDir, "meta-update")
+	backupDir := filepath.Join(workDir, "aster-backup")
+	updateDir := filepath.Join(workDir, "aster-update")
 	packagePath := filepath.Join(updateDir, packageName)
 	//log.Infoln(packagePath)
 
-	updateExeName := mihomoBaseName
+	updateExeName := coreBaseName
 	if runtime.GOOS == "windows" {
 		updateExeName = updateExeName + ".exe"
 	}
@@ -150,6 +161,9 @@ func (u *CoreUpdater) Update(currentExePath string, channel string, force bool) 
 	err = u.download(updateDir, packagePath, packageURL)
 	if err != nil {
 		return fmt.Errorf("downloading: %w", err)
+	}
+	if err = verifyPackageChecksum(packagePath, expectedChecksum); err != nil {
+		return fmt.Errorf("verify package checksum: %w", err)
 	}
 
 	err = u.unpack(updateDir, packagePath, info.Mode())
@@ -171,11 +185,53 @@ func (u *CoreUpdater) Update(currentExePath string, channel string, force bool) 
 }
 
 func (u *CoreUpdater) getLatestVersion(versionURL string) (version string, err error) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
-	defer cancel()
-	resp, err := mihomoHttp.HttpRequest(ctx, versionURL, http.MethodGet, nil, nil, mihomoHttp.WithCAOption(ca.Option{ZeroTrust: true}))
+	body, err := u.getMetadata(versionURL)
 	if err != nil {
 		return "", err
+	}
+	version = strings.TrimRight(string(body), "\r\n")
+	if version == "" || strings.TrimSpace(version) != version || strings.ContainsAny(version, `/\\`) || strings.Contains(version, "..") {
+		return "", fmt.Errorf("invalid release version %q", version)
+	}
+	return version, nil
+}
+
+func validateReleaseUpdate(currentVersion, latestVersion string, force bool) error {
+	latestSemver := latestVersion
+	if !strings.HasPrefix(latestSemver, "v") {
+		latestSemver = "v" + latestSemver
+	}
+	if !semver.IsValid(latestSemver) || semver.Canonical(latestSemver) != latestSemver || semver.Prerelease(latestSemver) != "" {
+		return fmt.Errorf("invalid stable release version %q", latestVersion)
+	}
+
+	currentSemver := currentVersion
+	if !strings.HasPrefix(currentSemver, "v") {
+		currentSemver = "v" + currentSemver
+	}
+	if !semver.IsValid(currentSemver) || force {
+		return nil
+	}
+	if semver.Compare(latestSemver, currentSemver) < 0 {
+		return fmt.Errorf("refusing to downgrade from %s to %s without force", currentVersion, latestVersion)
+	}
+	return nil
+}
+
+func (u *CoreUpdater) getPackageChecksum(checksumURL, packageName string) ([sha256.Size]byte, error) {
+	body, err := u.getMetadata(checksumURL)
+	if err != nil {
+		return [sha256.Size]byte{}, err
+	}
+	return parsePackageChecksum(body, packageName)
+}
+
+func (u *CoreUpdater) getMetadata(metadataURL string) (body []byte, err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	defer cancel()
+	resp, err := mihomoHttp.HttpRequest(ctx, metadataURL, http.MethodGet, nil, nil, mihomoHttp.WithCAOption(ca.Option{ZeroTrust: true}))
+	if err != nil {
+		return nil, err
 	}
 	defer func() {
 		closeErr := resp.Body.Close()
@@ -183,13 +239,66 @@ func (u *CoreUpdater) getLatestVersion(versionURL string) (version string, err e
 			err = closeErr
 		}
 	}()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("unexpected HTTP status %s", resp.Status)
 	}
-	content := strings.TrimRight(string(body), "\n")
-	return content, nil
+	body, err = io.ReadAll(io.LimitReader(resp.Body, maxMetadataFileSize+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > maxMetadataFileSize {
+		return nil, fmt.Errorf("metadata exceeds %d bytes", maxMetadataFileSize)
+	}
+	return body, nil
+}
+
+func parsePackageChecksum(body []byte, packageName string) ([sha256.Size]byte, error) {
+	for _, line := range strings.Split(string(body), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		name := strings.TrimPrefix(strings.TrimPrefix(fields[1], "*"), "./")
+		if name != packageName {
+			continue
+		}
+		decoded, err := hex.DecodeString(fields[0])
+		if err != nil || len(decoded) != sha256.Size {
+			return [sha256.Size]byte{}, fmt.Errorf("invalid SHA-256 checksum for %s", packageName)
+		}
+		var checksum [sha256.Size]byte
+		copy(checksum[:], decoded)
+		return checksum, nil
+	}
+	return [sha256.Size]byte{}, fmt.Errorf("checksum for %s not found", packageName)
+}
+
+func verifyPackageChecksum(path string, expected [sha256.Size]byte) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return err
+	}
+	actual := hash.Sum(nil)
+	if !equalBytes(actual, expected[:]) {
+		return fmt.Errorf("SHA-256 mismatch for %s", filepath.Base(path))
+	}
+	return nil
+}
+
+func equalBytes(first, second []byte) bool {
+	if len(first) != len(second) {
+		return false
+	}
+	var different byte
+	for i := range first {
+		different |= first[i] ^ second[i]
+	}
+	return different == 0
 }
 
 // download package file and save it to disk
@@ -207,6 +316,12 @@ func (u *CoreUpdater) download(updateDir, packagePath, packageURL string) (err e
 			err = closeErr
 		}
 	}()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("unexpected HTTP status %s", resp.Status)
+	}
+	if resp.ContentLength > MaxPackageFileSize {
+		return fmt.Errorf("package exceeds %d bytes", MaxPackageFileSize)
+	}
 
 	log.Debugln("updateDir %s", updateDir)
 	err = os.Mkdir(updateDir, 0o755)
@@ -230,14 +345,11 @@ func (u *CoreUpdater) download(updateDir, packagePath, packageURL string) (err e
 
 	log.Debugln("updater: reading http body")
 	// This use of io.Copy is now safe, because we limited body's Reader.
-	n, err := io.Copy(wc, io.LimitReader(resp.Body, MaxPackageFileSize))
+	n, err := io.Copy(wc, io.LimitReader(resp.Body, MaxPackageFileSize+1))
 	if err != nil {
 		return fmt.Errorf("io.Copy(): %w", err)
 	}
-	if n == MaxPackageFileSize {
-		// Use whether n is equal to MaxPackageFileSize to determine whether the limit has been reached.
-		// It is also possible that the size of the downloaded file is exactly the same as the maximum limit,
-		// but we should not consider this too rare situation.
+	if n > MaxPackageFileSize {
 		return fmt.Errorf("attempted to read more than %d bytes", MaxPackageFileSize)
 	}
 	log.Debugln("updater: downloaded package to file %s", packagePath)

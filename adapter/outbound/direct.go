@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/metacubex/mihomo/component/dialer"
-	"github.com/metacubex/mihomo/component/loopback"
-	"github.com/metacubex/mihomo/component/resolver"
-	C "github.com/metacubex/mihomo/constant"
+	"github.com/Miku0139oao/aster-core/component/dialer"
+	"github.com/Miku0139oao/aster-core/component/loopback"
+	"github.com/Miku0139oao/aster-core/component/resolver"
+	C "github.com/Miku0139oao/aster-core/constant"
 )
 
 type Direct struct {

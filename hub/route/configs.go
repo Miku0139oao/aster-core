@@ -4,18 +4,18 @@ import (
 	"net/netip"
 	"path/filepath"
 
-	"github.com/metacubex/mihomo/adapter/inbound"
-	"github.com/metacubex/mihomo/component/dialer"
-	"github.com/metacubex/mihomo/component/process"
-	"github.com/metacubex/mihomo/component/resolver"
-	"github.com/metacubex/mihomo/component/updater"
-	"github.com/metacubex/mihomo/config"
-	C "github.com/metacubex/mihomo/constant"
-	"github.com/metacubex/mihomo/hub/executor"
-	"github.com/metacubex/mihomo/listener"
-	LC "github.com/metacubex/mihomo/listener/config"
-	"github.com/metacubex/mihomo/log"
-	"github.com/metacubex/mihomo/tunnel"
+	"github.com/Miku0139oao/aster-core/adapter/inbound"
+	"github.com/Miku0139oao/aster-core/component/dialer"
+	"github.com/Miku0139oao/aster-core/component/process"
+	"github.com/Miku0139oao/aster-core/component/resolver"
+	"github.com/Miku0139oao/aster-core/component/updater"
+	"github.com/Miku0139oao/aster-core/config"
+	C "github.com/Miku0139oao/aster-core/constant"
+	"github.com/Miku0139oao/aster-core/hub/executor"
+	"github.com/Miku0139oao/aster-core/listener"
+	LC "github.com/Miku0139oao/aster-core/listener/config"
+	"github.com/Miku0139oao/aster-core/log"
+	"github.com/Miku0139oao/aster-core/tunnel"
 
 	"github.com/metacubex/chi"
 	"github.com/metacubex/chi/render"
@@ -435,7 +435,12 @@ func updateConfigs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	executor.ApplyConfig(cfg, force)
+	if err := executor.ApplyConfig(cfg, force); err != nil {
+		log.Errorln("Apply configuration failed: %v", err)
+		render.Status(r, http.StatusInternalServerError)
+		render.JSON(w, r, newError(err.Error()))
+		return
+	}
 	render.NoContent(w, r)
 }
 

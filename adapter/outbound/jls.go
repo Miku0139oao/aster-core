@@ -1,6 +1,6 @@
 package outbound
 
-import "github.com/metacubex/mihomo/transport/jls"
+import "github.com/Miku0139oao/aster-core/transport/jls"
 
 type JLSOptions struct {
 	Username string `proxy:"username"`

@@ -6,7 +6,7 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/metacubex/mihomo/component/dialer"
+	"github.com/Miku0139oao/aster-core/component/dialer"
 
 	"github.com/metacubex/jls-quic-go"
 	"github.com/metacubex/jls-tls"

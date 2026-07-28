@@ -1,8 +1,8 @@
 package inbound
 
 import (
-	LC "github.com/metacubex/mihomo/listener/config"
-	"github.com/metacubex/mihomo/transport/kcptun"
+	LC "github.com/Miku0139oao/aster-core/listener/config"
+	"github.com/Miku0139oao/aster-core/transport/kcptun"
 )
 
 type KcpTun struct {

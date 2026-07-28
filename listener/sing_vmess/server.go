@@ -5,24 +5,26 @@ import (
 	"errors"
 	"net"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/metacubex/mihomo/adapter/inbound"
-	"github.com/metacubex/mihomo/component/ca"
-	"github.com/metacubex/mihomo/component/ech"
-	C "github.com/metacubex/mihomo/constant"
-	LC "github.com/metacubex/mihomo/listener/config"
-	"github.com/metacubex/mihomo/listener/jls"
-	"github.com/metacubex/mihomo/listener/reality"
-	"github.com/metacubex/mihomo/listener/restls"
-	"github.com/metacubex/mihomo/listener/shadowtls"
-	"github.com/metacubex/mihomo/listener/sing"
-	"github.com/metacubex/mihomo/listener/tlsmirror"
-	"github.com/metacubex/mihomo/ntp"
-	"github.com/metacubex/mihomo/transport/gun"
-	"github.com/metacubex/mihomo/transport/mekya"
-	"github.com/metacubex/mihomo/transport/mkcp"
-	mihomoVMess "github.com/metacubex/mihomo/transport/vmess"
+	"github.com/Miku0139oao/aster-core/adapter/inbound"
+	"github.com/Miku0139oao/aster-core/component/ca"
+	"github.com/Miku0139oao/aster-core/component/ech"
+	C "github.com/Miku0139oao/aster-core/constant"
+	LC "github.com/Miku0139oao/aster-core/listener/config"
+	"github.com/Miku0139oao/aster-core/listener/jls"
+	"github.com/Miku0139oao/aster-core/listener/reality"
+	"github.com/Miku0139oao/aster-core/listener/restls"
+	"github.com/Miku0139oao/aster-core/listener/shadowtls"
+	"github.com/Miku0139oao/aster-core/listener/sing"
+	"github.com/Miku0139oao/aster-core/listener/tlsmirror"
+	"github.com/Miku0139oao/aster-core/ntp"
+	"github.com/Miku0139oao/aster-core/transport/gun"
+	"github.com/Miku0139oao/aster-core/transport/mekya"
+	"github.com/Miku0139oao/aster-core/transport/mkcp"
+	mihomoVMess "github.com/Miku0139oao/aster-core/transport/vmess"
 
 	"github.com/metacubex/http"
 	"github.com/metacubex/mhurl"
@@ -34,10 +36,26 @@ import (
 )
 
 type Listener struct {
-	closed    bool
-	config    LC.VmessServer
-	listeners []net.Listener
-	service   *vmess.Service[string]
+	closed     atomic.Bool
+	config     LC.VmessServer
+	listeners  []net.Listener
+	httpServer *http.Server
+	service    *vmess.Service[string]
+	closeOnce  sync.Once
+	closeErr   error
+}
+
+type closeOnceListener struct {
+	net.Listener
+	once sync.Once
+	err  error
+}
+
+func (l *closeOnceListener) Close() error {
+	l.once.Do(func() {
+		l.err = l.Listener.Close()
+	})
+	return l.err
 }
 
 var _listener *Listener
@@ -85,12 +103,20 @@ func New(config LC.VmessServer, lc C.InboundListenConfig, tunnel C.Tunnel, addit
 		return nil, err
 	}
 
+	sl = &Listener{config: config, service: service}
+	created := sl
+	defer func() {
+		if err != nil {
+			if closeErr := created.Close(); closeErr != nil {
+				err = errors.Join(err, closeErr)
+			}
+		}
+	}()
+
 	err = service.Start()
 	if err != nil {
 		return nil, err
 	}
-
-	sl = &Listener{false, config, nil, service}
 
 	httpServer := http.Server{
 		IdleTimeout: 30 * time.Second,
@@ -206,7 +232,7 @@ func New(config LC.VmessServer, lc C.InboundListenConfig, tunnel C.Tunnel, addit
 				http.Error(w, err.Error(), 500)
 				return
 			}
-			sl.HandleConn(conn, tunnel, additions...)
+			created.HandleConn(conn, tunnel, additions...)
 		})
 		httpServer.Handler = httpMux
 		httpServer.Protocols.SetHTTP1(true)
@@ -216,7 +242,7 @@ func New(config LC.VmessServer, lc C.InboundListenConfig, tunnel C.Tunnel, addit
 		httpServer.Handler = gun.NewServerHandler(gun.ServerOption{
 			ServiceName: config.GrpcServiceName,
 			ConnHandler: func(conn net.Conn) {
-				sl.HandleConn(conn, tunnel, additions...)
+				created.HandleConn(conn, tunnel, additions...)
 			},
 			HttpHandler: httpServer.Handler,
 		})
@@ -239,6 +265,9 @@ func New(config LC.VmessServer, lc C.InboundListenConfig, tunnel C.Tunnel, addit
 			tlsConfig.NextProtos = append([]string{"h2"}, tlsConfig.NextProtos...)
 		}
 	}
+	if httpServer.Handler != nil {
+		sl.httpServer = &httpServer
+	}
 
 	for _, addr := range strings.Split(config.Listen, ",") {
 		addr := addr
@@ -252,7 +281,9 @@ func New(config LC.VmessServer, lc C.InboundListenConfig, tunnel C.Tunnel, addit
 			}
 			l, err = mkcp.Listen(context.Background(), pc, config.MKCPConfig.Build())
 			if err != nil {
-				_ = pc.Close()
+				if closeErr := pc.Close(); closeErr != nil {
+					err = errors.Join(err, closeErr)
+				}
 				return nil, err
 			}
 		} else {
@@ -261,6 +292,8 @@ func New(config LC.VmessServer, lc C.InboundListenConfig, tunnel C.Tunnel, addit
 				return nil, err
 			}
 		}
+		sl.listeners = append(sl.listeners, l)
+		listenerIndex := len(sl.listeners) - 1
 		if shadowTLSBuilder != nil {
 			l = shadowTLSBuilder.NewListener(l)
 		} else if restlsBuilder != nil {
@@ -280,7 +313,10 @@ func New(config LC.VmessServer, lc C.InboundListenConfig, tunnel C.Tunnel, addit
 				return nil, err
 			}
 		}
-		sl.listeners = append(sl.listeners, l)
+		if httpServer.Handler != nil {
+			l = &closeOnceListener{Listener: l}
+		}
+		sl.listeners[listenerIndex] = l
 
 		go func() {
 			if httpServer.Handler != nil {
@@ -290,13 +326,13 @@ func New(config LC.VmessServer, lc C.InboundListenConfig, tunnel C.Tunnel, addit
 			for {
 				c, err := l.Accept()
 				if err != nil {
-					if sl.closed {
+					if created.closed.Load() {
 						break
 					}
 					continue
 				}
 
-				go sl.HandleConn(c, tunnel)
+				go created.HandleConn(c, tunnel)
 			}
 		}()
 	}
@@ -305,19 +341,25 @@ func New(config LC.VmessServer, lc C.InboundListenConfig, tunnel C.Tunnel, addit
 }
 
 func (l *Listener) Close() error {
-	l.closed = true
-	var retErr error
-	for _, lis := range l.listeners {
-		err := lis.Close()
-		if err != nil {
-			retErr = err
+	l.closeOnce.Do(func() {
+		l.closed.Store(true)
+		if l.httpServer != nil {
+			if err := l.httpServer.Close(); err != nil {
+				l.closeErr = errors.Join(l.closeErr, err)
+			}
 		}
-	}
-	err := l.service.Close()
-	if err != nil {
-		retErr = err
-	}
-	return retErr
+		for _, lis := range l.listeners {
+			if err := lis.Close(); err != nil {
+				l.closeErr = errors.Join(l.closeErr, err)
+			}
+		}
+		if l.service != nil {
+			if err := l.service.Close(); err != nil {
+				l.closeErr = errors.Join(l.closeErr, err)
+			}
+		}
+	})
+	return l.closeErr
 }
 
 func (l *Listener) Config() string {

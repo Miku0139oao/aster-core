@@ -249,17 +249,20 @@ func (m udpMessage) Size() int {
 
 func (m udpMessage) Pack() []byte {
 	data := make([]byte, m.Size())
-	buffer := bytes.NewBuffer(data)
-	_ = binary.Write(buffer, binary.BigEndian, m.SessionID)
-	_ = binary.Write(buffer, binary.BigEndian, uint16(len(m.Host)))
-	buffer.WriteString(m.Host)
-	_ = binary.Write(buffer, binary.BigEndian, m.Port)
-	_ = binary.Write(buffer, binary.BigEndian, m.MsgID)
-	_ = binary.Write(buffer, binary.BigEndian, m.FragID)
-	_ = binary.Write(buffer, binary.BigEndian, m.FragCount)
-	_ = binary.Write(buffer, binary.BigEndian, uint16(len(m.Data)))
-	buffer.Write(m.Data)
-	return buffer.Bytes()
+	binary.BigEndian.PutUint32(data[0:4], m.SessionID)
+	binary.BigEndian.PutUint16(data[4:6], uint16(len(m.Host)))
+	offset := 6 + copy(data[6:], m.Host)
+	binary.BigEndian.PutUint16(data[offset:offset+2], m.Port)
+	offset += 2
+	binary.BigEndian.PutUint16(data[offset:offset+2], m.MsgID)
+	offset += 2
+	data[offset] = m.FragID
+	offset++
+	data[offset] = m.FragCount
+	offset++
+	binary.BigEndian.PutUint16(data[offset:offset+2], uint16(len(m.Data)))
+	copy(data[offset+2:], m.Data)
+	return data
 }
 
 func (m *udpMessage) Unpack(data []byte) error {

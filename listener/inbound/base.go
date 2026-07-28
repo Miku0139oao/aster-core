@@ -7,9 +7,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/metacubex/mihomo/adapter/inbound"
-	"github.com/metacubex/mihomo/common/utils"
-	C "github.com/metacubex/mihomo/constant"
+	"github.com/Miku0139oao/aster-core/adapter/inbound"
+	"github.com/Miku0139oao/aster-core/common/utils"
+	C "github.com/Miku0139oao/aster-core/constant"
 )
 
 type Base struct {

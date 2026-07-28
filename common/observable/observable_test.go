@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/metacubex/mihomo/common/atomic"
+	"github.com/Miku0139oao/aster-core/common/atomic"
 
 	"github.com/stretchr/testify/assert"
 )

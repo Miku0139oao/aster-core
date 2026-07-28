@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/metacubex/mihomo/transport/shadowsocks/shadowaead"
-	"github.com/metacubex/mihomo/transport/socks5"
+	"github.com/Miku0139oao/aster-core/transport/shadowsocks/shadowaead"
+	"github.com/Miku0139oao/aster-core/transport/socks5"
 )
 
 func TestSnellV4RoundTrip(t *testing.T) {

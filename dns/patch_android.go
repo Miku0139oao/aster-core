@@ -3,7 +3,7 @@
 package dns
 
 import (
-	"github.com/metacubex/mihomo/component/resolver"
+	"github.com/Miku0139oao/aster-core/component/resolver"
 )
 
 var systemResolver []dnsClient

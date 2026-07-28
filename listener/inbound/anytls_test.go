@@ -5,8 +5,8 @@ import (
 	"net/netip"
 	"testing"
 
-	"github.com/metacubex/mihomo/adapter/outbound"
-	"github.com/metacubex/mihomo/listener/inbound"
+	"github.com/Miku0139oao/aster-core/adapter/outbound"
+	"github.com/Miku0139oao/aster-core/listener/inbound"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -160,4 +160,29 @@ func TestInboundAnyTLS_JLS(t *testing.T) {
 		JLSOpts: outbound.JLSOptions{Username: username, Password: password},
 	}
 	testInboundAnyTLSUTLS(t, inboundOptions, outboundOptions)
+}
+
+func TestInboundAnyTLS_Reality(t *testing.T) {
+	inboundOptions := inbound.AnyTLSOption{
+		RealityConfig: inbound.RealityConfig{
+			Dest:        net.JoinHostPort(realityDest, "443"),
+			PrivateKey:  realityPrivateKey,
+			ShortID:     []string{realityShortid},
+			ServerNames: []string{realityDest},
+		},
+	}
+	outboundOptions := outbound.AnyTLSOption{
+		SNI: realityDest,
+		RealityOpts: outbound.RealityOptions{
+			PublicKey: realityPublickey,
+			ShortID:   realityShortid,
+		},
+		ClientFingerprint: "chrome",
+	}
+	testInboundAnyTLS(t, inboundOptions, outboundOptions)
+	t.Run("X25519MLKEM768", func(t *testing.T) {
+		outboundOptions := outboundOptions
+		outboundOptions.RealityOpts.SupportX25519MLKEM768 = true
+		testInboundAnyTLS(t, inboundOptions, outboundOptions)
+	})
 }

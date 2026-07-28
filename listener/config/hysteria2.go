@@ -1,7 +1,7 @@
 package config
 
 import (
-	"github.com/metacubex/mihomo/listener/sing"
+	"github.com/Miku0139oao/aster-core/listener/sing"
 
 	"encoding/json"
 )

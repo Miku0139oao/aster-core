@@ -7,7 +7,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/metacubex/mihomo/common/pool"
+	"github.com/Miku0139oao/aster-core/common/pool"
 
 	D "github.com/miekg/dns"
 )
@@ -94,7 +94,16 @@ func relayDnsPacket(ctx context.Context, payload []byte, target []byte, maxSize 
 		r.Truncate(maxSize)
 	}
 	r.Compress = true
-	return r.PackBuffer(target)
+	data, err := r.PackBuffer(target)
+	if err != nil {
+		return nil, err
+	}
+	// PackBuffer may allocate based on the uncompressed size even when the
+	// compressed result fits in target. UDP hijack callers require target's backing array.
+	if len(data) > 0 && len(data) <= len(target) && &data[0] != &target[0] {
+		data = target[:copy(target, data)]
+	}
+	return data, nil
 }
 
 // RelayDnsPacket will truncate udp message up to SafeDnsPacketSize

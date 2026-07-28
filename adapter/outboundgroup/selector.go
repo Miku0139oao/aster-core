@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 
-	C "github.com/metacubex/mihomo/constant"
-	P "github.com/metacubex/mihomo/constant/provider"
+	C "github.com/Miku0139oao/aster-core/constant"
+	P "github.com/Miku0139oao/aster-core/constant/provider"
 )
 
 type SelectorOption struct {

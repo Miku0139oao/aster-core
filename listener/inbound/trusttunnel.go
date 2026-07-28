@@ -3,10 +3,10 @@ package inbound
 import (
 	"strings"
 
-	C "github.com/metacubex/mihomo/constant"
-	LC "github.com/metacubex/mihomo/listener/config"
-	"github.com/metacubex/mihomo/listener/trusttunnel"
-	"github.com/metacubex/mihomo/log"
+	C "github.com/Miku0139oao/aster-core/constant"
+	LC "github.com/Miku0139oao/aster-core/listener/config"
+	"github.com/Miku0139oao/aster-core/listener/trusttunnel"
+	"github.com/Miku0139oao/aster-core/log"
 )
 
 type TrustTunnelOption struct {
@@ -81,18 +81,23 @@ func (v *TrustTunnel) Address() string {
 
 // Listen implements constant.InboundListener
 func (v *TrustTunnel) Listen(tunnel C.Tunnel) error {
-	var err error
-	v.l, err = trusttunnel.New(v.vs, v.ListenConfig(), tunnel, v.Additions()...)
+	l, err := trusttunnel.New(v.vs, v.ListenConfig(), tunnel, v.Additions()...)
 	if err != nil {
 		return err
 	}
+	v.l = l
 	log.Infoln("TrustTunnel[%s] proxy listening at: %s", v.Name(), v.Address())
 	return nil
 }
 
 // Close implements constant.InboundListener
 func (v *TrustTunnel) Close() error {
-	return v.l.Close()
+	l := v.l
+	v.l = nil
+	if l == nil {
+		return nil
+	}
+	return l.Close()
 }
 
 var _ C.InboundListener = (*TrustTunnel)(nil)

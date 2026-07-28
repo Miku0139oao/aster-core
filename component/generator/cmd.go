@@ -4,9 +4,9 @@ import (
 	"encoding/base64"
 	"fmt"
 
-	"github.com/metacubex/mihomo/component/ech"
-	"github.com/metacubex/mihomo/transport/sudoku"
-	"github.com/metacubex/mihomo/transport/vless/encryption"
+	"github.com/Miku0139oao/aster-core/component/ech"
+	"github.com/Miku0139oao/aster-core/transport/sudoku"
+	"github.com/Miku0139oao/aster-core/transport/vless/encryption"
 
 	"github.com/gofrs/uuid/v5"
 )

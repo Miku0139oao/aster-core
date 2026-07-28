@@ -6,12 +6,12 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/metacubex/mihomo/common/utils"
-	"github.com/metacubex/mihomo/component/ca"
-	C "github.com/metacubex/mihomo/constant"
-	"github.com/metacubex/mihomo/ntp"
-	"github.com/metacubex/mihomo/transport/shadowquic"
-	"github.com/metacubex/mihomo/transport/tuic"
+	"github.com/Miku0139oao/aster-core/common/utils"
+	"github.com/Miku0139oao/aster-core/component/ca"
+	C "github.com/Miku0139oao/aster-core/constant"
+	"github.com/Miku0139oao/aster-core/ntp"
+	"github.com/Miku0139oao/aster-core/transport/shadowquic"
+	"github.com/Miku0139oao/aster-core/transport/tuic"
 
 	"github.com/metacubex/jls-quic-go"
 	"github.com/metacubex/jls-tls"

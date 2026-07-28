@@ -5,12 +5,12 @@ import (
 	"net"
 	"runtime/debug"
 
-	N "github.com/metacubex/mihomo/common/net"
-	C "github.com/metacubex/mihomo/constant"
-	LC "github.com/metacubex/mihomo/listener/config"
-	"github.com/metacubex/mihomo/listener/inner"
-	"github.com/metacubex/mihomo/log"
-	"github.com/metacubex/mihomo/transport/restls"
+	N "github.com/Miku0139oao/aster-core/common/net"
+	C "github.com/Miku0139oao/aster-core/constant"
+	LC "github.com/Miku0139oao/aster-core/listener/config"
+	"github.com/Miku0139oao/aster-core/listener/inner"
+	"github.com/Miku0139oao/aster-core/log"
+	"github.com/Miku0139oao/aster-core/transport/restls"
 )
 
 type Builder struct {

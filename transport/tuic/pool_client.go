@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	N "github.com/metacubex/mihomo/common/net"
-	C "github.com/metacubex/mihomo/constant"
+	N "github.com/Miku0139oao/aster-core/common/net"
+	C "github.com/Miku0139oao/aster-core/constant"
 
 	list "github.com/bahlo/generic-list-go"
 )

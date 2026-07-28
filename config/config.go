@@ -11,35 +11,35 @@ import (
 	"time"
 	_ "unsafe"
 
-	"github.com/metacubex/mihomo/adapter"
-	"github.com/metacubex/mihomo/adapter/outbound"
-	"github.com/metacubex/mihomo/adapter/outboundgroup"
-	"github.com/metacubex/mihomo/adapter/provider"
-	"github.com/metacubex/mihomo/common/orderedmap"
-	"github.com/metacubex/mihomo/common/utils"
-	"github.com/metacubex/mihomo/common/yaml"
-	"github.com/metacubex/mihomo/component/age"
-	"github.com/metacubex/mihomo/component/auth"
-	"github.com/metacubex/mihomo/component/cidr"
-	"github.com/metacubex/mihomo/component/fakeip"
-	"github.com/metacubex/mihomo/component/geodata"
-	"github.com/metacubex/mihomo/component/process"
-	"github.com/metacubex/mihomo/component/resolver"
-	"github.com/metacubex/mihomo/component/sniffer"
-	"github.com/metacubex/mihomo/component/trie"
-	C "github.com/metacubex/mihomo/constant"
-	P "github.com/metacubex/mihomo/constant/provider"
-	snifferTypes "github.com/metacubex/mihomo/constant/sniffer"
-	"github.com/metacubex/mihomo/dns"
-	"github.com/metacubex/mihomo/listener"
-	LC "github.com/metacubex/mihomo/listener/config"
-	"github.com/metacubex/mihomo/log"
-	R "github.com/metacubex/mihomo/rules"
-	RB "github.com/metacubex/mihomo/rules/bundle"
-	RC "github.com/metacubex/mihomo/rules/common"
-	RP "github.com/metacubex/mihomo/rules/provider"
-	RW "github.com/metacubex/mihomo/rules/wrapper"
-	T "github.com/metacubex/mihomo/tunnel"
+	"github.com/Miku0139oao/aster-core/adapter"
+	"github.com/Miku0139oao/aster-core/adapter/outbound"
+	"github.com/Miku0139oao/aster-core/adapter/outboundgroup"
+	"github.com/Miku0139oao/aster-core/adapter/provider"
+	"github.com/Miku0139oao/aster-core/common/orderedmap"
+	"github.com/Miku0139oao/aster-core/common/utils"
+	"github.com/Miku0139oao/aster-core/common/yaml"
+	"github.com/Miku0139oao/aster-core/component/age"
+	"github.com/Miku0139oao/aster-core/component/auth"
+	"github.com/Miku0139oao/aster-core/component/cidr"
+	"github.com/Miku0139oao/aster-core/component/fakeip"
+	"github.com/Miku0139oao/aster-core/component/geodata"
+	"github.com/Miku0139oao/aster-core/component/process"
+	"github.com/Miku0139oao/aster-core/component/resolver"
+	"github.com/Miku0139oao/aster-core/component/sniffer"
+	"github.com/Miku0139oao/aster-core/component/trie"
+	C "github.com/Miku0139oao/aster-core/constant"
+	P "github.com/Miku0139oao/aster-core/constant/provider"
+	snifferTypes "github.com/Miku0139oao/aster-core/constant/sniffer"
+	"github.com/Miku0139oao/aster-core/dns"
+	"github.com/Miku0139oao/aster-core/listener"
+	LC "github.com/Miku0139oao/aster-core/listener/config"
+	"github.com/Miku0139oao/aster-core/log"
+	R "github.com/Miku0139oao/aster-core/rules"
+	RB "github.com/Miku0139oao/aster-core/rules/bundle"
+	RC "github.com/Miku0139oao/aster-core/rules/common"
+	RP "github.com/Miku0139oao/aster-core/rules/provider"
+	RW "github.com/Miku0139oao/aster-core/rules/wrapper"
+	T "github.com/Miku0139oao/aster-core/tunnel"
 
 	"golang.org/x/exp/slices"
 )
@@ -111,6 +111,13 @@ type Controller struct {
 	ExternalDohServer             string
 	Secret                        string
 	Cors                          Cors
+}
+
+type Aster struct {
+	Secret           string
+	PublicBaseURL    string
+	StorePath        string
+	ManagedListeners []string
 }
 
 type Cors struct {
@@ -195,6 +202,7 @@ type TLS struct {
 type Config struct {
 	General       *General
 	Controller    *Controller
+	Aster         *Aster
 	Experimental  *Experimental
 	IPTables      *IPTables
 	NTP           *NTP
@@ -396,6 +404,13 @@ type RawTLS struct {
 	CustomTrustCert []string `yaml:"custom-certifactes" json:"custom-certifactes"`
 }
 
+type RawAster struct {
+	Secret           string   `yaml:"secret" json:"secret"`
+	PublicBaseURL    string   `yaml:"public-base-url" json:"public-base-url"`
+	Store            string   `yaml:"store" json:"store"`
+	ManagedListeners []string `yaml:"managed-listeners" json:"managed-listeners"`
+}
+
 type RawConfig struct {
 	Port                          int                     `yaml:"port" json:"port"`
 	SocksPort                     int                     `yaml:"socks-port" json:"socks-port"`
@@ -427,6 +442,7 @@ type RawConfig struct {
 	ExternalUIName                string                  `yaml:"external-ui-name" json:"external-ui-name"`
 	ExternalDohServer             string                  `yaml:"external-doh-server" json:"external-doh-server"`
 	Secret                        string                  `yaml:"secret" json:"secret"`
+	Aster                         *RawAster               `yaml:"aster,omitempty" json:"aster,omitempty"`
 	Interface                     string                  `yaml:"interface-name" json:"interface-name"`
 	RoutingMark                   int                     `yaml:"routing-mark" json:"routing-mark"`
 	Tunnels                       []LC.Tunnel             `yaml:"tunnels" json:"tunnels"`
@@ -681,6 +697,12 @@ func ParseRawConfig(rawCfg *RawConfig) (*Config, error) {
 		return nil, err
 	}
 	config.Listeners = listeners
+
+	aster, err := parseAster(rawCfg.Aster, listeners)
+	if err != nil {
+		return nil, err
+	}
+	config.Aster = aster
 
 	log.Infoln("Geodata Loader mode: %s", geodata.LoaderName())
 	log.Infoln("Geosite Matcher implementation: %s", geodata.SiteMatcherName())
@@ -1009,6 +1031,66 @@ func parseListeners(cfg *RawConfig) (listeners map[string]C.InboundListener, err
 
 	}
 	return
+}
+
+func parseAster(raw *RawAster, listeners map[string]C.InboundListener) (*Aster, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	if len(raw.Secret) < 32 || strings.TrimSpace(raw.Secret) != raw.Secret {
+		return nil, errors.New("aster secret must contain at least 32 bytes and cannot have leading or trailing whitespace")
+	}
+
+	publicBaseURL := ""
+	if raw.PublicBaseURL != "" {
+		if strings.TrimSpace(raw.PublicBaseURL) != raw.PublicBaseURL {
+			return nil, errors.New("aster public-base-url cannot have leading or trailing whitespace")
+		}
+		parsedURL, err := url.Parse(raw.PublicBaseURL)
+		if err != nil || !parsedURL.IsAbs() || parsedURL.Scheme != "https" || parsedURL.Host == "" || parsedURL.Opaque != "" {
+			return nil, errors.New("aster public-base-url must be an absolute HTTPS URL")
+		}
+		if parsedURL.User != nil || parsedURL.RawQuery != "" || parsedURL.ForceQuery || parsedURL.Fragment != "" {
+			return nil, errors.New("aster public-base-url cannot contain user information, a query, or a fragment")
+		}
+		publicBaseURL = strings.TrimRight(parsedURL.String(), "/")
+	}
+
+	managedListeners := make([]string, 0, len(raw.ManagedListeners))
+	seen := make(map[string]struct{}, len(raw.ManagedListeners))
+	for _, name := range raw.ManagedListeners {
+		if name == "" {
+			return nil, errors.New("aster managed listener name cannot be empty")
+		}
+		if _, exists := seen[name]; exists {
+			return nil, fmt.Errorf("aster managed listener %q is duplicated", name)
+		}
+		inboundListener, exists := listeners[name]
+		if !exists {
+			return nil, fmt.Errorf("aster managed listener %q does not exist", name)
+		}
+		if _, ok := inboundListener.(C.ManagedUserListener); !ok {
+			return nil, fmt.Errorf("aster managed listener %q does not support managed users", name)
+		}
+		seen[name] = struct{}{}
+		managedListeners = append(managedListeners, name)
+	}
+
+	storePath := raw.Store
+	if storePath == "" {
+		storePath = "aster-state.json"
+	}
+	storePath = C.Path.Resolve(storePath)
+	if !C.Path.IsSafePath(storePath) {
+		return nil, C.Path.ErrNotSafePath(storePath)
+	}
+
+	return &Aster{
+		Secret:           raw.Secret,
+		PublicBaseURL:    publicBaseURL,
+		StorePath:        storePath,
+		ManagedListeners: managedListeners,
+	}, nil
 }
 
 func parseRuleProviders(cfg *RawConfig) (ruleProviders map[string]P.RuleProvider, err error) {

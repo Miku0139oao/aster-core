@@ -9,10 +9,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/metacubex/mihomo/common/httputils"
-	N "github.com/metacubex/mihomo/common/net"
+	"github.com/Miku0139oao/aster-core/common/httputils"
+	N "github.com/Miku0139oao/aster-core/common/net"
 
 	"github.com/metacubex/http"
 )
@@ -28,7 +29,7 @@ type httpServerConn struct {
 	w       http.ResponseWriter
 	flusher http.Flusher
 	reader  io.ReadCloser
-	closed  bool
+	closed  atomic.Bool
 	done    chan struct{}
 	once    sync.Once
 }
@@ -51,7 +52,7 @@ func (c *httpServerConn) Write(b []byte) (int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.closed {
+	if c.closed.Load() {
 		return 0, io.ErrClosedPipe
 	}
 
@@ -64,10 +65,15 @@ func (c *httpServerConn) Write(b []byte) (int, error) {
 
 func (c *httpServerConn) Close() error {
 	c.once.Do(func() {
-		c.mu.Lock()
-		c.closed = true
-		c.mu.Unlock()
+		c.closed.Store(true)
 		close(c.done)
+
+		// Write holds mu while using the ResponseWriter. Expire its write
+		// deadline before waiting for mu so a blocked HTTP/1 or HTTP/2 write
+		// is interrupted, then drain the writer before ServeHTTP can return.
+		_ = http.NewResponseController(c.w).SetWriteDeadline(time.Now())
+		c.mu.Lock()
+		c.mu.Unlock()
 	})
 	return c.reader.Close()
 }
@@ -157,7 +163,7 @@ func (h *requestHandler) upsertSession(sessionID string) *httpSession {
 		defer timer.Stop()
 		select {
 		case <-timer.C:
-			h.deleteSession(sessionID)
+			h.deleteSession(sessionID, s)
 		case <-s.connected:
 		}
 	}()
@@ -165,11 +171,11 @@ func (h *requestHandler) upsertSession(sessionID string) *httpSession {
 	return s
 }
 
-func (h *requestHandler) deleteSession(sessionID string) {
+func (h *requestHandler) deleteSession(sessionID string, expected *httpSession) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	if s, ok := h.sessions[sessionID]; ok {
+	if s, ok := h.sessions[sessionID]; ok && s == expected {
 		_ = s.uploadQueue.Close()
 		delete(h.sessions, sessionID)
 	}
@@ -451,7 +457,7 @@ func (h *requestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writer: httpSC,
 			reader: currentSession.uploadQueue,
 			onClose: func() {
-				h.deleteSession(sessionId)
+				h.deleteSession(sessionId, currentSession)
 			},
 		}
 		httputils.SetAddrFromRequest(&conn.NetAddr, r)

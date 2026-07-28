@@ -2,19 +2,21 @@ package hysteria2_realm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/metacubex/mihomo/adapter/inbound"
-	"github.com/metacubex/mihomo/component/ca"
-	"github.com/metacubex/mihomo/component/ech"
-	C "github.com/metacubex/mihomo/constant"
-	LC "github.com/metacubex/mihomo/listener/config"
-	"github.com/metacubex/mihomo/log"
-	"github.com/metacubex/mihomo/ntp"
+	"github.com/Miku0139oao/aster-core/adapter/inbound"
+	"github.com/Miku0139oao/aster-core/component/ca"
+	"github.com/Miku0139oao/aster-core/component/ech"
+	C "github.com/Miku0139oao/aster-core/constant"
+	LC "github.com/Miku0139oao/aster-core/listener/config"
+	"github.com/Miku0139oao/aster-core/log"
+	"github.com/Miku0139oao/aster-core/ntp"
 
 	"github.com/metacubex/http"
 	"github.com/metacubex/tls"
@@ -24,8 +26,24 @@ type Listener struct {
 	closed    bool
 	config    LC.Hysteria2RealmServer
 	listeners []net.Listener
+	http      []*http.Server
 	server    *server
 	cancel    func()
+	closeOnce sync.Once
+	closeErr  error
+}
+
+type closeOnceListener struct {
+	net.Listener
+	once sync.Once
+	err  error
+}
+
+func (l *closeOnceListener) Close() error {
+	l.once.Do(func() {
+		l.err = l.Listener.Close()
+	})
+	return l.err
 }
 
 const (
@@ -36,7 +54,7 @@ const (
 
 func DefaultALPN() []string { return []string{"h2", "http/1.1"} }
 
-func New(config LC.Hysteria2RealmServer, lc C.InboundListenConfig, tunnel C.Tunnel, additions ...inbound.Addition) (*Listener, error) {
+func New(config LC.Hysteria2RealmServer, lc C.InboundListenConfig, tunnel C.Tunnel, additions ...inbound.Addition) (sl *Listener, err error) {
 	if len(additions) == 0 {
 		additions = []inbound.Addition{
 			inbound.WithInName("DEFAULT-HYSTERIA2-REALM"),
@@ -87,7 +105,15 @@ func New(config LC.Hysteria2RealmServer, lc C.InboundListenConfig, tunnel C.Tunn
 		tlsConfig.ClientCAs = pool
 	}
 
-	sl := &Listener{config: config, server: s}
+	sl = &Listener{config: config, server: s}
+	created := sl
+	defer func() {
+		if err != nil {
+			if closeErr := created.Close(); closeErr != nil {
+				err = errors.Join(err, closeErr)
+			}
+		}
+	}()
 
 	for _, addr := range strings.Split(config.Listen, ",") {
 		addr := addr
@@ -100,12 +126,14 @@ func New(config LC.Hysteria2RealmServer, lc C.InboundListenConfig, tunnel C.Tunn
 		if tlsConfig.GetCertificate != nil {
 			l = tls.NewListener(l, tlsConfig)
 		}
+		l = &closeOnceListener{Listener: l}
 		sl.listeners = append(sl.listeners, l)
 
 		srv := &http.Server{
 			Handler:           s.routes(),
 			ReadHeaderTimeout: 10 * time.Second,
 		}
+		sl.http = append(sl.http, srv)
 
 		go srv.Serve(l)
 	}
@@ -117,18 +145,23 @@ func New(config LC.Hysteria2RealmServer, lc C.InboundListenConfig, tunnel C.Tunn
 }
 
 func (l *Listener) Close() error {
-	l.closed = true
-	var retErr error
-	for _, lis := range l.listeners {
-		err := lis.Close()
-		if err != nil {
-			retErr = err
+	l.closeOnce.Do(func() {
+		l.closed = true
+		for _, srv := range l.http {
+			if err := srv.Close(); err != nil {
+				l.closeErr = errors.Join(l.closeErr, err)
+			}
 		}
-	}
-	if l.cancel != nil {
-		l.cancel()
-	}
-	return retErr
+		for _, lis := range l.listeners {
+			if err := lis.Close(); err != nil {
+				l.closeErr = errors.Join(l.closeErr, err)
+			}
+		}
+		if l.cancel != nil {
+			l.cancel()
+		}
+	})
+	return l.closeErr
 }
 
 func (l *Listener) Config() string {

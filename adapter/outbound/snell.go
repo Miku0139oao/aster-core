@@ -6,14 +6,14 @@ import (
 	"net"
 	"strconv"
 
-	N "github.com/metacubex/mihomo/common/net"
-	"github.com/metacubex/mihomo/common/structure"
-	C "github.com/metacubex/mihomo/constant"
-	"github.com/metacubex/mihomo/transport/jls"
-	"github.com/metacubex/mihomo/transport/restls"
-	"github.com/metacubex/mihomo/transport/shadowtls"
-	obfs "github.com/metacubex/mihomo/transport/simple-obfs"
-	"github.com/metacubex/mihomo/transport/snell"
+	N "github.com/Miku0139oao/aster-core/common/net"
+	"github.com/Miku0139oao/aster-core/common/structure"
+	C "github.com/Miku0139oao/aster-core/constant"
+	"github.com/Miku0139oao/aster-core/transport/jls"
+	"github.com/Miku0139oao/aster-core/transport/restls"
+	"github.com/Miku0139oao/aster-core/transport/shadowtls"
+	obfs "github.com/Miku0139oao/aster-core/transport/simple-obfs"
+	"github.com/Miku0139oao/aster-core/transport/snell"
 )
 
 type Snell struct {

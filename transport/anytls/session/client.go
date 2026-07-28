@@ -10,9 +10,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/metacubex/mihomo/transport/anytls/padding"
-	"github.com/metacubex/mihomo/transport/anytls/skiplist"
-	"github.com/metacubex/mihomo/transport/anytls/util"
+	"github.com/Miku0139oao/aster-core/transport/anytls/padding"
+	"github.com/Miku0139oao/aster-core/transport/anytls/skiplist"
+	"github.com/Miku0139oao/aster-core/transport/anytls/util"
 )
 
 type Client struct {

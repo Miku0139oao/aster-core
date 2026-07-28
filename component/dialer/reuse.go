@@ -5,7 +5,7 @@ import (
 	"net"
 	"syscall"
 
-	"github.com/metacubex/mihomo/common/sockopt"
+	"github.com/Miku0139oao/aster-core/common/sockopt"
 )
 
 func addrReuseToListenConfig(lc *net.ListenConfig) {

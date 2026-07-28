@@ -4,10 +4,10 @@ import (
 	"net"
 	"net/netip"
 
-	"github.com/metacubex/mihomo/adapter/inbound"
-	"github.com/metacubex/mihomo/common/pool"
-	C "github.com/metacubex/mihomo/constant"
-	"github.com/metacubex/mihomo/transport/socks5"
+	"github.com/Miku0139oao/aster-core/adapter/inbound"
+	"github.com/Miku0139oao/aster-core/common/pool"
+	C "github.com/Miku0139oao/aster-core/constant"
+	"github.com/Miku0139oao/aster-core/transport/socks5"
 
 	"golang.org/x/exp/slices"
 )
@@ -55,11 +55,13 @@ func NewUDP(addr string, tunnel C.Tunnel, additions ...inbound.Addition) (*UDPLi
 
 	rc, err := c.SyscallConn()
 	if err != nil {
+		_ = l.Close()
 		return nil, err
 	}
 
 	err = setsockopt(rc, addr)
 	if err != nil {
+		_ = l.Close()
 		return nil, err
 	}
 

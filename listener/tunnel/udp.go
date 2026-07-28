@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/metacubex/mihomo/adapter/inbound"
-	"github.com/metacubex/mihomo/common/pool"
-	C "github.com/metacubex/mihomo/constant"
-	"github.com/metacubex/mihomo/transport/socks5"
+	"github.com/Miku0139oao/aster-core/adapter/inbound"
+	"github.com/Miku0139oao/aster-core/common/pool"
+	C "github.com/Miku0139oao/aster-core/constant"
+	"github.com/Miku0139oao/aster-core/transport/socks5"
 )
 
 type PacketConn struct {
@@ -36,14 +36,14 @@ func (l *PacketConn) Close() error {
 }
 
 func NewUDP(addr, target, proxy string, lc C.InboundListenConfig, tunnel C.Tunnel, additions ...inbound.Addition) (*PacketConn, error) {
-	l, err := lc.ListenPacket(context.Background(), "udp", addr)
-	if err != nil {
-		return nil, err
-	}
-
 	targetAddr := socks5.ParseAddr(target)
 	if targetAddr == nil {
 		return nil, fmt.Errorf("invalid target address %s", target)
+	}
+
+	l, err := lc.ListenPacket(context.Background(), "udp", addr)
+	if err != nil {
+		return nil, err
 	}
 
 	sl := &PacketConn{

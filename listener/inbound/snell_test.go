@@ -5,11 +5,11 @@ import (
 	"net/netip"
 	"testing"
 
-	"github.com/metacubex/mihomo/adapter/outbound"
-	"github.com/metacubex/mihomo/listener/inbound"
-	"github.com/metacubex/mihomo/transport/jls"
-	"github.com/metacubex/mihomo/transport/restls"
-	"github.com/metacubex/mihomo/transport/shadowtls"
+	"github.com/Miku0139oao/aster-core/adapter/outbound"
+	"github.com/Miku0139oao/aster-core/listener/inbound"
+	"github.com/Miku0139oao/aster-core/transport/jls"
+	"github.com/Miku0139oao/aster-core/transport/restls"
+	"github.com/Miku0139oao/aster-core/transport/shadowtls"
 
 	"github.com/stretchr/testify/assert"
 )

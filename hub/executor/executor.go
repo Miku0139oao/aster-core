@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -11,35 +12,37 @@ import (
 	"time"
 	_ "unsafe"
 
-	"github.com/metacubex/mihomo/adapter"
-	"github.com/metacubex/mihomo/adapter/inbound"
-	"github.com/metacubex/mihomo/adapter/outboundgroup"
-	"github.com/metacubex/mihomo/component/auth"
-	"github.com/metacubex/mihomo/component/ca"
-	"github.com/metacubex/mihomo/component/dialer"
-	"github.com/metacubex/mihomo/component/geodata"
-	mihomoHttp "github.com/metacubex/mihomo/component/http"
-	"github.com/metacubex/mihomo/component/iface"
-	"github.com/metacubex/mihomo/component/keepalive"
-	"github.com/metacubex/mihomo/component/profile"
-	"github.com/metacubex/mihomo/component/profile/cachefile"
-	"github.com/metacubex/mihomo/component/resolver"
-	"github.com/metacubex/mihomo/component/resource"
-	"github.com/metacubex/mihomo/component/sniffer"
-	"github.com/metacubex/mihomo/component/trie"
-	"github.com/metacubex/mihomo/component/updater"
-	"github.com/metacubex/mihomo/config"
-	C "github.com/metacubex/mihomo/constant"
-	P "github.com/metacubex/mihomo/constant/provider"
-	"github.com/metacubex/mihomo/dns"
-	"github.com/metacubex/mihomo/listener"
-	authStore "github.com/metacubex/mihomo/listener/auth"
-	LC "github.com/metacubex/mihomo/listener/config"
-	"github.com/metacubex/mihomo/listener/inner"
-	"github.com/metacubex/mihomo/listener/tproxy"
-	"github.com/metacubex/mihomo/log"
-	"github.com/metacubex/mihomo/ntp/ntp"
-	"github.com/metacubex/mihomo/tunnel"
+	"github.com/Miku0139oao/aster-core/adapter"
+	"github.com/Miku0139oao/aster-core/adapter/inbound"
+	"github.com/Miku0139oao/aster-core/adapter/outboundgroup"
+	asterManager "github.com/Miku0139oao/aster-core/component/aster"
+	"github.com/Miku0139oao/aster-core/component/auth"
+	"github.com/Miku0139oao/aster-core/component/ca"
+	"github.com/Miku0139oao/aster-core/component/dialer"
+	"github.com/Miku0139oao/aster-core/component/geodata"
+	mihomoHttp "github.com/Miku0139oao/aster-core/component/http"
+	"github.com/Miku0139oao/aster-core/component/iface"
+	"github.com/Miku0139oao/aster-core/component/keepalive"
+	"github.com/Miku0139oao/aster-core/component/profile"
+	"github.com/Miku0139oao/aster-core/component/profile/cachefile"
+	"github.com/Miku0139oao/aster-core/component/resolver"
+	"github.com/Miku0139oao/aster-core/component/resource"
+	"github.com/Miku0139oao/aster-core/component/sniffer"
+	"github.com/Miku0139oao/aster-core/component/trie"
+	"github.com/Miku0139oao/aster-core/component/updater"
+	"github.com/Miku0139oao/aster-core/config"
+	C "github.com/Miku0139oao/aster-core/constant"
+	P "github.com/Miku0139oao/aster-core/constant/provider"
+	"github.com/Miku0139oao/aster-core/dns"
+	"github.com/Miku0139oao/aster-core/listener"
+	authStore "github.com/Miku0139oao/aster-core/listener/auth"
+	LC "github.com/Miku0139oao/aster-core/listener/config"
+	"github.com/Miku0139oao/aster-core/listener/inner"
+	"github.com/Miku0139oao/aster-core/listener/tproxy"
+	"github.com/Miku0139oao/aster-core/log"
+	"github.com/Miku0139oao/aster-core/ntp/ntp"
+	"github.com/Miku0139oao/aster-core/tunnel"
+	"github.com/Miku0139oao/aster-core/tunnel/statistic"
 )
 
 var mux sync.Mutex
@@ -81,12 +84,18 @@ func ParseWithBytes(buf []byte) (*config.Config, error) {
 }
 
 // ApplyConfig dispatch configure to all parts without ExternalController
-func ApplyConfig(cfg *config.Config, force bool) {
+func ApplyConfig(cfg *config.Config, force bool) error {
 	mux.Lock()
 	defer mux.Unlock()
 	log.SetLevel(cfg.General.LogLevel)
 
 	tunnel.OnSuspend()
+	running := false
+	defer func() {
+		if !running {
+			tunnel.OnRunning()
+		}
+	}()
 
 	ca.ResetCertificate()
 	for _, c := range cfg.TLS.CustomTrustCert {
@@ -104,7 +113,15 @@ func ApplyConfig(cfg *config.Config, force bool) {
 	updateGeneral(cfg.General, true)
 	updateNTP(cfg.NTP)
 	updateDNS(cfg.DNS, cfg.General.IPv6)
-	updateListeners(cfg.General, cfg.Listeners, force)
+	stageManagedListeners(cfg.Aster, cfg.Listeners)
+	if err := updateListeners(cfg.General, cfg.Listeners, force); err != nil {
+		statistic.DefaultManager.SetTrafficObserver(nil)
+		closeErr := asterManager.Default.FailClosed(configuredListenerNames(cfg.Aster))
+		return errors.Join(fmt.Errorf("update listeners: %w", err), closeErr)
+	}
+	if err := updateAster(cfg.Aster); err != nil {
+		return err
+	}
 	updateTun(cfg.General) // tun should not care "force"
 	updateIPTables(cfg)
 	updateTunnels(cfg.Tunnels)
@@ -117,9 +134,52 @@ func ApplyConfig(cfg *config.Config, force bool) {
 	loadProvider(cfg.RuleProviders)
 	runtime.GC()
 	tunnel.OnRunning()
+	running = true
 	updateUpdater(cfg)
 
 	resolver.ResetConnection()
+	return nil
+}
+
+func stageManagedListeners(config *config.Aster, listeners map[string]C.InboundListener) {
+	if config == nil {
+		return
+	}
+	for _, name := range config.ManagedListeners {
+		if staged, ok := listeners[name].(C.ManagedUserStager); ok {
+			staged.StageManagedUsers()
+		}
+	}
+}
+
+func updateAster(config *config.Aster) error {
+	var runtimeConfig *asterManager.Config
+	if config != nil {
+		runtimeConfig = &asterManager.Config{
+			Secret:           config.Secret,
+			PublicBaseURL:    config.PublicBaseURL,
+			StorePath:        config.StorePath,
+			ManagedListeners: config.ManagedListeners,
+		}
+	}
+	if err := asterManager.Default.Configure(runtimeConfig); err != nil {
+		statistic.DefaultManager.SetTrafficObserver(nil)
+		closeErr := asterManager.Default.FailClosed(configuredListenerNames(config))
+		return errors.Join(fmt.Errorf("apply Aster configuration: %w", err), closeErr)
+	}
+	if runtimeConfig == nil {
+		statistic.DefaultManager.SetTrafficObserver(nil)
+	} else {
+		statistic.DefaultManager.SetTrafficObserver(asterManager.Default)
+	}
+	return nil
+}
+
+func configuredListenerNames(config *config.Aster) []string {
+	if config == nil {
+		return nil
+	}
+	return config.ManagedListeners
 }
 
 func initInnerTcp() {
@@ -183,10 +243,12 @@ func GetGeneral() *config.General {
 	return general
 }
 
-func updateListeners(general *config.General, listeners map[string]C.InboundListener, force bool) {
-	listener.PatchInboundListeners(listeners, tunnel.Tunnel, true)
+func updateListeners(general *config.General, listeners map[string]C.InboundListener, force bool) error {
+	if err := listener.PatchInboundListeners(listeners, tunnel.Tunnel, true); err != nil {
+		return err
+	}
 	if !force {
-		return
+		return nil
 	}
 
 	allowLan := general.AllowLan
@@ -205,6 +267,7 @@ func updateListeners(general *config.General, listeners map[string]C.InboundList
 	listener.ReCreateShadowSocks(general.ShadowSocksConfig, tunnel.Tunnel)
 	listener.ReCreateVmess(general.VmessConfig, tunnel.Tunnel)
 	listener.ReCreateTuic(general.TuicServer, tunnel.Tunnel)
+	return nil
 }
 
 func updateTun(general *config.General) {
@@ -381,7 +444,7 @@ func updateUpdater(cfg *config.Config) {
 	updater.DefaultUiUpdater.AutoDownloadUI()
 }
 
-//go:linkname temporaryUpdateGeneral github.com/metacubex/mihomo/config.temporaryUpdateGeneral
+//go:linkname temporaryUpdateGeneral github.com/Miku0139oao/aster-core/config.temporaryUpdateGeneral
 func temporaryUpdateGeneral(general *config.General) func() {
 	oldGeneral := GetGeneral()
 	updateGeneral(general, false)
@@ -530,6 +593,10 @@ func updateIPTables(cfg *config.Config) {
 }
 
 func Shutdown() {
+	statistic.DefaultManager.SetTrafficObserver(nil)
+	if err := asterManager.Default.Flush(); err != nil {
+		log.Warnln("Final Aster traffic flush failed: %s", err)
+	}
 	listener.Cleanup()
 	tproxy.CleanupTProxyIPTables()
 	resolver.StoreFakePoolState()

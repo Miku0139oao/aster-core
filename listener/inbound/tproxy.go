@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	C "github.com/metacubex/mihomo/constant"
-	"github.com/metacubex/mihomo/listener/tproxy"
-	"github.com/metacubex/mihomo/log"
+	C "github.com/Miku0139oao/aster-core/constant"
+	"github.com/Miku0139oao/aster-core/listener/tproxy"
+	"github.com/Miku0139oao/aster-core/log"
 )
 
 type TProxyOption struct {
@@ -56,34 +56,44 @@ func (t *TProxy) Address() string {
 
 // Listen implements constant.InboundListener
 func (t *TProxy) Listen(tunnel C.Tunnel) error {
+	tcpListeners := make([]*tproxy.Listener, 0, len(strings.Split(t.RawAddress(), ",")))
+	udpListeners := make([]*tproxy.UDPListener, 0, len(strings.Split(t.RawAddress(), ",")))
 	for _, addr := range strings.Split(t.RawAddress(), ",") {
 		lTCP, err := tproxy.New(addr, tunnel, t.Additions()...)
 		if err != nil {
-			return err
+			return errors.Join(err, closeTProxyListeners(tcpListeners, udpListeners))
 		}
-		t.lTCP = append(t.lTCP, lTCP)
+		tcpListeners = append(tcpListeners, lTCP)
 		if t.udp {
 			lUDP, err := tproxy.NewUDP(addr, tunnel, t.Additions()...)
 			if err != nil {
-				return err
+				return errors.Join(err, closeTProxyListeners(tcpListeners, udpListeners))
 			}
-			t.lUDP = append(t.lUDP, lUDP)
+			udpListeners = append(udpListeners, lUDP)
 		}
 	}
+	t.lTCP = tcpListeners
+	t.lUDP = udpListeners
 	log.Infoln("TProxy[%s] proxy listening at: %s", t.Name(), t.Address())
 	return nil
 }
 
 // Close implements constant.InboundListener
 func (t *TProxy) Close() error {
+	tcpListeners, udpListeners := t.lTCP, t.lUDP
+	t.lTCP, t.lUDP = nil, nil
+	return closeTProxyListeners(tcpListeners, udpListeners)
+}
+
+func closeTProxyListeners(tcpListeners []*tproxy.Listener, udpListeners []*tproxy.UDPListener) error {
 	var errs []error
-	for _, l := range t.lTCP {
+	for _, l := range tcpListeners {
 		err := l.Close()
 		if err != nil {
 			errs = append(errs, fmt.Errorf("close tcp listener %s err: %w", l.Address(), err))
 		}
 	}
-	for _, l := range t.lUDP {
+	for _, l := range udpListeners {
 		err := l.Close()
 		if err != nil {
 			errs = append(errs, fmt.Errorf("close udp listener %s err: %w", l.Address(), err))

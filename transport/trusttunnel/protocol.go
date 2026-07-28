@@ -11,10 +11,11 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/metacubex/mihomo/common/httputils"
-	C "github.com/metacubex/mihomo/constant"
+	"github.com/Miku0139oao/aster-core/common/httputils"
+	C "github.com/Miku0139oao/aster-core/constant"
 )
 
 const (
@@ -103,8 +104,11 @@ type httpConn struct {
 	closeFn   func()
 	httputils.NetAddr
 
-	// deadlines
-	deadline *time.Timer
+	closeOnce  sync.Once
+	closeErr   error
+	closed     atomic.Bool
+	deadline   *time.Timer
+	deadlineMu sync.Mutex
 }
 
 func (h *httpConn) setup(body io.ReadCloser, err error) {
@@ -127,21 +131,32 @@ func (h *httpConn) waitCreated() error {
 }
 
 func (h *httpConn) Close() error {
-	var errorArr []error
-	h.setup(nil, net.ErrClosed)
-	if closer, ok := h.writer.(io.Closer); ok {
-		errorArr = append(errorArr, closer.Close())
-	}
-	if h.body != nil {
-		errorArr = append(errorArr, h.body.Close())
-	}
-	if h.cancelFn != nil {
-		h.cancelFn()
-	}
-	if h.closeFn != nil {
-		h.closeFn()
-	}
-	return errors.Join(errorArr...)
+	h.closeOnce.Do(func() {
+		h.closed.Store(true)
+		h.deadlineMu.Lock()
+		if h.deadline != nil {
+			h.deadline.Stop()
+			h.deadline = nil
+		}
+		h.deadlineMu.Unlock()
+
+		var errorArr []error
+		h.setup(nil, net.ErrClosed)
+		if closer, ok := h.writer.(io.Closer); ok {
+			errorArr = append(errorArr, closer.Close())
+		}
+		if h.body != nil {
+			errorArr = append(errorArr, h.body.Close())
+		}
+		if h.cancelFn != nil {
+			h.cancelFn()
+		}
+		if h.closeFn != nil {
+			h.closeFn()
+		}
+		h.closeErr = errors.Join(errorArr...)
+	})
+	return h.closeErr
 }
 
 func (h *httpConn) writeFlush(p []byte) (n int, err error) {
@@ -156,6 +171,11 @@ func (h *httpConn) SetReadDeadline(t time.Time) error  { return h.SetDeadline(t)
 func (h *httpConn) SetWriteDeadline(t time.Time) error { return h.SetDeadline(t) }
 
 func (h *httpConn) SetDeadline(t time.Time) error {
+	h.deadlineMu.Lock()
+	defer h.deadlineMu.Unlock()
+	if h.closed.Load() {
+		return net.ErrClosed
+	}
 	if t.IsZero() {
 		if h.deadline != nil {
 			h.deadline.Stop()

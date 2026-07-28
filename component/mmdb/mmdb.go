@@ -3,9 +3,9 @@ package mmdb
 import (
 	"sync"
 
-	mihomoOnce "github.com/metacubex/mihomo/common/once"
-	C "github.com/metacubex/mihomo/constant"
-	"github.com/metacubex/mihomo/log"
+	mihomoOnce "github.com/Miku0139oao/aster-core/common/once"
+	C "github.com/Miku0139oao/aster-core/constant"
+	"github.com/Miku0139oao/aster-core/log"
 
 	"github.com/oschwald/maxminddb-golang"
 )

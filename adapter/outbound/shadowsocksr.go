@@ -7,14 +7,14 @@ import (
 	"net"
 	"strconv"
 
-	N "github.com/metacubex/mihomo/common/net"
-	C "github.com/metacubex/mihomo/constant"
-	"github.com/metacubex/mihomo/transport/shadowsocks/core"
-	"github.com/metacubex/mihomo/transport/shadowsocks/shadowaead"
-	"github.com/metacubex/mihomo/transport/shadowsocks/shadowstream"
-	"github.com/metacubex/mihomo/transport/socks5"
-	"github.com/metacubex/mihomo/transport/ssr/obfs"
-	"github.com/metacubex/mihomo/transport/ssr/protocol"
+	N "github.com/Miku0139oao/aster-core/common/net"
+	C "github.com/Miku0139oao/aster-core/constant"
+	"github.com/Miku0139oao/aster-core/transport/shadowsocks/core"
+	"github.com/Miku0139oao/aster-core/transport/shadowsocks/shadowaead"
+	"github.com/Miku0139oao/aster-core/transport/shadowsocks/shadowstream"
+	"github.com/Miku0139oao/aster-core/transport/socks5"
+	"github.com/Miku0139oao/aster-core/transport/ssr/obfs"
+	"github.com/Miku0139oao/aster-core/transport/ssr/protocol"
 )
 
 type ShadowSocksR struct {
@@ -108,7 +108,7 @@ func (ssr *ShadowSocksR) ProxyInfo() C.ProxyInfo {
 
 func NewShadowSocksR(option ShadowSocksROption) (*ShadowSocksR, error) {
 	// SSR protocol compatibility
-	// https://github.com/metacubex/mihomo/pull/2056
+	// https://github.com/Miku0139oao/aster-core/pull/2056
 	if option.Cipher == "none" {
 		option.Cipher = "dummy"
 	}

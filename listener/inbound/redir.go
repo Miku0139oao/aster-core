@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	C "github.com/metacubex/mihomo/constant"
-	"github.com/metacubex/mihomo/listener/redir"
-	"github.com/metacubex/mihomo/log"
+	C "github.com/Miku0139oao/aster-core/constant"
+	"github.com/Miku0139oao/aster-core/listener/redir"
+	"github.com/Miku0139oao/aster-core/log"
 )
 
 type RedirOption struct {
@@ -51,21 +51,29 @@ func (r *Redir) Address() string {
 
 // Listen implements constant.InboundListener
 func (r *Redir) Listen(tunnel C.Tunnel) error {
+	listeners := make([]*redir.Listener, 0, len(strings.Split(r.RawAddress(), ",")))
 	for _, addr := range strings.Split(r.RawAddress(), ",") {
 		l, err := redir.New(addr, tunnel, r.Additions()...)
 		if err != nil {
-			return err
+			return errors.Join(err, closeRedirListeners(listeners))
 		}
-		r.l = append(r.l, l)
+		listeners = append(listeners, l)
 	}
+	r.l = listeners
 	log.Infoln("Redir[%s] proxy listening at: %s", r.Name(), r.Address())
 	return nil
 }
 
 // Close implements constant.InboundListener
 func (r *Redir) Close() error {
+	listeners := r.l
+	r.l = nil
+	return closeRedirListeners(listeners)
+}
+
+func closeRedirListeners(listeners []*redir.Listener) error {
 	var errs []error
-	for _, l := range r.l {
+	for _, l := range listeners {
 		err := l.Close()
 		if err != nil {
 			errs = append(errs, fmt.Errorf("close redir listener %s err: %w", l.Address(), err))

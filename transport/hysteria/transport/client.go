@@ -5,11 +5,11 @@ import (
 	"net"
 	"time"
 
-	"github.com/metacubex/mihomo/transport/hysteria/conns/faketcp"
-	"github.com/metacubex/mihomo/transport/hysteria/conns/udp"
-	"github.com/metacubex/mihomo/transport/hysteria/conns/wechat"
-	obfsPkg "github.com/metacubex/mihomo/transport/hysteria/obfs"
-	"github.com/metacubex/mihomo/transport/hysteria/utils"
+	"github.com/Miku0139oao/aster-core/transport/hysteria/conns/faketcp"
+	"github.com/Miku0139oao/aster-core/transport/hysteria/conns/udp"
+	"github.com/Miku0139oao/aster-core/transport/hysteria/conns/wechat"
+	obfsPkg "github.com/Miku0139oao/aster-core/transport/hysteria/obfs"
+	"github.com/Miku0139oao/aster-core/transport/hysteria/utils"
 
 	"github.com/metacubex/quic-go"
 	"github.com/metacubex/tls"
@@ -20,20 +20,17 @@ type ClientTransport struct{}
 func (ct *ClientTransport) quicPacketConn(proto string, rAddr net.Addr, serverPorts string, obfs obfsPkg.Obfuscator, hopInterval time.Duration, dialer utils.PacketDialer) (net.PacketConn, error) {
 	server := rAddr.String()
 	if len(proto) == 0 || proto == "udp" {
+		if serverPorts != "" {
+			return udp.NewObfsUDPHopClientPacketConn(server, serverPorts, hopInterval, obfs, dialer)
+		}
 		conn, err := dialer.ListenPacket(rAddr)
 		if err != nil {
 			return nil, err
 		}
 		if obfs != nil {
-			if serverPorts != "" {
-				return udp.NewObfsUDPHopClientPacketConn(server, serverPorts, hopInterval, obfs, dialer)
-			}
 			oc := udp.NewObfsUDPConn(conn, obfs)
 			return oc, nil
 		} else {
-			if serverPorts != "" {
-				return udp.NewObfsUDPHopClientPacketConn(server, serverPorts, hopInterval, nil, dialer)
-			}
 			return conn, nil
 		}
 	} else if proto == "wechat-video" {

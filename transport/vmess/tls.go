@@ -5,13 +5,13 @@ import (
 	"errors"
 	"net"
 
-	"github.com/metacubex/mihomo/component/ca"
-	"github.com/metacubex/mihomo/component/ech"
-	tlsC "github.com/metacubex/mihomo/component/tls"
-	"github.com/metacubex/mihomo/transport/jls"
-	"github.com/metacubex/mihomo/transport/restls"
-	"github.com/metacubex/mihomo/transport/shadowtls"
-	"github.com/metacubex/mihomo/transport/tlsmirror"
+	"github.com/Miku0139oao/aster-core/component/ca"
+	"github.com/Miku0139oao/aster-core/component/ech"
+	tlsC "github.com/Miku0139oao/aster-core/component/tls"
+	"github.com/Miku0139oao/aster-core/transport/jls"
+	"github.com/Miku0139oao/aster-core/transport/restls"
+	"github.com/Miku0139oao/aster-core/transport/shadowtls"
+	"github.com/Miku0139oao/aster-core/transport/tlsmirror"
 
 	"github.com/metacubex/tls"
 )

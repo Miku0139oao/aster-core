@@ -11,7 +11,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/metacubex/mihomo/common/maphash"
+	"github.com/Miku0139oao/aster-core/common/maphash"
 
 	"github.com/metacubex/randv2"
 )

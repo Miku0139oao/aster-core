@@ -1,10 +1,10 @@
 package tuic
 
 import (
-	"github.com/metacubex/mihomo/transport/tuic/common"
-	"github.com/metacubex/mihomo/transport/tuic/types"
-	v4 "github.com/metacubex/mihomo/transport/tuic/v4"
-	v5 "github.com/metacubex/mihomo/transport/tuic/v5"
+	"github.com/Miku0139oao/aster-core/transport/tuic/common"
+	"github.com/Miku0139oao/aster-core/transport/tuic/types"
+	v4 "github.com/Miku0139oao/aster-core/transport/tuic/v4"
+	v5 "github.com/Miku0139oao/aster-core/transport/tuic/v5"
 )
 
 type ClientOptionV4 = v4.ClientOption

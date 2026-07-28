@@ -4,8 +4,8 @@ import (
 	"context"
 	"net"
 
-	"github.com/metacubex/mihomo/adapter/inbound"
-	"github.com/metacubex/mihomo/transport/socks5"
+	"github.com/Miku0139oao/aster-core/adapter/inbound"
+	"github.com/Miku0139oao/aster-core/transport/socks5"
 )
 
 // HandleSocket like inbound.NewSocket combine with Tunnel.HandleTCPConn but also handel specialFqdn

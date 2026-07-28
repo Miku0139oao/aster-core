@@ -7,7 +7,7 @@ import (
 	"io"
 	"os"
 
-	P "github.com/metacubex/mihomo/constant/provider"
+	P "github.com/Miku0139oao/aster-core/constant/provider"
 
 	"github.com/klauspost/compress/zstd"
 )

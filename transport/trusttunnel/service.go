@@ -7,12 +7,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/metacubex/mihomo/common/httputils"
-	N "github.com/metacubex/mihomo/common/net"
+	"github.com/Miku0139oao/aster-core/common/httputils"
+	N "github.com/Miku0139oao/aster-core/common/net"
 
 	"github.com/metacubex/http"
 	"github.com/metacubex/quic-go/http3"
-	"github.com/metacubex/sing/common"
 	"github.com/metacubex/sing/common/auth"
 	"github.com/metacubex/sing/common/buf"
 	"github.com/metacubex/sing/common/bufio"
@@ -71,6 +70,8 @@ func NewService(options ServiceOptions) *Service {
 }
 
 func (s *Service) Start(tcpListener net.Listener, udpConn net.PacketConn, tlsConfig *tls.Config) error {
+	s.tcpListener = tcpListener
+	s.udpConn = udpConn
 	if tcpListener != nil {
 		protocols := new(http.Protocols)
 		protocols.SetHTTP1(true)
@@ -90,13 +91,13 @@ func (s *Service) Start(tcpListener net.Listener, udpConn net.PacketConn, tlsCon
 			Protocols: protocols,
 		}
 		listener := tcpListener
-		s.tcpListener = tcpListener
 		if tlsConfig != nil {
 			listener = tls.NewListener(listener, tlsConfig)
 			s.tlsListener = listener
 		}
+		httpServer := s.httpServer
 		go func() {
-			sErr := s.httpServer.Serve(listener)
+			sErr := httpServer.Serve(listener)
 			if sErr != nil && !errors.Is(sErr, http.ErrServerClosed) {
 				s.logger.ErrorContext(s.ctx, "HTTP server close: ", sErr)
 			}
@@ -116,24 +117,63 @@ func (s *Service) UpdateUsers(users map[string]string) {
 }
 
 func (s *Service) Close() error {
+	httpServer := s.httpServer
+	h3Server := s.h3Server
+	tcpListener := s.tcpListener
+	tlsListener := s.tlsListener
+	udpConn := s.udpConn
+	s.httpServer = nil
+	s.h3Server = nil
+	s.tcpListener = nil
+	s.tlsListener = nil
+	s.udpConn = nil
+
 	var shutdownErr error
-	if s.httpServer != nil {
+	var forceCloseErr error
+	if httpServer != nil {
 		const shutdownTimeout = 5 * time.Second
 		ctx, cancel := context.WithTimeout(s.ctx, shutdownTimeout)
-		shutdownErr = s.httpServer.Shutdown(ctx)
+		shutdownErr = httpServer.Shutdown(ctx)
 		cancel()
-		if errors.Is(shutdownErr, http.ErrServerClosed) {
+		if errors.Is(shutdownErr, http.ErrServerClosed) || errors.Is(shutdownErr, net.ErrClosed) {
 			shutdownErr = nil
+		} else if shutdownErr != nil {
+			forceCloseErr = httpServer.Close()
+			if errors.Is(forceCloseErr, http.ErrServerClosed) || errors.Is(forceCloseErr, net.ErrClosed) {
+				forceCloseErr = nil
+			}
+		}
+	} else if tlsListener != nil {
+		forceCloseErr = tlsListener.Close()
+	} else if tcpListener != nil {
+		forceCloseErr = tcpListener.Close()
+	}
+	if errors.Is(forceCloseErr, net.ErrClosed) {
+		forceCloseErr = nil
+	}
+	var tcpCloseErr error
+	if tcpListener != nil {
+		tcpCloseErr = tcpListener.Close()
+		if errors.Is(tcpCloseErr, net.ErrClosed) {
+			tcpCloseErr = nil
 		}
 	}
-	closeErr := common.Close(
-		common.PtrOrNil(s.httpServer),
-		s.tlsListener,
-		s.tcpListener,
-		common.PtrOrNil(s.h3Server),
-		s.udpConn,
-	)
-	return E.Errors(shutdownErr, closeErr)
+
+	var h3CloseErr error
+	if h3Server != nil {
+		h3CloseErr = h3Server.Close()
+		if errors.Is(h3CloseErr, http.ErrServerClosed) || errors.Is(h3CloseErr, net.ErrClosed) {
+			h3CloseErr = nil
+		}
+	}
+	var udpCloseErr error
+	if udpConn != nil {
+		udpCloseErr = udpConn.Close()
+		if errors.Is(udpCloseErr, net.ErrClosed) {
+			udpCloseErr = nil
+		}
+	}
+	return errors.Join(shutdownErr, forceCloseErr, tcpCloseErr, h3CloseErr, udpCloseErr)
 }
 
 func (s *Service) ServeHTTP(writer http.ResponseWriter, request *http.Request) {

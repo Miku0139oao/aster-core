@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/metacubex/mihomo/common/once"
-	"github.com/metacubex/mihomo/ntp"
+	"github.com/Miku0139oao/aster-core/common/once"
+	"github.com/Miku0139oao/aster-core/ntp"
 
 	"github.com/metacubex/tls"
 )

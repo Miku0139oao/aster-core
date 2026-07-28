@@ -3,10 +3,10 @@ package inbound
 import (
 	"strings"
 
-	C "github.com/metacubex/mihomo/constant"
-	LC "github.com/metacubex/mihomo/listener/config"
-	"github.com/metacubex/mihomo/listener/tuic"
-	"github.com/metacubex/mihomo/log"
+	C "github.com/Miku0139oao/aster-core/constant"
+	LC "github.com/Miku0139oao/aster-core/listener/config"
+	"github.com/Miku0139oao/aster-core/listener/tuic"
+	"github.com/Miku0139oao/aster-core/log"
 )
 
 type TuicOption struct {
@@ -98,7 +98,12 @@ func (t *Tuic) Listen(tunnel C.Tunnel) error {
 
 // Close implements constant.InboundListener
 func (t *Tuic) Close() error {
-	return t.l.Close()
+	l := t.l
+	t.l = nil
+	if l == nil {
+		return nil
+	}
+	return l.Close()
 }
 
 var _ C.InboundListener = (*Tuic)(nil)

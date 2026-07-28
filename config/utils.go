@@ -7,9 +7,9 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/metacubex/mihomo/adapter/outboundgroup"
-	"github.com/metacubex/mihomo/common/structure"
-	C "github.com/metacubex/mihomo/constant"
+	"github.com/Miku0139oao/aster-core/adapter/outboundgroup"
+	"github.com/Miku0139oao/aster-core/common/structure"
+	C "github.com/Miku0139oao/aster-core/constant"
 )
 
 // Check if ProxyGroups form DAG(Directed Acyclic Graph), and sort all ProxyGroups by dependency order.

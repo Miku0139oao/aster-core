@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"strings"
 
-	C "github.com/metacubex/mihomo/constant"
-	LC "github.com/metacubex/mihomo/listener/config"
-	"github.com/metacubex/mihomo/listener/http"
-	"github.com/metacubex/mihomo/log"
+	C "github.com/Miku0139oao/aster-core/constant"
+	LC "github.com/Miku0139oao/aster-core/listener/config"
+	"github.com/Miku0139oao/aster-core/listener/http"
+	"github.com/Miku0139oao/aster-core/log"
 )
 
 type HTTPOption struct {
@@ -60,6 +60,7 @@ func (h *HTTP) Address() string {
 // Listen implements constant.InboundListener
 func (h *HTTP) Listen(tunnel C.Tunnel) error {
 	lc := h.ListenConfig()
+	listeners := make([]*http.Listener, 0, len(strings.Split(h.RawAddress(), ",")))
 	for _, addr := range strings.Split(h.RawAddress(), ",") {
 		l, err := http.NewWithConfig(
 			LC.AuthServer{
@@ -78,18 +79,25 @@ func (h *HTTP) Listen(tunnel C.Tunnel) error {
 			h.Additions()...,
 		)
 		if err != nil {
-			return err
+			return errors.Join(err, closeHTTPListeners(listeners))
 		}
-		h.l = append(h.l, l)
+		listeners = append(listeners, l)
 	}
+	h.l = listeners
 	log.Infoln("HTTP[%s] proxy listening at: %s", h.Name(), h.Address())
 	return nil
 }
 
 // Close implements constant.InboundListener
 func (h *HTTP) Close() error {
+	listeners := h.l
+	h.l = nil
+	return closeHTTPListeners(listeners)
+}
+
+func closeHTTPListeners(listeners []*http.Listener) error {
 	var errs []error
-	for _, l := range h.l {
+	for _, l := range listeners {
 		err := l.Close()
 		if err != nil {
 			errs = append(errs, fmt.Errorf("close tcp listener %s err: %w", l.Address(), err))

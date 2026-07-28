@@ -6,9 +6,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/metacubex/mihomo/component/geodata"
-	"github.com/metacubex/mihomo/component/geodata/router"
-	C "github.com/metacubex/mihomo/constant"
+	"github.com/Miku0139oao/aster-core/component/geodata"
+	"github.com/Miku0139oao/aster-core/component/geodata/router"
+	C "github.com/Miku0139oao/aster-core/constant"
 
 	"google.golang.org/protobuf/proto"
 )

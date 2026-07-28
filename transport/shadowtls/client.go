@@ -9,9 +9,9 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/metacubex/mihomo/component/ca"
-	tlsC "github.com/metacubex/mihomo/component/tls"
-	"github.com/metacubex/mihomo/log"
+	"github.com/Miku0139oao/aster-core/component/ca"
+	tlsC "github.com/Miku0139oao/aster-core/component/tls"
+	"github.com/Miku0139oao/aster-core/log"
 
 	"github.com/metacubex/tls"
 	"golang.org/x/exp/slices"

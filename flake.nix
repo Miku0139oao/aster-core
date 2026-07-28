@@ -1,7 +1,7 @@
 {
-  description = "Another Mihomo Kernel";
+  description = "Aster Core";
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/master";
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
   inputs.utils.url = "github:numtide/flake-utils";
 
@@ -15,7 +15,7 @@
           };
         in
         rec {
-          packages.default = pkgs.mihomo-meta;
+          packages.default = pkgs.aster-core;
         }
       ) //
     (
@@ -23,23 +23,22 @@
       {
         overlay = final: prev: {
 
-          mihomo-meta = final.buildGo119Module {
-            pname = "mihomo-meta";
+          aster-core = final.buildGoModule {
+            pname = "aster-core";
             inherit version;
             src = ./.;
 
-            vendorSha256 = "sha256-W5oiPtTRin0731QQWr98xZ2Vpk97HYcBtKoi1OKZz+w=";
+            vendorHash = "sha256-4AVCfBDRdBr/shmz0ZGvDeam+IIo50Mjcukd6tNPJ/g=";
 
-            # Do not build testing suit
-            excludedPackages = [ "./test" ];
+            subPackages = [ "." ];
 
-            CGO_ENABLED = 0;
+            env.CGO_ENABLED = 0;
 
             ldflags = [
               "-s"
               "-w"
-              "-X github.com/metacubex/mihomo/constant.Version=dev-${version}"
-              "-X github.com/metacubex/mihomo/constant.BuildTime=${version}"
+              "-X github.com/Miku0139oao/aster-core/constant.Version=dev-${version}"
+              "-X github.com/Miku0139oao/aster-core/constant.BuildTime=${version}"
             ];
             
             tags = [
@@ -48,10 +47,6 @@
 
             # Network required 
             doCheck = false;
-
-            postInstall = ''
-              mv $out/bin/mihomo $out/bin/mihomo-meta
-            '';
 
           };
         };

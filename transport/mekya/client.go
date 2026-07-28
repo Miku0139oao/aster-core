@@ -13,9 +13,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/metacubex/mihomo/common/httputils"
-	tlsC "github.com/metacubex/mihomo/component/tls"
-	"github.com/metacubex/mihomo/transport/mkcp"
+	"github.com/Miku0139oao/aster-core/common/httputils"
+	tlsC "github.com/Miku0139oao/aster-core/component/tls"
+	"github.com/Miku0139oao/aster-core/transport/mkcp"
 
 	"github.com/metacubex/http"
 	"github.com/metacubex/http/httptrace"

@@ -5,9 +5,9 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/metacubex/mihomo/adapter/outbound"
-	"github.com/metacubex/mihomo/listener/inbound"
-	"github.com/metacubex/mihomo/transport/sudoku"
+	"github.com/Miku0139oao/aster-core/adapter/outbound"
+	"github.com/Miku0139oao/aster-core/listener/inbound"
+	"github.com/Miku0139oao/aster-core/transport/sudoku"
 	"github.com/stretchr/testify/assert"
 )
 

@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/metacubex/mihomo/common/picker"
-	"github.com/metacubex/mihomo/component/ech/echparser"
-	"github.com/metacubex/mihomo/component/resolver"
-	"github.com/metacubex/mihomo/log"
+	"github.com/Miku0139oao/aster-core/common/picker"
+	"github.com/Miku0139oao/aster-core/component/ech/echparser"
+	"github.com/Miku0139oao/aster-core/component/resolver"
+	"github.com/Miku0139oao/aster-core/log"
 
 	D "github.com/miekg/dns"
 	"github.com/samber/lo"

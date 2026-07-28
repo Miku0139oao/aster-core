@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 
-	"github.com/metacubex/mihomo/component/resolver"
-	icontext "github.com/metacubex/mihomo/context"
+	"github.com/Miku0139oao/aster-core/component/resolver"
+	icontext "github.com/Miku0139oao/aster-core/context"
 	D "github.com/miekg/dns"
 )
 

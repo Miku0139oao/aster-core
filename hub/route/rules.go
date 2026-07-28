@@ -3,8 +3,8 @@ package route
 import (
 	"time"
 
-	"github.com/metacubex/mihomo/constant"
-	"github.com/metacubex/mihomo/tunnel"
+	"github.com/Miku0139oao/aster-core/constant"
+	"github.com/Miku0139oao/aster-core/tunnel"
 
 	"github.com/metacubex/chi"
 	"github.com/metacubex/chi/render"

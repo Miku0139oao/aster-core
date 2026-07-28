@@ -7,11 +7,11 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/metacubex/mihomo/common/callback"
-	"github.com/metacubex/mihomo/common/xsync"
-	"github.com/metacubex/mihomo/component/iface"
-	C "github.com/metacubex/mihomo/constant"
-	"github.com/metacubex/mihomo/constant/features"
+	"github.com/Miku0139oao/aster-core/common/callback"
+	"github.com/Miku0139oao/aster-core/common/xsync"
+	"github.com/Miku0139oao/aster-core/component/iface"
+	C "github.com/Miku0139oao/aster-core/constant"
+	"github.com/Miku0139oao/aster-core/constant/features"
 )
 
 var disableLoopBackDetector, _ = strconv.ParseBool(os.Getenv("DISABLE_LOOPBACK_DETECTOR"))

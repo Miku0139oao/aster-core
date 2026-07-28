@@ -1,13 +1,48 @@
 package convert_test
 
 import (
+	"crypto/ecdh"
+	"crypto/rand"
+	"encoding/base64"
+	"net/url"
 	"testing"
 
-	"github.com/metacubex/mihomo/adapter"
-	. "github.com/metacubex/mihomo/common/convert"
+	"github.com/Miku0139oao/aster-core/adapter"
+	. "github.com/Miku0139oao/aster-core/common/convert"
 
 	"github.com/stretchr/testify/assert"
 )
+
+func TestConvertsV2RayAnyTLSReality(t *testing.T) {
+	privateKey, err := ecdh.X25519().GenerateKey(rand.Reader)
+	assert.NoError(t, err)
+	publicKey := base64.RawURLEncoding.EncodeToString(privateKey.PublicKey().Bytes())
+	query := url.Values{
+		"security": {"reality"},
+		"sni":      {"reality.example.com"},
+		"fp":       {"chrome"},
+		"pbk":      {publicKey},
+		"sid":      {"0123456789abcdef"},
+	}
+	uri := (&url.URL{
+		Scheme: "anytls", User: url.User("password"), Host: "server.example.com:443",
+		RawQuery: query.Encode(), Fragment: "AnyTLS REALITY",
+	}).String()
+
+	proxies, err := ConvertsV2Ray([]byte(uri))
+	assert.NoError(t, err)
+	if assert.Len(t, proxies, 1) {
+		assert.Equal(t, map[string]any{
+			"public-key": publicKey,
+			"short-id":   "0123456789abcdef",
+		}, proxies[0]["reality-opts"])
+		assert.Equal(t, "chrome", proxies[0]["client-fingerprint"])
+		assert.NoError(t, func() error {
+			_, err := adapter.ParseProxy(proxies[0])
+			return err
+		}())
+	}
+}
 
 // https://v2.hysteria.network/zh/docs/developers/URI-Scheme/
 func TestConvertsV2Ray_normal(t *testing.T) {

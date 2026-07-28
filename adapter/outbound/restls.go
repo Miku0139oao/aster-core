@@ -1,6 +1,6 @@
 package outbound
 
-import "github.com/metacubex/mihomo/transport/restls"
+import "github.com/Miku0139oao/aster-core/transport/restls"
 
 type RestlsOptions struct {
 	Password     string `proxy:"password,omitempty"`

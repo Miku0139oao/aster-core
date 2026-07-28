@@ -5,7 +5,7 @@ import (
 	"runtime/debug"
 	"time"
 
-	"github.com/metacubex/mihomo/log"
+	"github.com/Miku0139oao/aster-core/log"
 )
 
 func StartRoutine(ctx context.Context, d time.Duration, f func()) {

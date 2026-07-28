@@ -4,8 +4,8 @@ import (
 	"net"
 	"sync"
 
-	"github.com/metacubex/mihomo/common/xsync"
-	C "github.com/metacubex/mihomo/constant"
+	"github.com/Miku0139oao/aster-core/common/xsync"
+	C "github.com/Miku0139oao/aster-core/constant"
 )
 
 type Table struct {

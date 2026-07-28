@@ -3,7 +3,7 @@ package vless
 import (
 	"net"
 
-	"github.com/metacubex/mihomo/common/utils"
+	"github.com/Miku0139oao/aster-core/common/utils"
 
 	"github.com/gofrs/uuid/v5"
 )
@@ -52,7 +52,7 @@ func (c *Client) StreamConn(conn net.Conn, dst *DstAddr) (net.Conn, error) {
 }
 
 func (c *Client) PacketConn(conn net.Conn, rAddr net.Addr) net.PacketConn {
-	return &PacketConn{conn, rAddr}
+	return &PacketConn{Conn: conn, rAddr: rAddr}
 }
 
 // NewClient return Client instance

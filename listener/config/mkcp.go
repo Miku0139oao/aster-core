@@ -1,6 +1,6 @@
 package config
 
-import "github.com/metacubex/mihomo/transport/mkcp"
+import "github.com/Miku0139oao/aster-core/transport/mkcp"
 
 type MKCPConfig struct {
 	Enable           bool   `yaml:"enable" json:"enable,omitempty"`

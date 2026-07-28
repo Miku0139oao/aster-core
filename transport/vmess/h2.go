@@ -7,7 +7,7 @@ import (
 	"net"
 	"net/url"
 
-	N "github.com/metacubex/mihomo/common/net"
+	N "github.com/Miku0139oao/aster-core/common/net"
 
 	"github.com/metacubex/http"
 	"github.com/metacubex/randv2"

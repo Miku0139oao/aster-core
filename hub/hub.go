@@ -1,10 +1,10 @@
 package hub
 
 import (
-	"github.com/metacubex/mihomo/config"
-	"github.com/metacubex/mihomo/hub/executor"
-	"github.com/metacubex/mihomo/hub/route"
-	"github.com/metacubex/mihomo/log"
+	"github.com/Miku0139oao/aster-core/config"
+	"github.com/Miku0139oao/aster-core/hub/executor"
+	"github.com/Miku0139oao/aster-core/hub/route"
+	"github.com/Miku0139oao/aster-core/log"
 )
 
 type Option func(*config.Config)
@@ -52,15 +52,16 @@ func WithSecret(secret string) Option {
 }
 
 // ApplyConfig dispatch configure to all parts include ExternalController
-func ApplyConfig(cfg *config.Config) {
+func ApplyConfig(cfg *config.Config) error {
+	if err := executor.ApplyConfig(cfg, true); err != nil {
+		return err
+	}
 	applyRoute(cfg)
-	executor.ApplyConfig(cfg, true)
+	return nil
 }
 
 func applyRoute(cfg *config.Config) {
-	if cfg.Controller.ExternalUI != "" {
-		route.SetUIPath(cfg.Controller.ExternalUI)
-	}
+	route.SetUIPath(cfg.Controller.ExternalUI)
 	route.ReCreateServer(&route.Config{
 		Addr:           cfg.Controller.ExternalController,
 		TLSAddr:        cfg.Controller.ExternalControllerTLS,
@@ -101,6 +102,5 @@ func Parse(configBytes []byte, options ...Option) error {
 		option(cfg)
 	}
 
-	ApplyConfig(cfg)
-	return nil
+	return ApplyConfig(cfg)
 }

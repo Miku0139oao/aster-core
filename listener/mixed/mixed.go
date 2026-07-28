@@ -5,20 +5,20 @@ import (
 	"errors"
 	"net"
 
-	"github.com/metacubex/mihomo/adapter/inbound"
-	N "github.com/metacubex/mihomo/common/net"
-	"github.com/metacubex/mihomo/component/auth"
-	"github.com/metacubex/mihomo/component/ca"
-	"github.com/metacubex/mihomo/component/ech"
-	C "github.com/metacubex/mihomo/constant"
-	authStore "github.com/metacubex/mihomo/listener/auth"
-	LC "github.com/metacubex/mihomo/listener/config"
-	"github.com/metacubex/mihomo/listener/http"
-	"github.com/metacubex/mihomo/listener/reality"
-	"github.com/metacubex/mihomo/listener/socks"
-	"github.com/metacubex/mihomo/ntp"
-	"github.com/metacubex/mihomo/transport/socks4"
-	"github.com/metacubex/mihomo/transport/socks5"
+	"github.com/Miku0139oao/aster-core/adapter/inbound"
+	N "github.com/Miku0139oao/aster-core/common/net"
+	"github.com/Miku0139oao/aster-core/component/auth"
+	"github.com/Miku0139oao/aster-core/component/ca"
+	"github.com/Miku0139oao/aster-core/component/ech"
+	C "github.com/Miku0139oao/aster-core/constant"
+	authStore "github.com/Miku0139oao/aster-core/listener/auth"
+	LC "github.com/Miku0139oao/aster-core/listener/config"
+	"github.com/Miku0139oao/aster-core/listener/http"
+	"github.com/Miku0139oao/aster-core/listener/reality"
+	"github.com/Miku0139oao/aster-core/listener/socks"
+	"github.com/Miku0139oao/aster-core/ntp"
+	"github.com/Miku0139oao/aster-core/transport/socks4"
+	"github.com/Miku0139oao/aster-core/transport/socks5"
 
 	"github.com/metacubex/tls"
 )
@@ -63,6 +63,12 @@ func NewWithConfig(config LC.AuthServer, lc C.InboundListenConfig, tunnel C.Tunn
 	if err != nil {
 		return nil, err
 	}
+	keepListener := false
+	defer func() {
+		if !keepListener {
+			_ = l.Close()
+		}
+	}()
 
 	tlsConfig := &tls.Config{Time: ntp.Now}
 	var realityBuilder *reality.Builder
@@ -119,6 +125,7 @@ func NewWithConfig(config LC.AuthServer, lc C.InboundListenConfig, tunnel C.Tunn
 		listener: l,
 		addr:     config.Listen,
 	}
+	keepListener = true
 	go func() {
 		for {
 			c, err := ml.listener.Accept()

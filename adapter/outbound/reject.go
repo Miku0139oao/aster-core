@@ -7,8 +7,8 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/metacubex/mihomo/common/buf"
-	C "github.com/metacubex/mihomo/constant"
+	"github.com/Miku0139oao/aster-core/common/buf"
+	C "github.com/Miku0139oao/aster-core/constant"
 )
 
 type Reject struct {

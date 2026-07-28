@@ -3,7 +3,7 @@ package net
 import (
 	"net"
 
-	"github.com/metacubex/mihomo/common/buf"
+	"github.com/Miku0139oao/aster-core/common/buf"
 )
 
 var _ ExtendedConn = (*CachedConn)(nil)

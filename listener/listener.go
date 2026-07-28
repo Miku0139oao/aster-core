@@ -1,27 +1,29 @@
 package listener
 
 import (
+	"errors"
 	"fmt"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 
-	"github.com/metacubex/mihomo/adapter/inbound"
-	C "github.com/metacubex/mihomo/constant"
-	LC "github.com/metacubex/mihomo/listener/config"
-	"github.com/metacubex/mihomo/listener/http"
-	"github.com/metacubex/mihomo/listener/mixed"
-	"github.com/metacubex/mihomo/listener/redir"
-	embedSS "github.com/metacubex/mihomo/listener/shadowsocks"
-	"github.com/metacubex/mihomo/listener/sing_shadowsocks"
-	"github.com/metacubex/mihomo/listener/sing_tun"
-	"github.com/metacubex/mihomo/listener/sing_vmess"
-	"github.com/metacubex/mihomo/listener/socks"
-	"github.com/metacubex/mihomo/listener/tproxy"
-	"github.com/metacubex/mihomo/listener/tuic"
-	LT "github.com/metacubex/mihomo/listener/tunnel"
-	"github.com/metacubex/mihomo/log"
+	"github.com/Miku0139oao/aster-core/adapter/inbound"
+	C "github.com/Miku0139oao/aster-core/constant"
+	LC "github.com/Miku0139oao/aster-core/listener/config"
+	"github.com/Miku0139oao/aster-core/listener/http"
+	"github.com/Miku0139oao/aster-core/listener/mixed"
+	"github.com/Miku0139oao/aster-core/listener/redir"
+	embedSS "github.com/Miku0139oao/aster-core/listener/shadowsocks"
+	"github.com/Miku0139oao/aster-core/listener/sing_shadowsocks"
+	"github.com/Miku0139oao/aster-core/listener/sing_tun"
+	"github.com/Miku0139oao/aster-core/listener/sing_vmess"
+	"github.com/Miku0139oao/aster-core/listener/socks"
+	"github.com/Miku0139oao/aster-core/listener/tproxy"
+	"github.com/Miku0139oao/aster-core/listener/tuic"
+	LT "github.com/Miku0139oao/aster-core/listener/tunnel"
+	"github.com/Miku0139oao/aster-core/log"
 
 	"github.com/samber/lo"
 )
@@ -624,33 +626,161 @@ func PatchTunnel(tunnels []LC.Tunnel, tunnel C.Tunnel) {
 	}
 }
 
-func PatchInboundListeners(newListenerMap map[string]C.InboundListener, tunnel C.Tunnel, dropOld bool) {
+func PatchInboundListeners(newListenerMap map[string]C.InboundListener, tunnel C.Tunnel, dropOld bool) error {
+	inboundMux.Lock()
+	defer inboundMux.Unlock()
+	type listenerPatch struct {
+		name     string
+		listener C.InboundListener
+	}
+
+	oldNames := make([]string, 0, len(inboundListeners))
+	for name := range inboundListeners {
+		oldNames = append(oldNames, name)
+	}
+	sort.Strings(oldNames)
+
+	newNames := make([]string, 0, len(newListenerMap))
+	for name := range newListenerMap {
+		newNames = append(newNames, name)
+	}
+	sort.Strings(newNames)
+
+	stopped := make([]listenerPatch, 0, len(oldNames))
+	for _, name := range oldNames {
+		oldListener := inboundListeners[name]
+		newListener, exists := newListenerMap[name]
+		if exists && oldListener.Config().Equal(newListener.Config()) {
+			continue
+		}
+		if !exists && !dropOld {
+			continue
+		}
+		stopped = append(stopped, listenerPatch{name: name, listener: oldListener})
+	}
+
+	replacements := make([]listenerPatch, 0, len(newNames))
+	for _, name := range newNames {
+		newListener := newListenerMap[name]
+		if oldListener, exists := inboundListeners[name]; exists && oldListener.Config().Equal(newListener.Config()) {
+			continue
+		}
+		replacements = append(replacements, listenerPatch{name: name, listener: newListener})
+	}
+
+	started := make([]listenerPatch, 0, len(replacements))
+	closed := make([]listenerPatch, 0, len(stopped))
+	rollback := func(cause error) error {
+		var rollbackErr error
+		for i := len(started) - 1; i >= 0; i-- {
+			patch := started[i]
+			if err := patch.listener.Close(); err != nil {
+				rollbackErr = errors.Join(rollbackErr, fmt.Errorf("close replacement listener %q: %w", patch.name, err))
+				inboundListeners[patch.name] = patch.listener
+				continue
+			}
+			delete(inboundListeners, patch.name)
+		}
+		for _, patch := range closed {
+			if _, exists := inboundListeners[patch.name]; exists {
+				rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore listener %q: replacement cleanup failed", patch.name))
+				continue
+			}
+			if err := patch.listener.Listen(tunnel); err != nil {
+				rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore listener %q: %w", patch.name, err))
+				if closeErr := patch.listener.Close(); closeErr != nil {
+					rollbackErr = errors.Join(rollbackErr, fmt.Errorf("clean up unrestored listener %q: %w", patch.name, closeErr))
+					inboundListeners[patch.name] = patch.listener
+				}
+				continue
+			}
+			inboundListeners[patch.name] = patch.listener
+		}
+		return errors.Join(cause, rollbackErr)
+	}
+
+	var closeErr error
+	for _, patch := range stopped {
+		if err := patch.listener.Close(); err != nil {
+			closeErr = errors.Join(closeErr, fmt.Errorf("close listener %q: %w", patch.name, err))
+			continue
+		}
+		delete(inboundListeners, patch.name)
+		closed = append(closed, patch)
+	}
+	if closeErr != nil {
+		return rollback(closeErr)
+	}
+
+	for _, patch := range replacements {
+		started = append(started, patch)
+		if err := patch.listener.Listen(tunnel); err != nil {
+			log.Errorln("Listener %s listen err: %s", patch.name, err.Error())
+			return rollback(fmt.Errorf("listen on listener %q: %w", patch.name, err))
+		}
+	}
+	for _, patch := range started {
+		inboundListeners[patch.name] = patch.listener
+	}
+	return nil
+}
+
+var (
+	ErrInboundListenerNotFound   = errors.New("inbound listener not found")
+	ErrInboundListenerNotManaged = errors.New("inbound listener does not support managed users")
+)
+
+func WithManagedInboundListener(name string, fn func(C.ManagedUserListener) error) error {
 	inboundMux.Lock()
 	defer inboundMux.Unlock()
 
-	for name, newListener := range newListenerMap {
-		if oldListener, ok := inboundListeners[name]; ok {
-			if !oldListener.Config().Equal(newListener.Config()) {
-				_ = oldListener.Close()
-			} else {
-				continue
-			}
+	inboundListener, exists := inboundListeners[name]
+	if !exists {
+		return fmt.Errorf("%w: %q", ErrInboundListenerNotFound, name)
+	}
+	managedListener, ok := inboundListener.(C.ManagedUserListener)
+	if !ok {
+		return fmt.Errorf("%w: %q", ErrInboundListenerNotManaged, name)
+	}
+	return fn(managedListener)
+}
+
+func FailClosedManagedInboundListener(name string) error {
+	inboundMux.Lock()
+	defer inboundMux.Unlock()
+
+	inboundListener, exists := inboundListeners[name]
+	if !exists {
+		return nil
+	}
+	managedListener, ok := inboundListener.(C.ManagedUserListener)
+	if !ok {
+		return nil
+	}
+	if err := managedListener.UpdateManagedUsers(nil); err == nil {
+		return nil
+	} else {
+		closeErr := managedListener.Close()
+		if closeErr == nil {
+			delete(inboundListeners, name)
 		}
-		if err := newListener.Listen(tunnel); err != nil {
-			log.Errorln("Listener %s listen err: %s", name, err.Error())
+		return errors.Join(err, closeErr)
+	}
+}
+
+func ClearManagedInboundListeners(names []string) error {
+	var clearErr error
+	for _, name := range names {
+		err := WithManagedInboundListener(name, func(managed C.ManagedUserListener) error {
+			return managed.UpdateManagedUsers(nil)
+		})
+		if err == nil {
 			continue
 		}
-		inboundListeners[name] = newListener
+		closeErr := FailClosedManagedInboundListener(name)
+		clearErr = errors.Join(clearErr, fmt.Errorf("clear managed listener %q: %w", name, err), closeErr)
 	}
-
-	if dropOld {
-		for name, oldListener := range inboundListeners {
-			if _, ok := newListenerMap[name]; !ok {
-				_ = oldListener.Close()
-				delete(inboundListeners, name)
-			}
-		}
-	}
+	return clearErr
 }
 
 // GetPorts return the ports of proxy servers

@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/metacubex/mihomo/adapter/outbound"
-	"github.com/metacubex/mihomo/component/ca"
-	"github.com/metacubex/mihomo/listener/inbound"
-	"github.com/metacubex/mihomo/transport/tlsmirror"
+	"github.com/Miku0139oao/aster-core/adapter/outbound"
+	"github.com/Miku0139oao/aster-core/component/ca"
+	"github.com/Miku0139oao/aster-core/listener/inbound"
+	"github.com/Miku0139oao/aster-core/transport/tlsmirror"
 
 	"github.com/metacubex/http"
 	"github.com/metacubex/tls"

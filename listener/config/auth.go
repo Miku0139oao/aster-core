@@ -1,8 +1,8 @@
 package config
 
 import (
-	"github.com/metacubex/mihomo/component/auth"
-	"github.com/metacubex/mihomo/listener/reality"
+	"github.com/Miku0139oao/aster-core/component/auth"
+	"github.com/Miku0139oao/aster-core/listener/reality"
 )
 
 // AuthServer for http/socks/mixed server

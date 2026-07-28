@@ -2,23 +2,26 @@ package sing_shadowsocks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
+	"sync"
+	"sync/atomic"
 
-	"github.com/metacubex/mihomo/adapter/inbound"
-	"github.com/metacubex/mihomo/common/sockopt"
-	C "github.com/metacubex/mihomo/constant"
-	LC "github.com/metacubex/mihomo/listener/config"
-	"github.com/metacubex/mihomo/listener/jls"
-	"github.com/metacubex/mihomo/listener/restls"
-	embedSS "github.com/metacubex/mihomo/listener/shadowsocks"
-	"github.com/metacubex/mihomo/listener/shadowtls"
-	"github.com/metacubex/mihomo/listener/sing"
-	"github.com/metacubex/mihomo/log"
-	"github.com/metacubex/mihomo/ntp"
-	"github.com/metacubex/mihomo/transport/kcptun"
-	obfs "github.com/metacubex/mihomo/transport/simple-obfs"
+	"github.com/Miku0139oao/aster-core/adapter/inbound"
+	"github.com/Miku0139oao/aster-core/common/sockopt"
+	C "github.com/Miku0139oao/aster-core/constant"
+	LC "github.com/Miku0139oao/aster-core/listener/config"
+	"github.com/Miku0139oao/aster-core/listener/jls"
+	"github.com/Miku0139oao/aster-core/listener/restls"
+	embedSS "github.com/Miku0139oao/aster-core/listener/shadowsocks"
+	"github.com/Miku0139oao/aster-core/listener/shadowtls"
+	"github.com/Miku0139oao/aster-core/listener/sing"
+	"github.com/Miku0139oao/aster-core/log"
+	"github.com/Miku0139oao/aster-core/ntp"
+	"github.com/Miku0139oao/aster-core/transport/kcptun"
+	obfs "github.com/Miku0139oao/aster-core/transport/simple-obfs"
 
 	shadowsocks "github.com/metacubex/sing-shadowsocks"
 	"github.com/metacubex/sing-shadowsocks/shadowaead"
@@ -32,26 +35,29 @@ import (
 )
 
 type Listener struct {
-	closed       bool
+	closed       atomic.Bool
 	config       LC.ShadowsocksServer
 	listeners    []net.Listener
 	udpListeners []net.PacketConn
 	service      shadowsocks.Service
 	simpleObfs   func(net.Conn) net.Conn
+	closeOnce    sync.Once
+	closeErr     error
 }
 
 var _listener *Listener
 
-func New(config LC.ShadowsocksServer, lc C.InboundListenConfig, tunnel C.Tunnel, additions ...inbound.Addition) (C.MultiAddrListener, error) {
+func New(config LC.ShadowsocksServer, lc C.InboundListenConfig, tunnel C.Tunnel, additions ...inbound.Addition) (_ C.MultiAddrListener, err error) {
 	var sl *Listener
-	var err error
 	if len(additions) == 0 {
 		additions = []inbound.Addition{
 			inbound.WithInName("DEFAULT-SHADOWSOCKS"),
 			inbound.WithSpecialRules(""),
 		}
 		defer func() {
-			_listener = sl
+			if err == nil {
+				_listener = sl
+			}
 		}()
 	}
 
@@ -69,6 +75,14 @@ func New(config LC.ShadowsocksServer, lc C.InboundListenConfig, tunnel C.Tunnel,
 
 	sl = &Listener{}
 	sl.config = config
+	created := sl
+	defer func() {
+		if err != nil {
+			if closeErr := created.Close(); closeErr != nil {
+				err = errors.Join(err, closeErr)
+			}
+		}
+	}()
 
 	switch {
 	case config.Cipher == shadowsocks.MethodNone:
@@ -186,7 +200,7 @@ func New(config LC.ShadowsocksServer, lc C.InboundListenConfig, tunnel C.Tunnel,
 					}
 					if err != nil {
 						buff.Release()
-						if sl.closed {
+						if sl.closed.Load() {
 							break
 						}
 						continue
@@ -219,7 +233,7 @@ func New(config LC.ShadowsocksServer, lc C.InboundListenConfig, tunnel C.Tunnel,
 			for {
 				c, err := l.Accept()
 				if err != nil {
-					if sl.closed {
+					if sl.closed.Load() {
 						break
 					}
 					continue
@@ -234,21 +248,20 @@ func New(config LC.ShadowsocksServer, lc C.InboundListenConfig, tunnel C.Tunnel,
 }
 
 func (l *Listener) Close() error {
-	l.closed = true
-	var retErr error
-	for _, lis := range l.listeners {
-		err := lis.Close()
-		if err != nil {
-			retErr = err
+	l.closeOnce.Do(func() {
+		l.closed.Store(true)
+		for _, lis := range l.listeners {
+			if err := lis.Close(); err != nil {
+				l.closeErr = errors.Join(l.closeErr, err)
+			}
 		}
-	}
-	for _, lis := range l.udpListeners {
-		err := lis.Close()
-		if err != nil {
-			retErr = err
+		for _, lis := range l.udpListeners {
+			if err := lis.Close(); err != nil {
+				l.closeErr = errors.Join(l.closeErr, err)
+			}
 		}
-	}
-	return retErr
+	})
+	return l.closeErr
 }
 
 func (l *Listener) Config() string {

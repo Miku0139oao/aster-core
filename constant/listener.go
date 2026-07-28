@@ -26,6 +26,32 @@ type InboundListener interface {
 	Config() InboundConfig
 }
 
+type ManagedUser struct {
+	PrincipalID string `json:"principal-id"`
+	Name        string `json:"name"`
+	UUID        string `json:"uuid,omitempty"`
+	Password    string `json:"password,omitempty"`
+	Flow        string `json:"flow,omitempty"`
+}
+
+type ManagedUserSchema struct {
+	Protocol   string `json:"protocol"`
+	Credential string `json:"credential"`
+	Flow       bool   `json:"flow"`
+}
+
+type ManagedUserListener interface {
+	InboundListener
+	ManagedUserSchema() ManagedUserSchema
+	ConfiguredUsers() []ManagedUser
+	CurrentManagedUsers() []ManagedUser
+	UpdateManagedUsers(users []ManagedUser) error
+}
+
+type ManagedUserStager interface {
+	StageManagedUsers()
+}
+
 type InboundConfig interface {
 	Name() string
 	Equal(config InboundConfig) bool

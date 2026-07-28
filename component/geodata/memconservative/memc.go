@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"runtime"
 
-	"github.com/metacubex/mihomo/component/geodata"
-	"github.com/metacubex/mihomo/component/geodata/router"
+	"github.com/Miku0139oao/aster-core/component/geodata"
+	"github.com/Miku0139oao/aster-core/component/geodata/router"
 )
 
 type memConservativeLoader struct {

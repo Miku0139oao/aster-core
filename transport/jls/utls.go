@@ -11,9 +11,9 @@ import (
 	"net"
 	"strings"
 
-	"github.com/metacubex/mihomo/component/ca"
-	tlsC "github.com/metacubex/mihomo/component/tls"
-	"github.com/metacubex/mihomo/ntp"
+	"github.com/Miku0139oao/aster-core/component/ca"
+	tlsC "github.com/Miku0139oao/aster-core/component/tls"
+	"github.com/Miku0139oao/aster-core/ntp"
 
 	"github.com/metacubex/http"
 	"github.com/metacubex/randv2"

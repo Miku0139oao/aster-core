@@ -6,21 +6,23 @@ import (
 	"net"
 	"net/netip"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/metacubex/mihomo/adapter/inbound"
-	"github.com/metacubex/mihomo/common/sockopt"
-	"github.com/metacubex/mihomo/common/utils"
-	"github.com/metacubex/mihomo/component/ca"
-	C "github.com/metacubex/mihomo/constant"
-	LC "github.com/metacubex/mihomo/listener/config"
-	"github.com/metacubex/mihomo/listener/inner"
-	"github.com/metacubex/mihomo/listener/sing"
-	"github.com/metacubex/mihomo/log"
-	"github.com/metacubex/mihomo/ntp"
-	"github.com/metacubex/mihomo/transport/shadowquic"
-	"github.com/metacubex/mihomo/transport/socks5"
-	"github.com/metacubex/mihomo/transport/tuic"
+	"github.com/Miku0139oao/aster-core/adapter/inbound"
+	"github.com/Miku0139oao/aster-core/common/sockopt"
+	"github.com/Miku0139oao/aster-core/common/utils"
+	"github.com/Miku0139oao/aster-core/component/ca"
+	C "github.com/Miku0139oao/aster-core/constant"
+	LC "github.com/Miku0139oao/aster-core/listener/config"
+	"github.com/Miku0139oao/aster-core/listener/inner"
+	"github.com/Miku0139oao/aster-core/listener/sing"
+	"github.com/Miku0139oao/aster-core/log"
+	"github.com/Miku0139oao/aster-core/ntp"
+	"github.com/Miku0139oao/aster-core/transport/shadowquic"
+	"github.com/Miku0139oao/aster-core/transport/socks5"
+	"github.com/Miku0139oao/aster-core/transport/tuic"
 
 	"github.com/metacubex/jls-quic-go"
 	"github.com/metacubex/jls-tls"
@@ -29,13 +31,15 @@ import (
 const ServerMaxIncomingStreams = (1 << 32) - 1
 
 type Listener struct {
-	closed       bool
+	closed       atomic.Bool
 	config       LC.ShadowQuicServer
 	udpListeners []net.PacketConn
 	servers      []*shadowquic.Server
+	closeOnce    sync.Once
+	closeErr     error
 }
 
-func New(config LC.ShadowQuicServer, lc C.InboundListenConfig, tunnel C.Tunnel, additions ...inbound.Addition) (*Listener, error) {
+func New(config LC.ShadowQuicServer, lc C.InboundListenConfig, tunnel C.Tunnel, additions ...inbound.Addition) (sl *Listener, err error) {
 	if strings.TrimSpace(config.JLSUpstream.Addr) == "" {
 		return nil, errors.New("shadowquic: jls-upstream.addr is required")
 	}
@@ -169,7 +173,15 @@ func New(config LC.ShadowQuicServer, lc C.InboundListenConfig, tunnel C.Tunnel, 
 		BBRProfile:            config.BBRProfile,
 	}
 
-	sl := &Listener{config: config}
+	sl = &Listener{config: config}
+	created := sl
+	defer func() {
+		if err != nil {
+			if closeErr := created.Close(); closeErr != nil {
+				err = errors.Join(err, closeErr)
+			}
+		}
+	}()
 	for _, addr := range strings.Split(config.Listen, ",") {
 		addr = strings.TrimSpace(addr)
 		if addr == "" {
@@ -192,7 +204,7 @@ func New(config LC.ShadowQuicServer, lc C.InboundListenConfig, tunnel C.Tunnel, 
 
 		go func() {
 			err := server.Serve()
-			if err != nil && !sl.closed {
+			if err != nil && !created.closed.Load() {
 				log.Warnln("ShadowQuic server closed: %s", err)
 			}
 		}()
@@ -215,19 +227,20 @@ func defaultJLSServerName(upstreamAddr string) string {
 }
 
 func (l *Listener) Close() error {
-	l.closed = true
-	var retErr error
-	for _, server := range l.servers {
-		if err := server.Close(); err != nil {
-			retErr = err
+	l.closeOnce.Do(func() {
+		l.closed.Store(true)
+		for _, server := range l.servers {
+			if err := server.Close(); err != nil {
+				l.closeErr = errors.Join(l.closeErr, err)
+			}
 		}
-	}
-	for _, lis := range l.udpListeners {
-		if err := lis.Close(); err != nil {
-			retErr = err
+		for _, lis := range l.udpListeners {
+			if err := lis.Close(); err != nil {
+				l.closeErr = errors.Join(l.closeErr, err)
+			}
 		}
-	}
-	return retErr
+	})
+	return l.closeErr
 }
 
 func (l *Listener) Config() LC.ShadowQuicServer {

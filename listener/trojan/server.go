@@ -6,26 +6,28 @@ import (
 	"io"
 	"net"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/metacubex/mihomo/adapter/inbound"
-	N "github.com/metacubex/mihomo/common/net"
-	"github.com/metacubex/mihomo/common/utils"
-	"github.com/metacubex/mihomo/component/ca"
-	"github.com/metacubex/mihomo/component/ech"
-	C "github.com/metacubex/mihomo/constant"
-	LC "github.com/metacubex/mihomo/listener/config"
-	"github.com/metacubex/mihomo/listener/jls"
-	"github.com/metacubex/mihomo/listener/reality"
-	"github.com/metacubex/mihomo/listener/restls"
-	"github.com/metacubex/mihomo/listener/shadowtls"
-	"github.com/metacubex/mihomo/listener/sing"
-	"github.com/metacubex/mihomo/ntp"
-	"github.com/metacubex/mihomo/transport/gun"
-	"github.com/metacubex/mihomo/transport/shadowsocks/core"
-	"github.com/metacubex/mihomo/transport/socks5"
-	"github.com/metacubex/mihomo/transport/trojan"
-	mihomoVMess "github.com/metacubex/mihomo/transport/vmess"
+	"github.com/Miku0139oao/aster-core/adapter/inbound"
+	N "github.com/Miku0139oao/aster-core/common/net"
+	"github.com/Miku0139oao/aster-core/common/utils"
+	"github.com/Miku0139oao/aster-core/component/ca"
+	"github.com/Miku0139oao/aster-core/component/ech"
+	C "github.com/Miku0139oao/aster-core/constant"
+	LC "github.com/Miku0139oao/aster-core/listener/config"
+	"github.com/Miku0139oao/aster-core/listener/jls"
+	"github.com/Miku0139oao/aster-core/listener/reality"
+	"github.com/Miku0139oao/aster-core/listener/restls"
+	"github.com/Miku0139oao/aster-core/listener/shadowtls"
+	"github.com/Miku0139oao/aster-core/listener/sing"
+	"github.com/Miku0139oao/aster-core/ntp"
+	"github.com/Miku0139oao/aster-core/transport/gun"
+	"github.com/Miku0139oao/aster-core/transport/shadowsocks/core"
+	"github.com/Miku0139oao/aster-core/transport/socks5"
+	"github.com/Miku0139oao/aster-core/transport/trojan"
+	mihomoVMess "github.com/Miku0139oao/aster-core/transport/vmess"
 
 	"github.com/metacubex/http"
 	"github.com/metacubex/smux"
@@ -33,12 +35,28 @@ import (
 )
 
 type Listener struct {
-	closed     bool
+	closed     atomic.Bool
 	config     LC.TrojanServer
 	listeners  []net.Listener
+	httpServer *http.Server
 	keys       map[[trojan.KeyLength]byte]string
 	pickCipher core.Cipher
 	handler    *sing.ListenerHandler
+	closeOnce  sync.Once
+	closeErr   error
+}
+
+type closeOnceListener struct {
+	net.Listener
+	once sync.Once
+	err  error
+}
+
+func (l *closeOnceListener) Close() error {
+	l.once.Do(func() {
+		l.err = l.Listener.Close()
+	})
+	return l.err
 }
 
 func New(config LC.TrojanServer, lc C.InboundListenConfig, tunnel C.Tunnel, additions ...inbound.Addition) (sl *Listener, err error) {
@@ -76,7 +94,15 @@ func New(config LC.TrojanServer, lc C.InboundListenConfig, tunnel C.Tunnel, addi
 			return nil, err
 		}
 	}
-	sl = &Listener{false, config, nil, keys, pickCipher, h}
+	sl = &Listener{config: config, keys: keys, pickCipher: pickCipher, handler: h}
+	created := sl
+	defer func() {
+		if err != nil {
+			if closeErr := created.Close(); closeErr != nil {
+				err = errors.Join(err, closeErr)
+			}
+		}
+	}()
 
 	httpServer := http.Server{
 		IdleTimeout: 30 * time.Second,
@@ -168,7 +194,7 @@ func New(config LC.TrojanServer, lc C.InboundListenConfig, tunnel C.Tunnel, addi
 				http.Error(w, err.Error(), 500)
 				return
 			}
-			sl.HandleConn(conn, tunnel, additions...)
+			created.HandleConn(conn, tunnel, additions...)
 		})
 		httpServer.Handler = httpMux
 		httpServer.Protocols.SetHTTP1(true)
@@ -178,7 +204,7 @@ func New(config LC.TrojanServer, lc C.InboundListenConfig, tunnel C.Tunnel, addi
 		httpServer.Handler = gun.NewServerHandler(gun.ServerOption{
 			ServiceName: config.GrpcServiceName,
 			ConnHandler: func(conn net.Conn) {
-				sl.HandleConn(conn, tunnel, additions...)
+				created.HandleConn(conn, tunnel, additions...)
 			},
 			HttpHandler: httpServer.Handler,
 		})
@@ -193,6 +219,9 @@ func New(config LC.TrojanServer, lc C.InboundListenConfig, tunnel C.Tunnel, addi
 		httpServer.Protocols.SetUnencryptedHTTP2(true)
 		tlsConfig.NextProtos = append([]string{"h2"}, tlsConfig.NextProtos...) // h2 must before http/1.1
 	}
+	if httpServer.Handler != nil {
+		sl.httpServer = &httpServer
+	}
 
 	for _, addr := range strings.Split(config.Listen, ",") {
 		addr := addr
@@ -202,6 +231,8 @@ func New(config LC.TrojanServer, lc C.InboundListenConfig, tunnel C.Tunnel, addi
 		if err != nil {
 			return nil, err
 		}
+		sl.listeners = append(sl.listeners, l)
+		listenerIndex := len(sl.listeners) - 1
 		if shadowTLSBuilder != nil {
 			l = shadowTLSBuilder.NewListener(l)
 		} else if restlsBuilder != nil {
@@ -215,7 +246,10 @@ func New(config LC.TrojanServer, lc C.InboundListenConfig, tunnel C.Tunnel, addi
 		} else if !config.TrojanSSOption.Enabled && !config.AllowInsecure {
 			return nil, errors.New("disallow using Trojan without any certificates/shadow-tls/res-tls/jls/reality/ss/allow-insecure config")
 		}
-		sl.listeners = append(sl.listeners, l)
+		if httpServer.Handler != nil {
+			l = &closeOnceListener{Listener: l}
+		}
+		sl.listeners[listenerIndex] = l
 
 		go func() {
 			if httpServer.Handler != nil {
@@ -225,13 +259,13 @@ func New(config LC.TrojanServer, lc C.InboundListenConfig, tunnel C.Tunnel, addi
 			for {
 				c, err := l.Accept()
 				if err != nil {
-					if sl.closed {
+					if created.closed.Load() {
 						break
 					}
 					continue
 				}
 
-				go sl.HandleConn(c, tunnel, additions...)
+				go created.HandleConn(c, tunnel, additions...)
 			}
 		}()
 	}
@@ -240,15 +274,20 @@ func New(config LC.TrojanServer, lc C.InboundListenConfig, tunnel C.Tunnel, addi
 }
 
 func (l *Listener) Close() error {
-	l.closed = true
-	var retErr error
-	for _, lis := range l.listeners {
-		err := lis.Close()
-		if err != nil {
-			retErr = err
+	l.closeOnce.Do(func() {
+		l.closed.Store(true)
+		if l.httpServer != nil {
+			if err := l.httpServer.Close(); err != nil {
+				l.closeErr = errors.Join(l.closeErr, err)
+			}
 		}
-	}
-	return retErr
+		for _, lis := range l.listeners {
+			if err := lis.Close(); err != nil {
+				l.closeErr = errors.Join(l.closeErr, err)
+			}
+		}
+	})
+	return l.closeErr
 }
 
 func (l *Listener) Config() string {

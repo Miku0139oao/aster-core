@@ -12,12 +12,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/metacubex/mihomo/common/buf"
-	"github.com/metacubex/mihomo/common/pool"
-	"github.com/metacubex/mihomo/constant"
-	"github.com/metacubex/mihomo/log"
-	"github.com/metacubex/mihomo/transport/anytls/padding"
-	"github.com/metacubex/mihomo/transport/anytls/util"
+	"github.com/Miku0139oao/aster-core/common/buf"
+	"github.com/Miku0139oao/aster-core/common/pool"
+	"github.com/Miku0139oao/aster-core/constant"
+	"github.com/Miku0139oao/aster-core/log"
+	"github.com/Miku0139oao/aster-core/transport/anytls/padding"
+	"github.com/Miku0139oao/aster-core/transport/anytls/util"
 )
 
 type Session struct {

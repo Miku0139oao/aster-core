@@ -3,10 +3,10 @@ package inbound
 import (
 	"strings"
 
-	C "github.com/metacubex/mihomo/constant"
-	LC "github.com/metacubex/mihomo/listener/config"
-	"github.com/metacubex/mihomo/listener/trojan"
-	"github.com/metacubex/mihomo/log"
+	C "github.com/Miku0139oao/aster-core/constant"
+	LC "github.com/Miku0139oao/aster-core/listener/config"
+	"github.com/Miku0139oao/aster-core/listener/trojan"
+	"github.com/Miku0139oao/aster-core/log"
 )
 
 type TrojanOption struct {
@@ -110,18 +110,23 @@ func (v *Trojan) Address() string {
 
 // Listen implements constant.InboundListener
 func (v *Trojan) Listen(tunnel C.Tunnel) error {
-	var err error
-	v.l, err = trojan.New(v.vs, v.ListenConfig(), tunnel, v.Additions()...)
+	l, err := trojan.New(v.vs, v.ListenConfig(), tunnel, v.Additions()...)
 	if err != nil {
 		return err
 	}
+	v.l = l
 	log.Infoln("Trojan[%s] proxy listening at: %s", v.Name(), v.Address())
 	return nil
 }
 
 // Close implements constant.InboundListener
 func (v *Trojan) Close() error {
-	return v.l.Close()
+	l := v.l
+	v.l = nil
+	if l == nil {
+		return nil
+	}
+	return l.Close()
 }
 
 var _ C.InboundListener = (*Trojan)(nil)

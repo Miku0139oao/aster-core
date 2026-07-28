@@ -1,7 +1,7 @@
 package geodata
 
 import (
-	"github.com/metacubex/mihomo/component/geodata/router"
+	"github.com/Miku0139oao/aster-core/component/geodata/router"
 )
 
 type LoaderImplementation interface {

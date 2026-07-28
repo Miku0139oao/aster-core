@@ -9,13 +9,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/metacubex/mihomo/common/atomic"
-	"github.com/metacubex/mihomo/common/queue"
-	"github.com/metacubex/mihomo/common/utils"
-	"github.com/metacubex/mihomo/common/xsync"
-	"github.com/metacubex/mihomo/component/ca"
-	C "github.com/metacubex/mihomo/constant"
-	"github.com/metacubex/mihomo/log"
+	"github.com/Miku0139oao/aster-core/common/atomic"
+	"github.com/Miku0139oao/aster-core/common/queue"
+	"github.com/Miku0139oao/aster-core/common/utils"
+	"github.com/Miku0139oao/aster-core/common/xsync"
+	"github.com/Miku0139oao/aster-core/component/ca"
+	C "github.com/Miku0139oao/aster-core/constant"
+	"github.com/Miku0139oao/aster-core/log"
 
 	"github.com/metacubex/http"
 )

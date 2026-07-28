@@ -6,11 +6,11 @@ import (
 	"net/netip"
 	"strings"
 
-	"github.com/metacubex/mihomo/component/geodata"
-	"github.com/metacubex/mihomo/component/geodata/router"
-	"github.com/metacubex/mihomo/component/mmdb"
-	C "github.com/metacubex/mihomo/constant"
-	"github.com/metacubex/mihomo/log"
+	"github.com/Miku0139oao/aster-core/component/geodata"
+	"github.com/Miku0139oao/aster-core/component/geodata/router"
+	"github.com/Miku0139oao/aster-core/component/mmdb"
+	C "github.com/Miku0139oao/aster-core/constant"
+	"github.com/Miku0139oao/aster-core/log"
 
 	"golang.org/x/exp/slices"
 )

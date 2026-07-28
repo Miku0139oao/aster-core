@@ -5,7 +5,7 @@ import (
 	"encoding/base64"
 	"io"
 
-	"github.com/metacubex/mihomo/component/resolver"
+	"github.com/Miku0139oao/aster-core/component/resolver"
 
 	"github.com/metacubex/chi/render"
 	"github.com/metacubex/http"

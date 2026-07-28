@@ -5,8 +5,8 @@ import (
 	"encoding/base64"
 	"fmt"
 
-	"github.com/metacubex/mihomo/component/ech"
-	"github.com/metacubex/mihomo/component/resolver"
+	"github.com/Miku0139oao/aster-core/component/ech"
+	"github.com/Miku0139oao/aster-core/component/resolver"
 )
 
 type ECHOptions struct {

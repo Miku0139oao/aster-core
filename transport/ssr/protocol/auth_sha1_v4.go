@@ -7,9 +7,9 @@ import (
 	"hash/crc32"
 	"net"
 
-	N "github.com/metacubex/mihomo/common/net"
-	"github.com/metacubex/mihomo/common/pool"
-	"github.com/metacubex/mihomo/transport/ssr/tools"
+	N "github.com/Miku0139oao/aster-core/common/net"
+	"github.com/Miku0139oao/aster-core/common/pool"
+	"github.com/Miku0139oao/aster-core/transport/ssr/tools"
 
 	"github.com/metacubex/randv2"
 )

@@ -7,7 +7,7 @@ import (
 	"io"
 	"net"
 
-	"github.com/metacubex/mihomo/common/pool"
+	"github.com/Miku0139oao/aster-core/common/pool"
 )
 
 const (

@@ -4,7 +4,7 @@ import (
 	"context"
 	"net"
 
-	C "github.com/metacubex/mihomo/constant"
+	C "github.com/Miku0139oao/aster-core/constant"
 
 	"github.com/metacubex/http"
 	"github.com/metacubex/http/httptrace"

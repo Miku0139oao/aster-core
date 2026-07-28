@@ -3,19 +3,23 @@ package shadowsocks
 import (
 	"context"
 	"net"
+	"sync"
+	"sync/atomic"
 
-	"github.com/metacubex/mihomo/adapter/inbound"
-	N "github.com/metacubex/mihomo/common/net"
-	"github.com/metacubex/mihomo/common/sockopt"
-	C "github.com/metacubex/mihomo/constant"
-	"github.com/metacubex/mihomo/log"
-	"github.com/metacubex/mihomo/transport/shadowsocks/core"
-	"github.com/metacubex/mihomo/transport/socks5"
+	"github.com/Miku0139oao/aster-core/adapter/inbound"
+	N "github.com/Miku0139oao/aster-core/common/net"
+	"github.com/Miku0139oao/aster-core/common/sockopt"
+	C "github.com/Miku0139oao/aster-core/constant"
+	"github.com/Miku0139oao/aster-core/log"
+	"github.com/Miku0139oao/aster-core/transport/shadowsocks/core"
+	"github.com/Miku0139oao/aster-core/transport/socks5"
 )
 
 type UDPListener struct {
 	packetConn net.PacketConn
-	closed     bool
+	closed     atomic.Bool
+	closeOnce  sync.Once
+	closeErr   error
 }
 
 func NewUDP(addr string, lc C.InboundListenConfig, pickCipher core.Cipher, tunnel C.Tunnel, additions ...inbound.Addition) (*UDPListener, error) {
@@ -28,7 +32,7 @@ func NewUDP(addr string, lc C.InboundListenConfig, pickCipher core.Cipher, tunne
 		log.Warnln("Failed to Reuse UDP Address: %s", err)
 	}
 
-	sl := &UDPListener{l, false}
+	sl := &UDPListener{packetConn: l}
 	conn := pickCipher.PacketConn(N.NewEnhancePacketConn(l))
 	go func() {
 		for {
@@ -37,7 +41,7 @@ func NewUDP(addr string, lc C.InboundListenConfig, pickCipher core.Cipher, tunne
 				if put != nil {
 					put()
 				}
-				if sl.closed {
+				if sl.closed.Load() {
 					break
 				}
 				continue
@@ -50,8 +54,11 @@ func NewUDP(addr string, lc C.InboundListenConfig, pickCipher core.Cipher, tunne
 }
 
 func (l *UDPListener) Close() error {
-	l.closed = true
-	return l.packetConn.Close()
+	l.closeOnce.Do(func() {
+		l.closed.Store(true)
+		l.closeErr = l.packetConn.Close()
+	})
+	return l.closeErr
 }
 
 func (l *UDPListener) LocalAddr() net.Addr {

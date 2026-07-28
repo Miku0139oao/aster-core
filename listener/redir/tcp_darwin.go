@@ -5,7 +5,7 @@ import (
 	"syscall"
 	"unsafe"
 
-	"github.com/metacubex/mihomo/transport/socks5"
+	"github.com/Miku0139oao/aster-core/transport/socks5"
 )
 
 func parserPacket(c net.Conn) (socks5.Addr, error) {

@@ -7,7 +7,7 @@ import (
 	"net/netip"
 	"testing"
 
-	"github.com/metacubex/mihomo/constant"
+	"github.com/Miku0139oao/aster-core/constant"
 	"github.com/stretchr/testify/assert"
 )
 

@@ -4,8 +4,8 @@ import (
 	"net"
 	"sync"
 
-	"github.com/metacubex/mihomo/common/buf"
-	"github.com/metacubex/mihomo/common/once"
+	"github.com/Miku0139oao/aster-core/common/buf"
+	"github.com/Miku0139oao/aster-core/common/once"
 )
 
 type earlyConn struct {

@@ -6,8 +6,8 @@ import (
 	"net"
 	"strconv"
 
-	C "github.com/metacubex/mihomo/constant"
-	"github.com/metacubex/mihomo/transport/gost"
+	C "github.com/Miku0139oao/aster-core/constant"
+	"github.com/Miku0139oao/aster-core/transport/gost"
 )
 
 type GostRelay struct {

@@ -1,6 +1,6 @@
 package config
 
-import "github.com/metacubex/mihomo/transport/kcptun"
+import "github.com/Miku0139oao/aster-core/transport/kcptun"
 
 type KcpTun struct {
 	Enable        bool `json:"enable"`

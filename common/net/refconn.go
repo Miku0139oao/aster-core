@@ -5,7 +5,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/metacubex/mihomo/common/buf"
+	"github.com/Miku0139oao/aster-core/common/buf"
 )
 
 type refConn struct {

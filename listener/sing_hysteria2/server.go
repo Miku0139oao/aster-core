@@ -8,21 +8,22 @@ import (
 	"net/netip"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/metacubex/mihomo/adapter/inbound"
-	"github.com/metacubex/mihomo/common/sockopt"
-	"github.com/metacubex/mihomo/common/utils"
-	"github.com/metacubex/mihomo/component/ca"
-	"github.com/metacubex/mihomo/component/ech"
-	"github.com/metacubex/mihomo/component/resolver"
-	C "github.com/metacubex/mihomo/constant"
-	LC "github.com/metacubex/mihomo/listener/config"
-	"github.com/metacubex/mihomo/listener/inner"
-	"github.com/metacubex/mihomo/listener/sing"
-	"github.com/metacubex/mihomo/log"
-	"github.com/metacubex/mihomo/ntp"
-	"github.com/metacubex/mihomo/transport/tuic/common"
+	"github.com/Miku0139oao/aster-core/adapter/inbound"
+	"github.com/Miku0139oao/aster-core/common/sockopt"
+	"github.com/Miku0139oao/aster-core/common/utils"
+	"github.com/Miku0139oao/aster-core/component/ca"
+	"github.com/Miku0139oao/aster-core/component/ech"
+	"github.com/Miku0139oao/aster-core/component/resolver"
+	C "github.com/Miku0139oao/aster-core/constant"
+	LC "github.com/Miku0139oao/aster-core/listener/config"
+	"github.com/Miku0139oao/aster-core/listener/inner"
+	"github.com/Miku0139oao/aster-core/listener/sing"
+	"github.com/Miku0139oao/aster-core/log"
+	"github.com/Miku0139oao/aster-core/ntp"
+	"github.com/Miku0139oao/aster-core/transport/tuic/common"
 
 	"github.com/metacubex/http"
 	"github.com/metacubex/http/httputil"
@@ -38,11 +39,11 @@ type Listener struct {
 	config       LC.Hysteria2Server
 	udpListeners []net.PacketConn
 	services     []*hysteria2.Service[string]
+	closeOnce    sync.Once
+	closeErr     error
 }
 
-func New(config LC.Hysteria2Server, lc C.InboundListenConfig, tunnel C.Tunnel, additions ...inbound.Addition) (*Listener, error) {
-	var sl *Listener
-	var err error
+func New(config LC.Hysteria2Server, lc C.InboundListenConfig, tunnel C.Tunnel, additions ...inbound.Addition) (sl *Listener, err error) {
 	if len(additions) == 0 {
 		additions = []inbound.Addition{
 			inbound.WithInName("DEFAULT-HYSTERIA2"),
@@ -60,7 +61,7 @@ func New(config LC.Hysteria2Server, lc C.InboundListenConfig, tunnel C.Tunnel, a
 		return nil, err
 	}
 
-	sl = &Listener{false, config, nil, nil}
+	sl = &Listener{config: config}
 
 	tlsConfig := &tls.Config{
 		Time:       ntp.Now,
@@ -213,7 +214,7 @@ func New(config LC.Hysteria2Server, lc C.InboundListenConfig, tunnel C.Tunnel, a
 		MaxConnectionReceiveWindow:     config.MaxConnectionReceiveWindow,
 	}
 
-	service, err := hysteria2.NewService[string](hysteria2.ServiceOptions{
+	serviceOptions := hysteria2.ServiceOptions{
 		Context:               context.Background(),
 		Logger:                log.SingLogger,
 		SendBPS:               utils.StringToBps(config.Up),
@@ -233,10 +234,15 @@ func New(config LC.Hysteria2Server, lc C.InboundListenConfig, tunnel C.Tunnel, a
 		SetBBRCongestion: func(quicConn *quic.Conn) {
 			common.SetCongestionController(quicConn, "bbr", config.CWND, config.BBRProfile)
 		},
-	})
-	if err != nil {
-		return nil, err
 	}
+	created := sl
+	defer func() {
+		if err != nil {
+			if closeErr := created.Close(); closeErr != nil {
+				err = errors.Join(err, closeErr)
+			}
+		}
+	}()
 
 	userNameList := make([]string, 0, len(config.Users))
 	userPasswordList := make([]string, 0, len(config.Users))
@@ -244,12 +250,8 @@ func New(config LC.Hysteria2Server, lc C.InboundListenConfig, tunnel C.Tunnel, a
 		userNameList = append(userNameList, name)
 		userPasswordList = append(userPasswordList, password)
 	}
-	service.UpdateUsers(userNameList, userPasswordList)
-
 	for _, addr := range strings.Split(config.Listen, ",") {
 		addr := addr
-		_service := *service
-		service := &_service // make a copy
 
 		ul, err := lc.ListenPacket(context.Background(), "udp", addr)
 		if err != nil {
@@ -261,32 +263,36 @@ func New(config LC.Hysteria2Server, lc C.InboundListenConfig, tunnel C.Tunnel, a
 		}
 
 		sl.udpListeners = append(sl.udpListeners, ul)
+		service, err := hysteria2.NewService[string](serviceOptions)
+		if err != nil {
+			return nil, err
+		}
+		service.UpdateUsers(userNameList, userPasswordList)
 		sl.services = append(sl.services, service)
 
-		go func() {
-			_ = service.Start(ul)
-		}()
+		if err = service.Start(ul); err != nil {
+			return nil, err
+		}
 	}
 
 	return sl, nil
 }
 
 func (l *Listener) Close() error {
-	l.closed = true
-	var retErr error
-	for _, service := range l.services {
-		err := service.Close()
-		if err != nil {
-			retErr = err
+	l.closeOnce.Do(func() {
+		l.closed = true
+		for _, service := range l.services {
+			if err := service.Close(); err != nil {
+				l.closeErr = errors.Join(l.closeErr, err)
+			}
 		}
-	}
-	for _, lis := range l.udpListeners {
-		err := lis.Close()
-		if err != nil {
-			retErr = err
+		for _, lis := range l.udpListeners {
+			if err := lis.Close(); err != nil {
+				l.closeErr = errors.Join(l.closeErr, err)
+			}
 		}
-	}
-	return retErr
+	})
+	return l.closeErr
 }
 
 func (l *Listener) Config() string {

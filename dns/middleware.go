@@ -5,12 +5,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/metacubex/mihomo/common/lru"
-	"github.com/metacubex/mihomo/component/fakeip"
-	"github.com/metacubex/mihomo/component/resolver"
-	C "github.com/metacubex/mihomo/constant"
-	icontext "github.com/metacubex/mihomo/context"
-	"github.com/metacubex/mihomo/log"
+	"github.com/Miku0139oao/aster-core/common/lru"
+	"github.com/Miku0139oao/aster-core/component/fakeip"
+	"github.com/Miku0139oao/aster-core/component/resolver"
+	C "github.com/Miku0139oao/aster-core/constant"
+	icontext "github.com/Miku0139oao/aster-core/context"
+	"github.com/Miku0139oao/aster-core/log"
 
 	D "github.com/miekg/dns"
 )

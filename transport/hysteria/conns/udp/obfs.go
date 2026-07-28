@@ -1,7 +1,7 @@
 package udp
 
 import (
-	"github.com/metacubex/mihomo/transport/hysteria/obfs"
+	"github.com/Miku0139oao/aster-core/transport/hysteria/obfs"
 	"net"
 	"sync"
 	"time"

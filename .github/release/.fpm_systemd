@@ -1,18 +1,21 @@
 -s dir
---name mihomo
+--name aster-core
 --category net
 --license GPL-3.0-or-later
---description "The universal proxy platform."
---url "https://wiki.metacubex.one/"
---maintainer "MetaCubeX <none@example.com>"
---deb-field "Bug: https://github.com/MetaCubeX/mihomo/issues"
+--description "Aster Core universal proxy platform."
+--url "https://github.com/Miku0139oao/aster-core"
+--maintainer "Aster Core maintainers"
+--deb-field "Bug: https://github.com/Miku0139oao/aster-core/issues"
 --no-deb-generate-changes
+--conflicts mihomo
+--replaces mihomo
+--provides mihomo
 --config-files /etc/mihomo/config.yaml
 
 .github/release/config.yaml=/etc/mihomo/config.yaml
 
-.github/release/mihomo.service=/usr/lib/systemd/system/mihomo.service
-.github/release/mihomo@.service=/usr/lib/systemd/system/mihomo@.service
+.github/release/aster-core.service=/usr/lib/systemd/system/aster-core.service
+.github/release/aster-core@.service=/usr/lib/systemd/system/aster-core@.service
 
 
-LICENSE=/usr/share/licenses/mihomo/LICENSE
+LICENSE=/usr/share/licenses/aster-core/LICENSE

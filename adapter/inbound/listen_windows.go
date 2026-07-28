@@ -10,9 +10,8 @@ import (
 
 const SupportNamedPipe = true
 
-// windowsSDDL is the Security Descriptor set on the namedpipe.
-// It provides read/write access to all users and the local system.
-const windowsSDDL = "D:PAI(A;OICI;GWGR;;;BU)(A;OICI;GWGR;;;SY)"
+// windowsSDDL limits the pipe to its owner, administrators, and local system.
+const windowsSDDL = "D:P(A;;GA;;;OW)(A;;GA;;;BA)(A;;GA;;;SY)"
 
 func ListenNamedPipe(path string) (net.Listener, error) {
 	sddl := os.Getenv("LISTEN_NAMEDPIPE_SDDL")

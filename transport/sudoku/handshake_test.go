@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	sudokuobfs "github.com/metacubex/mihomo/transport/sudoku/obfs/sudoku"
+	sudokuobfs "github.com/Miku0139oao/aster-core/transport/sudoku/obfs/sudoku"
 )
 
 func TestPackedConnRoundTrip_WithPadding(t *testing.T) {

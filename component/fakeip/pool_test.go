@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/metacubex/mihomo/component/profile/cachefile"
+	"github.com/Miku0139oao/aster-core/component/profile/cachefile"
 
 	"github.com/metacubex/bbolt"
 	"github.com/stretchr/testify/assert"

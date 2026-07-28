@@ -3,10 +3,10 @@ package rules
 import (
 	"fmt"
 
-	C "github.com/metacubex/mihomo/constant"
-	RC "github.com/metacubex/mihomo/rules/common"
-	"github.com/metacubex/mihomo/rules/logic"
-	RP "github.com/metacubex/mihomo/rules/provider"
+	C "github.com/Miku0139oao/aster-core/constant"
+	RC "github.com/Miku0139oao/aster-core/rules/common"
+	"github.com/Miku0139oao/aster-core/rules/logic"
+	RP "github.com/Miku0139oao/aster-core/rules/provider"
 )
 
 func ParseRule(tp, payload, target string, params []string, subRules map[string][]C.Rule) (parsed C.Rule, parseErr error) {

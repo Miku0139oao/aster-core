@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/metacubex/mihomo/tunnel/statistic"
+	"github.com/Miku0139oao/aster-core/tunnel/statistic"
 
 	"github.com/metacubex/chi"
 	"github.com/metacubex/chi/render"

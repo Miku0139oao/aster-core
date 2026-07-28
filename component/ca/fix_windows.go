@@ -1,7 +1,7 @@
 package ca
 
 import (
-	"github.com/metacubex/mihomo/constant/features"
+	"github.com/Miku0139oao/aster-core/constant/features"
 )
 
 func init() {

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	C "github.com/metacubex/mihomo/constant"
-	"github.com/metacubex/mihomo/log"
+	C "github.com/Miku0139oao/aster-core/constant"
+	"github.com/Miku0139oao/aster-core/log"
 )
 
 // Init prepare necessary files

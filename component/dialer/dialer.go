@@ -12,10 +12,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/metacubex/mihomo/common/atomic"
-	"github.com/metacubex/mihomo/component/keepalive"
-	"github.com/metacubex/mihomo/component/mptcp"
-	"github.com/metacubex/mihomo/component/resolver"
+	"github.com/Miku0139oao/aster-core/common/atomic"
+	"github.com/Miku0139oao/aster-core/component/keepalive"
+	"github.com/Miku0139oao/aster-core/component/mptcp"
+	"github.com/Miku0139oao/aster-core/component/resolver"
 )
 
 const (

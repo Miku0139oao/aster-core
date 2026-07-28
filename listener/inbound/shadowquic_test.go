@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/metacubex/mihomo/adapter/outbound"
-	C "github.com/metacubex/mihomo/constant"
-	"github.com/metacubex/mihomo/listener/inbound"
+	"github.com/Miku0139oao/aster-core/adapter/outbound"
+	C "github.com/Miku0139oao/aster-core/constant"
+	"github.com/Miku0139oao/aster-core/listener/inbound"
 
 	"github.com/metacubex/jls-quic-go"
 	"github.com/stretchr/testify/assert"

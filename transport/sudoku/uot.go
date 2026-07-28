@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/metacubex/mihomo/log"
+	"github.com/Miku0139oao/aster-core/log"
 )
 
 const (

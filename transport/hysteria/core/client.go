@@ -7,16 +7,16 @@ import (
 	"net"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/metacubex/mihomo/transport/hysteria/obfs"
-	"github.com/metacubex/mihomo/transport/hysteria/pmtud_fix"
-	"github.com/metacubex/mihomo/transport/hysteria/transport"
-	"github.com/metacubex/mihomo/transport/hysteria/utils"
+	"github.com/Miku0139oao/aster-core/transport/hysteria/obfs"
+	"github.com/Miku0139oao/aster-core/transport/hysteria/pmtud_fix"
+	"github.com/Miku0139oao/aster-core/transport/hysteria/transport"
+	"github.com/Miku0139oao/aster-core/transport/hysteria/utils"
 
 	"github.com/metacubex/quic-go"
 	"github.com/metacubex/quic-go/congestion"
-	"github.com/metacubex/randv2"
 	"github.com/metacubex/tls"
 )
 
@@ -45,7 +45,6 @@ type Client struct {
 
 	udpSessionMutex sync.RWMutex
 	udpSessionMap   map[uint32]chan *udpMessage
-	udpDefragger    defragger
 	hopInterval     time.Duration
 	fastOpen        bool
 }
@@ -95,8 +94,11 @@ func (c *Client) connectToServer(dialer utils.PacketDialer) error {
 		return fmt.Errorf("auth error: %s", msg)
 	}
 	// All good
-	c.udpSessionMap = make(map[uint32]chan *udpMessage)
-	go c.handleMessage(qs)
+	sessionMap := make(map[uint32]chan *udpMessage)
+	c.udpSessionMutex.Lock()
+	c.udpSessionMap = sessionMap
+	c.udpSessionMutex.Unlock()
+	go c.handleMessage(qs, sessionMap)
 	c.quicSession = qs
 	return nil
 }
@@ -123,7 +125,8 @@ func (c *Client) handleControlStream(qs *quic.Conn, stream *quic.Stream) (bool, 
 	return sh.OK, sh.Message, nil
 }
 
-func (c *Client) handleMessage(qs *quic.Conn) {
+func (c *Client) handleMessage(qs *quic.Conn, sessionMap map[uint32]chan *udpMessage) {
+	var udpDefragger defragger
 	for {
 		msg, err := qs.ReceiveDatagram(context.Background())
 		if err != nil {
@@ -134,12 +137,12 @@ func (c *Client) handleMessage(qs *quic.Conn) {
 		if err != nil {
 			continue
 		}
-		dfMsg := c.udpDefragger.Feed(udpMsg)
+		dfMsg := udpDefragger.Feed(udpMsg)
 		if dfMsg == nil {
 			continue
 		}
 		c.udpSessionMutex.RLock()
-		ch, ok := c.udpSessionMap[dfMsg.SessionID]
+		ch, ok := sessionMap[dfMsg.SessionID]
 		if ok {
 			select {
 			case ch <- dfMsg:
@@ -230,7 +233,7 @@ func (c *Client) DialUDP(dialer utils.PacketDialer) (UDPConn, error) {
 	}
 	// Send request
 	err = WriteClientRequest(stream, ClientRequest{
-		UDP: false,
+		UDP: true,
 	})
 	if err != nil {
 		_ = stream.Close()
@@ -355,6 +358,7 @@ type quicPktConn struct {
 	CloseFunc    func()
 	UDPSessionID uint32
 	MsgCh        <-chan *udpMessage
+	nextMsgID    atomic.Uint32
 }
 
 func (c *quicPktConn) Hold() {
@@ -396,8 +400,14 @@ func (c *quicPktConn) WriteTo(p []byte, addr string) error {
 		var errSize *quic.DatagramTooLargeError
 		if errors.As(err, &errSize) {
 			// need to frag
-			msg.MsgID = uint16(randv2.IntN(0xFFFF)) + 1 // msgID must be > 0 when fragCount > 1
+			msg.MsgID = uint16(c.nextMsgID.Add(1))
+			if msg.MsgID == 0 {
+				msg.MsgID = uint16(c.nextMsgID.Add(1))
+			}
 			fragMsgs := fragUDPMessage(msg, int(errSize.MaxDatagramPayloadSize))
+			if len(fragMsgs) == 0 {
+				return err
+			}
 			for _, fragMsg := range fragMsgs {
 				err = c.Session.SendDatagram(fragMsg.Pack())
 				if err != nil {

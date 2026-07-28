@@ -3,8 +3,8 @@ package shadowquic
 import (
 	"time"
 
-	"github.com/metacubex/mihomo/transport/tuic/congestion"
-	congestionv2 "github.com/metacubex/mihomo/transport/tuic/congestion_v2"
+	"github.com/Miku0139oao/aster-core/transport/tuic/congestion"
+	congestionv2 "github.com/Miku0139oao/aster-core/transport/tuic/congestion_v2"
 
 	"github.com/metacubex/jls-quic-go"
 	jcongestion "github.com/metacubex/jls-quic-go/congestion"

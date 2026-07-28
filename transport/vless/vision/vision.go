@@ -12,10 +12,10 @@ import (
 	"reflect"
 	"unsafe"
 
-	N "github.com/metacubex/mihomo/common/net"
-	tlsC "github.com/metacubex/mihomo/component/tls"
-	"github.com/metacubex/mihomo/log"
-	"github.com/metacubex/mihomo/transport/vless/encryption"
+	N "github.com/Miku0139oao/aster-core/common/net"
+	tlsC "github.com/Miku0139oao/aster-core/component/tls"
+	"github.com/Miku0139oao/aster-core/log"
+	"github.com/Miku0139oao/aster-core/transport/vless/encryption"
 
 	"github.com/gofrs/uuid/v5"
 	"github.com/metacubex/tls"

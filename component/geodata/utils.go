@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/metacubex/mihomo/common/singleflight"
-	"github.com/metacubex/mihomo/component/geodata/router"
-	C "github.com/metacubex/mihomo/constant"
-	"github.com/metacubex/mihomo/log"
+	"github.com/Miku0139oao/aster-core/common/singleflight"
+	"github.com/Miku0139oao/aster-core/component/geodata/router"
+	C "github.com/Miku0139oao/aster-core/constant"
+	"github.com/Miku0139oao/aster-core/log"
 )
 
 var (

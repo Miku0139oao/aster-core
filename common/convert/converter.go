@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/metacubex/mihomo/log"
+	"github.com/Miku0139oao/aster-core/log"
 )
 
 // ConvertsV2Ray convert V2Ray subscribe proxies data to mihomo proxies config
@@ -635,6 +635,21 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 			anytls["fingerprint"] = fingerprint
 			anytls["skip-cert-verify"] = insecureBool
 			anytls["udp"] = true
+			if query.Get("security") == "reality" {
+				publicKey := query.Get("pbk")
+				if publicKey == "" {
+					continue
+				}
+				anytls["reality-opts"] = map[string]any{
+					"public-key": publicKey,
+					"short-id":   query.Get("sid"),
+				}
+				clientFingerprint := query.Get("fp")
+				if clientFingerprint == "" {
+					clientFingerprint = "chrome"
+				}
+				anytls["client-fingerprint"] = clientFingerprint
+			}
 
 			proxies = append(proxies, anytls)
 

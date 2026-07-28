@@ -1,6 +1,6 @@
 #!/bin/sh
-os="mihomo-linux-"
-case $TARGETPLATFORM in
+os="aster-core-linux-"
+case "$TARGETPLATFORM" in
     "linux/amd64")
         arch="amd64-v1"
         ;;
@@ -19,7 +19,7 @@ case $TARGETPLATFORM in
     *)
         echo "Unknown architecture"
         exit 1
-        ;;        
+        ;;
 esac
 file_name="$os$arch-$(cat bin/version.txt)"
-echo $file_name
+printf '%s\n' "$file_name"

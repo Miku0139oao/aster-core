@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"strings"
 
-	C "github.com/metacubex/mihomo/constant"
-	LC "github.com/metacubex/mihomo/listener/config"
-	"github.com/metacubex/mihomo/listener/socks"
-	"github.com/metacubex/mihomo/log"
+	C "github.com/Miku0139oao/aster-core/constant"
+	LC "github.com/Miku0139oao/aster-core/listener/config"
+	"github.com/Miku0139oao/aster-core/listener/socks"
+	"github.com/Miku0139oao/aster-core/log"
 )
 
 type SocksOption struct {
@@ -54,14 +54,20 @@ func (s *Socks) Config() C.InboundConfig {
 
 // Close implements constant.InboundListener
 func (s *Socks) Close() error {
+	tcpListeners, udpListeners := s.stl, s.sul
+	s.stl, s.sul = nil, nil
+	return closeSocksListeners(tcpListeners, udpListeners)
+}
+
+func closeSocksListeners(tcpListeners []*socks.Listener, udpListeners []*socks.UDPListener) error {
 	var errs []error
-	for _, l := range s.stl {
+	for _, l := range tcpListeners {
 		err := l.Close()
 		if err != nil {
 			errs = append(errs, fmt.Errorf("close tcp listener %s err: %w", l.Address(), err))
 		}
 	}
-	for _, l := range s.sul {
+	for _, l := range udpListeners {
 		err := l.Close()
 		if err != nil {
 			errs = append(errs, fmt.Errorf("close udp listener %s err: %w", l.Address(), err))
@@ -85,6 +91,8 @@ func (s *Socks) Address() string {
 // Listen implements constant.InboundListener
 func (s *Socks) Listen(tunnel C.Tunnel) error {
 	lc := s.ListenConfig()
+	tcpListeners := make([]*socks.Listener, 0, len(strings.Split(s.RawAddress(), ",")))
+	udpListeners := make([]*socks.UDPListener, 0, len(strings.Split(s.RawAddress(), ",")))
 	for _, addr := range strings.Split(s.RawAddress(), ",") {
 		config := LC.AuthServer{
 			Enable:         true,
@@ -99,17 +107,19 @@ func (s *Socks) Listen(tunnel C.Tunnel) error {
 		}
 		stl, err := socks.NewWithConfig(config, lc, tunnel, s.Additions()...)
 		if err != nil {
-			return err
+			return errors.Join(err, closeSocksListeners(tcpListeners, udpListeners))
 		}
-		s.stl = append(s.stl, stl)
+		tcpListeners = append(tcpListeners, stl)
 		if s.udp {
 			sul, err := socks.NewUDPWithConfig(config, lc, tunnel, s.Additions()...)
 			if err != nil {
-				return err
+				return errors.Join(err, closeSocksListeners(tcpListeners, udpListeners))
 			}
-			s.sul = append(s.sul, sul)
+			udpListeners = append(udpListeners, sul)
 		}
 	}
+	s.stl = tcpListeners
+	s.sul = udpListeners
 
 	log.Infoln("SOCKS[%s] proxy listening at: %s", s.Name(), s.Address())
 	return nil

@@ -3,8 +3,8 @@ package fakeip
 import (
 	"testing"
 
-	"github.com/metacubex/mihomo/component/trie"
-	C "github.com/metacubex/mihomo/constant"
+	"github.com/Miku0139oao/aster-core/component/trie"
+	C "github.com/Miku0139oao/aster-core/constant"
 
 	"github.com/stretchr/testify/assert"
 )

@@ -5,8 +5,8 @@ import (
 	"net"
 	"net/netip"
 
-	"github.com/metacubex/mihomo/component/slowdown"
-	C "github.com/metacubex/mihomo/constant"
+	"github.com/Miku0139oao/aster-core/component/slowdown"
+	C "github.com/Miku0139oao/aster-core/constant"
 )
 
 type SlowDownDialer struct {

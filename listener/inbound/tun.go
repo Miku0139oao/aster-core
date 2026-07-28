@@ -4,10 +4,10 @@ import (
 	"encoding"
 	"net/netip"
 
-	C "github.com/metacubex/mihomo/constant"
-	LC "github.com/metacubex/mihomo/listener/config"
-	"github.com/metacubex/mihomo/listener/sing_tun"
-	"github.com/metacubex/mihomo/log"
+	C "github.com/Miku0139oao/aster-core/constant"
+	LC "github.com/Miku0139oao/aster-core/listener/config"
+	"github.com/Miku0139oao/aster-core/listener/sing_tun"
+	"github.com/Miku0139oao/aster-core/log"
 )
 
 type TunOption struct {
@@ -152,6 +152,9 @@ func (t *Tun) Config() C.InboundConfig {
 
 // Address implements constant.InboundListener
 func (t *Tun) Address() string {
+	if t.l == nil {
+		return ""
+	}
 	return t.l.Address()
 }
 
@@ -168,7 +171,12 @@ func (t *Tun) Listen(tunnel C.Tunnel) error {
 
 // Close implements constant.InboundListener
 func (t *Tun) Close() error {
-	return t.l.Close()
+	l := t.l
+	t.l = nil
+	if l == nil {
+		return nil
+	}
+	return l.Close()
 }
 
 var _ C.InboundListener = (*Tun)(nil)

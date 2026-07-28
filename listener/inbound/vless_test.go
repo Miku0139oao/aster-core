@@ -5,9 +5,9 @@ import (
 	"net/netip"
 	"testing"
 
-	"github.com/metacubex/mihomo/adapter/outbound"
-	"github.com/metacubex/mihomo/listener/inbound"
-	"github.com/metacubex/mihomo/transport/vless/encryption"
+	"github.com/Miku0139oao/aster-core/adapter/outbound"
+	"github.com/Miku0139oao/aster-core/listener/inbound"
+	"github.com/Miku0139oao/aster-core/transport/vless/encryption"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -33,7 +33,9 @@ func testInboundVless(t *testing.T, inboundOptions inbound.VlessOption, outbound
 	if !assert.NoError(t, err) {
 		return
 	}
-	defer in.Close()
+	defer func() {
+		assert.NoError(t, in.Close())
+	}()
 
 	addrPort, err := netip.ParseAddrPort(in.Address())
 	if !assert.NoError(t, err) {

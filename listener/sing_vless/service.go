@@ -5,12 +5,16 @@ package sing_vless
 import (
 	"context"
 	"encoding/binary"
+	"errors"
+	"fmt"
 	"io"
 	"net"
+	"sync"
+	"sync/atomic"
 
-	"github.com/metacubex/mihomo/common/utils"
-	"github.com/metacubex/mihomo/transport/vless"
-	"github.com/metacubex/mihomo/transport/vless/vision"
+	"github.com/Miku0139oao/aster-core/common/utils"
+	"github.com/Miku0139oao/aster-core/transport/vless"
+	"github.com/Miku0139oao/aster-core/transport/vless/vision"
 
 	"github.com/gofrs/uuid/v5"
 	"github.com/metacubex/sing-vmess"
@@ -24,9 +28,21 @@ import (
 )
 
 type Service[T comparable] struct {
-	userMap  map[[16]byte]T
-	userFlow map[T]string
-	handler  Handler
+	users       atomic.Pointer[userSnapshot[T]]
+	usersMu     sync.Mutex
+	closed      atomic.Bool
+	pending     sync.Map
+	connections sync.Map
+	handler     Handler
+}
+
+type userSnapshot[T comparable] struct {
+	byUUID map[[16]byte]userCredential[T]
+}
+
+type userCredential[T comparable] struct {
+	user T
+	flow string
 }
 
 type Handler interface {
@@ -36,26 +52,125 @@ type Handler interface {
 }
 
 func NewService[T comparable](handler Handler) *Service[T] {
-	return &Service[T]{
+	service := &Service[T]{
 		handler: handler,
+	}
+	service.users.Store(&userSnapshot[T]{byUUID: map[[16]byte]userCredential[T]{}})
+	return service
+}
+
+func (s *Service[T]) UpdateUsers(userList []T, userUUIDList []string, userFlowList []string) error {
+	if len(userList) != len(userUUIDList) || len(userList) != len(userFlowList) {
+		return errors.New("VLESS user, UUID, and flow lists must have equal lengths")
+	}
+	userMap := make(map[[16]byte]userCredential[T], len(userList))
+	for i, userName := range userList {
+		userID := utils.UUIDMap(userUUIDList[i])
+		if _, exists := userMap[userID]; exists {
+			return fmt.Errorf("duplicate VLESS UUID: %s", userUUIDList[i])
+		}
+		userMap[userID] = userCredential[T]{user: userName, flow: userFlowList[i]}
+	}
+	s.usersMu.Lock()
+	if s.closed.Load() {
+		s.usersMu.Unlock()
+		return net.ErrClosed
+	}
+	snapshot := &userSnapshot[T]{byUUID: userMap}
+	s.users.Store(snapshot)
+	pendingConnections := s.removePendingConnectionsLocked()
+	invalidConnections := s.removeInvalidConnectionsLocked(snapshot)
+	s.usersMu.Unlock()
+	closeNetConnections(pendingConnections)
+	closeNetConnections(invalidConnections)
+	return nil
+}
+
+func (s *Service[T]) Close() {
+	s.usersMu.Lock()
+	s.closed.Store(true)
+	snapshot := &userSnapshot[T]{byUUID: map[[16]byte]userCredential[T]{}}
+	s.users.Store(snapshot)
+	pendingConnections := s.removePendingConnectionsLocked()
+	activeConnections := s.removeInvalidConnectionsLocked(snapshot)
+	s.usersMu.Unlock()
+	closeNetConnections(pendingConnections)
+	closeNetConnections(activeConnections)
+}
+
+type pendingConnection struct {
+	conn net.Conn
+}
+
+type activeConnection[T comparable] struct {
+	conn       net.Conn
+	uuid       [16]byte
+	credential userCredential[T]
+}
+
+func (s *Service[T]) CloseConnections() {
+	s.usersMu.Lock()
+	connections := s.removeInvalidConnectionsLocked(&userSnapshot[T]{byUUID: map[[16]byte]userCredential[T]{}})
+	s.usersMu.Unlock()
+	closeNetConnections(connections)
+}
+
+func (s *Service[T]) removePendingConnectionsLocked() (connections []net.Conn) {
+	s.pending.Range(func(key, _ any) bool {
+		s.pending.Delete(key)
+		connections = append(connections, key.(*pendingConnection).conn)
+		return true
+	})
+	return connections
+}
+
+func (s *Service[T]) removeInvalidConnectionsLocked(snapshot *userSnapshot[T]) (connections []net.Conn) {
+	s.connections.Range(func(key, _ any) bool {
+		active := key.(*activeConnection[T])
+		credential, valid := snapshot.byUUID[active.uuid]
+		if valid && credential == active.credential {
+			return true
+		}
+		s.connections.Delete(key)
+		connections = append(connections, active.conn)
+		return true
+	})
+	return connections
+}
+
+func closeNetConnections(connections []net.Conn) {
+	for _, conn := range connections {
+		_ = conn.Close()
 	}
 }
 
-func (s *Service[T]) UpdateUsers(userList []T, userUUIDList []string, userFlowList []string) {
-	userMap := make(map[[16]byte]T)
-	userFlowMap := make(map[T]string)
-	for i, userName := range userList {
-		userID := utils.UUIDMap(userUUIDList[i])
-		userMap[userID] = userName
-		userFlowMap[userName] = userFlowList[i]
+func (s *Service[T]) trackPendingConnection(conn net.Conn) (*pendingConnection, error) {
+	s.usersMu.Lock()
+	defer s.usersMu.Unlock()
+	if s.closed.Load() {
+		return nil, net.ErrClosed
 	}
-	s.userMap = userMap
-	s.userFlow = userFlowMap
+	pending := &pendingConnection{conn: conn}
+	s.pending.Store(pending, struct{}{})
+	return pending, nil
+}
+
+func (s *Service[T]) untrackPendingConnection(pending *pendingConnection) {
+	s.pending.Delete(pending)
 }
 
 var _ N.TCPConnectionHandler = (*Service[int])(nil)
 
 func (s *Service[T]) NewConnection(ctx context.Context, conn net.Conn, metadata M.Metadata) error {
+	pending, err := s.trackPendingConnection(conn)
+	if err != nil {
+		return err
+	}
+	defer s.untrackPendingConnection(pending)
+	return s.newConnection(ctx, conn, metadata, pending)
+}
+
+func (s *Service[T]) newConnection(ctx context.Context, conn net.Conn, metadata M.Metadata, pending *pendingConnection) error {
 	var version uint8
 	err := binary.Read(conn, binary.BigEndian, &version)
 	if err != nil {
@@ -105,14 +220,15 @@ func (s *Service[T]) NewConnection(ctx context.Context, conn net.Conn, metadata 
 		}
 	}
 
-	user, loaded := s.userMap[requestUUID]
+	snapshot := s.users.Load()
+	credential, loaded := snapshot.byUUID[requestUUID]
 	if !loaded {
 		return E.New("unknown UUID: ", uuid.FromBytesOrNil(requestUUID[:]))
 	}
-	ctx = auth.ContextWithUser(ctx, user)
+	ctx = auth.ContextWithUser(ctx, credential.user)
 	metadata.Destination = destination
 
-	userFlow := s.userFlow[user]
+	userFlow := credential.flow
 	requestFlow := addons.Flow
 	if requestFlow != userFlow && requestFlow != "" {
 		return E.New("flow mismatch: expected ", flowName(userFlow), ", but got ", flowName(requestFlow))
@@ -130,6 +246,19 @@ func (s *Service[T]) NewConnection(ctx context.Context, conn net.Conn, metadata 
 	default:
 		return E.New("unknown flow: ", requestFlow)
 	}
+	s.usersMu.Lock()
+	currentCredential, valid := s.users.Load().byUUID[requestUUID]
+	_, pendingActive := s.pending.Load(pending)
+	if s.closed.Load() || !pendingActive || !valid || currentCredential != credential {
+		s.usersMu.Unlock()
+		_ = pending.conn.Close()
+		return errors.New("VLESS credentials changed during authentication")
+	}
+	s.pending.Delete(pending)
+	active := &activeConnection[T]{conn: pending.conn, uuid: requestUUID, credential: credential}
+	s.connections.Store(active, struct{}{})
+	s.usersMu.Unlock()
+	defer s.connections.Delete(active)
 	switch command {
 	case vless.CommandTCP:
 		return s.handler.NewConnection(ctx, conn, metadata)

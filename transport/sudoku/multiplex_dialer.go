@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/metacubex/mihomo/common/contextutils"
+	"github.com/Miku0139oao/aster-core/common/contextutils"
 )
 
 type MultiplexBaseDialer func(context.Context) (net.Conn, error)

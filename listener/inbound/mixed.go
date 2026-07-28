@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"strings"
 
-	C "github.com/metacubex/mihomo/constant"
-	LC "github.com/metacubex/mihomo/listener/config"
-	"github.com/metacubex/mihomo/listener/mixed"
-	"github.com/metacubex/mihomo/listener/socks"
-	"github.com/metacubex/mihomo/log"
+	C "github.com/Miku0139oao/aster-core/constant"
+	LC "github.com/Miku0139oao/aster-core/listener/config"
+	"github.com/Miku0139oao/aster-core/listener/mixed"
+	"github.com/Miku0139oao/aster-core/listener/socks"
+	"github.com/Miku0139oao/aster-core/log"
 )
 
 type MixedOption struct {
@@ -65,6 +65,8 @@ func (m *Mixed) Address() string {
 // Listen implements constant.InboundListener
 func (m *Mixed) Listen(tunnel C.Tunnel) error {
 	lc := m.ListenConfig()
+	listeners := make([]*mixed.Listener, 0, len(strings.Split(m.RawAddress(), ",")))
+	udpListeners := make([]*socks.UDPListener, 0, len(strings.Split(m.RawAddress(), ",")))
 	for _, addr := range strings.Split(m.RawAddress(), ",") {
 		config := LC.AuthServer{
 			Enable:         true,
@@ -79,31 +81,39 @@ func (m *Mixed) Listen(tunnel C.Tunnel) error {
 		}
 		l, err := mixed.NewWithConfig(config, lc, tunnel, m.Additions()...)
 		if err != nil {
-			return err
+			return errors.Join(err, closeMixedListeners(listeners, udpListeners))
 		}
-		m.l = append(m.l, l)
+		listeners = append(listeners, l)
 		if m.udp {
 			lUDP, err := socks.NewUDPWithConfig(config, lc, tunnel, m.Additions()...)
 			if err != nil {
-				return err
+				return errors.Join(err, closeMixedListeners(listeners, udpListeners))
 			}
-			m.lUDP = append(m.lUDP, lUDP)
+			udpListeners = append(udpListeners, lUDP)
 		}
 	}
+	m.l = listeners
+	m.lUDP = udpListeners
 	log.Infoln("Mixed(http+socks)[%s] proxy listening at: %s", m.Name(), m.Address())
 	return nil
 }
 
 // Close implements constant.InboundListener
 func (m *Mixed) Close() error {
+	listeners, udpListeners := m.l, m.lUDP
+	m.l, m.lUDP = nil, nil
+	return closeMixedListeners(listeners, udpListeners)
+}
+
+func closeMixedListeners(listeners []*mixed.Listener, udpListeners []*socks.UDPListener) error {
 	var errs []error
-	for _, l := range m.l {
+	for _, l := range listeners {
 		err := l.Close()
 		if err != nil {
 			errs = append(errs, fmt.Errorf("close tcp listener %s err: %w", l.Address(), err))
 		}
 	}
-	for _, l := range m.lUDP {
+	for _, l := range udpListeners {
 		err := l.Close()
 		if err != nil {
 			errs = append(errs, fmt.Errorf("close udp listener %s err: %w", l.Address(), err))

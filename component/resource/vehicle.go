@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/metacubex/mihomo/common/utils"
-	mihomoHttp "github.com/metacubex/mihomo/component/http"
-	"github.com/metacubex/mihomo/component/profile/cachefile"
-	P "github.com/metacubex/mihomo/constant/provider"
+	"github.com/Miku0139oao/aster-core/common/utils"
+	mihomoHttp "github.com/Miku0139oao/aster-core/component/http"
+	"github.com/Miku0139oao/aster-core/component/profile/cachefile"
+	P "github.com/Miku0139oao/aster-core/constant/provider"
 
 	"github.com/metacubex/http"
 )

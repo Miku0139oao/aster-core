@@ -1,8 +1,8 @@
 package inbound
 
 import (
-	"github.com/metacubex/mihomo/component/auth"
-	authStore "github.com/metacubex/mihomo/listener/auth"
+	"github.com/Miku0139oao/aster-core/component/auth"
+	authStore "github.com/Miku0139oao/aster-core/listener/auth"
 )
 
 type AuthUser struct {

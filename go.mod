@@ -1,4 +1,4 @@
-module github.com/metacubex/mihomo
+module github.com/Miku0139oao/aster-core
 
 go 1.20
 
@@ -22,7 +22,7 @@ require (
 	github.com/metacubex/edwards25519 v1.2.0
 	github.com/metacubex/fswatch v0.1.1
 	github.com/metacubex/gopacket v1.1.20-0.20230608035415-7e2f98a3e759
-	github.com/metacubex/http v0.1.6
+	github.com/metacubex/http v0.1.7
 	github.com/metacubex/jls-quic-go v0.0.0-20260717074316-85a8decdd355
 	github.com/metacubex/jls-tls v0.0.0-20260716145614-4bf88db633e2
 	github.com/metacubex/kcp-go v0.0.0-20260105040817-550693377604
@@ -58,6 +58,7 @@ require (
 	gitlab.com/go-extension/aes-ccm v0.0.0-20230221065045-e58665ef23c7
 	go.uber.org/automaxprocs v1.6.0
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba
+	golang.org/x/mod v0.20.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -142,7 +143,6 @@ require (
 	github.com/x448/float16 v0.8.4 // indirect
 	gitlab.com/yawning/bsaes.git v0.0.0-20190805113838-0a714cd429ec // indirect
 	go4.org/mem v0.0.0-20240501181205-ae6ca9944745 // indirect
-	golang.org/x/mod v0.20.0 // indirect
 	golang.org/x/oauth2 v0.24.0 // indirect
 	golang.org/x/term v0.29.0 // indirect
 	golang.org/x/text v0.22.0 // indirect

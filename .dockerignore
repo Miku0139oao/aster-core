@@ -1,0 +1,10 @@
+**
+!Dockerfile
+!docker/
+!docker/file-name.sh
+!bin/
+!bin/version.txt
+!bin/aster-core-linux-386-*.gz
+!bin/aster-core-linux-amd64-v1-*.gz
+!bin/aster-core-linux-arm64-*.gz
+!bin/aster-core-linux-armv7-*.gz

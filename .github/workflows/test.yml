@@ -6,12 +6,13 @@ on:
       - "README.md"
       - ".github/ISSUE_TEMPLATE/**"
     branches:
-      - Alpha
-    tags:
-      - "v*"
+      - main
   pull_request:
     branches:
-      - Alpha
+      - main
+
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -45,12 +46,11 @@ jobs:
       # Skip mihomo inbound interop test
       SKIP_INTEROP_TEST: 1
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Set up Go
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
         with:
-          go-download-base-url: 'https://github.com/MetaCubeX/go/releases/download/build'
           go-version: ${{ matrix.go-version }}
 
       - name: Verify Go installation

@@ -6,8 +6,8 @@ import (
 	"net"
 	"sync"
 
-	"github.com/metacubex/mihomo/component/ca"
-	tlsC "github.com/metacubex/mihomo/component/tls"
+	"github.com/Miku0139oao/aster-core/component/ca"
+	tlsC "github.com/Miku0139oao/aster-core/component/tls"
 
 	"github.com/metacubex/tls"
 )

@@ -16,12 +16,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/metacubex/mihomo/common/buf"
-	"github.com/metacubex/mihomo/common/httputils"
-	"github.com/metacubex/mihomo/common/pool"
-	tlsC "github.com/metacubex/mihomo/component/tls"
-	C "github.com/metacubex/mihomo/constant"
-	"github.com/metacubex/mihomo/transport/vmess"
+	"github.com/Miku0139oao/aster-core/common/buf"
+	"github.com/Miku0139oao/aster-core/common/httputils"
+	"github.com/Miku0139oao/aster-core/common/pool"
+	tlsC "github.com/Miku0139oao/aster-core/component/tls"
+	C "github.com/Miku0139oao/aster-core/constant"
+	"github.com/Miku0139oao/aster-core/transport/vmess"
 
 	"github.com/metacubex/http"
 )

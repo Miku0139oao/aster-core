@@ -5,10 +5,10 @@ import (
 	"net"
 	"strconv"
 
-	N "github.com/metacubex/mihomo/common/net"
-	C "github.com/metacubex/mihomo/constant"
-	"github.com/metacubex/mihomo/transport/trusttunnel"
-	"github.com/metacubex/mihomo/transport/vmess"
+	N "github.com/Miku0139oao/aster-core/common/net"
+	C "github.com/Miku0139oao/aster-core/constant"
+	"github.com/Miku0139oao/aster-core/transport/trusttunnel"
+	"github.com/Miku0139oao/aster-core/transport/vmess"
 )
 
 type TrustTunnel struct {

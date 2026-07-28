@@ -8,7 +8,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/metacubex/mihomo/common/pool"
+	"github.com/Miku0139oao/aster-core/common/pool"
 )
 
 type TLSObfsServer struct {

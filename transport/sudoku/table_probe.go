@@ -10,8 +10,8 @@ import (
 	"net"
 	"time"
 
-	"github.com/metacubex/mihomo/transport/sudoku/crypto"
-	"github.com/metacubex/mihomo/transport/sudoku/obfs/sudoku"
+	"github.com/Miku0139oao/aster-core/transport/sudoku/crypto"
+	"github.com/Miku0139oao/aster-core/transport/sudoku/obfs/sudoku"
 )
 
 type clientTableChoice struct {

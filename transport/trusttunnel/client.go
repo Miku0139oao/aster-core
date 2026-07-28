@@ -11,11 +11,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/metacubex/mihomo/common/httputils"
-	"github.com/metacubex/mihomo/common/once"
-	"github.com/metacubex/mihomo/component/dialer"
-	C "github.com/metacubex/mihomo/constant"
-	"github.com/metacubex/mihomo/transport/vmess"
+	"github.com/Miku0139oao/aster-core/common/httputils"
+	"github.com/Miku0139oao/aster-core/common/once"
+	"github.com/Miku0139oao/aster-core/component/dialer"
+	C "github.com/Miku0139oao/aster-core/constant"
+	"github.com/Miku0139oao/aster-core/transport/vmess"
 
 	"github.com/metacubex/http"
 	"golang.org/x/exp/slices"

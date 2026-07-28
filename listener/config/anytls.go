@@ -2,6 +2,8 @@ package config
 
 import (
 	"encoding/json"
+
+	"github.com/Miku0139oao/aster-core/listener/reality"
 )
 
 type AnyTLSServer struct {
@@ -16,6 +18,7 @@ type AnyTLSServer struct {
 	ShadowTLS      ShadowTLS         `yaml:"shadow-tls" json:"shadow-tls,omitempty"`
 	ResTLS         ResTLS            `yaml:"res-tls" json:"res-tls,omitempty"`
 	JLSConfig      JLSConfig         `yaml:"jls-config" json:"jls-config,omitempty"`
+	RealityConfig  reality.Config    `yaml:"reality-config" json:"reality-config,omitempty"`
 	AllowInsecure  bool              `yaml:"allow-insecure" json:"allow-insecure,omitempty"`
 	PaddingScheme  string            `yaml:"padding-scheme" json:"padding-scheme,omitempty"`
 }

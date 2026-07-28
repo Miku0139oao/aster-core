@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/metacubex/mihomo/common/httputils"
-	"github.com/metacubex/mihomo/component/ca"
-	tlsC "github.com/metacubex/mihomo/component/tls"
-	"github.com/metacubex/mihomo/transport/mkcp"
+	"github.com/Miku0139oao/aster-core/common/httputils"
+	"github.com/Miku0139oao/aster-core/component/ca"
+	tlsC "github.com/Miku0139oao/aster-core/component/tls"
+	"github.com/Miku0139oao/aster-core/transport/mkcp"
 
 	"github.com/metacubex/http"
 	"github.com/metacubex/tls"

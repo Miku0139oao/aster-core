@@ -1,7 +1,7 @@
-NAME=mihomo
+NAME=aster-core
 BINDIR=bin
 BRANCH=$(shell git branch --show-current)
-ifeq ($(BRANCH),Alpha)
+ifeq ($(BRANCH),main)
 VERSION=alpha-$(shell git rev-parse --short HEAD)
 else ifeq ($(BRANCH),Beta)
 VERSION=beta-$(shell git rev-parse --short HEAD)
@@ -12,12 +12,13 @@ VERSION=$(shell git rev-parse --short HEAD)
 endif
 
 BUILDTIME=$(shell date -u)
-GOBUILD=CGO_ENABLED=0 go build -tags with_gvisor -trimpath -ldflags '-X "github.com/metacubex/mihomo/constant.Version=$(VERSION)" \
-		-X "github.com/metacubex/mihomo/constant.BuildTime=$(BUILDTIME)" \
+release_asset=$(if $(filter android-arm64,$1),$(NAME)-android-arm64-v8,$(if $(filter linux-loong64,$1),$(NAME)-linux-loong64-abi2,$(NAME)-$1))
+GOBUILD=CGO_ENABLED=0 go build -tags with_gvisor -trimpath -ldflags '-X "github.com/Miku0139oao/aster-core/constant.Version=$(VERSION)" \
+		-X "github.com/Miku0139oao/aster-core/constant.BuildTime=$(BUILDTIME)" \
+		-X "github.com/Miku0139oao/aster-core/constant.ReleaseAsset=$(if $(filter docker,$@),,$(call release_asset,$@))" \
 		-w -s -buildid='
 
 PLATFORM_LIST = \
-	darwin-386 \
 	darwin-amd64-compatible \
 	darwin-amd64 \
 	darwin-amd64-v1 \
@@ -64,11 +65,13 @@ all:linux-amd64-v3 linux-arm64\
 
 darwin-all: darwin-amd64-v3 darwin-arm64
 
+$(BINDIR):
+	mkdir -p $(BINDIR)
+
+docker $(PLATFORM_LIST) $(WINDOWS_ARCH_LIST): | $(BINDIR)
+
 docker:
 	GOAMD64=v1 $(GOBUILD) -o $(BINDIR)/$(NAME)-$@
-
-darwin-386:
-	GOARCH=386 GOOS=darwin $(GOBUILD) -o $(BINDIR)/$(NAME)-$@
 
 darwin-amd64-compatible:
 	GOARCH=amd64 GOOS=darwin GOAMD64=v1 $(GOBUILD) -o $(BINDIR)/$(NAME)-$@
@@ -199,7 +202,7 @@ lint:
 	golangci-lint run ./...
 
 clean:
-	rm $(BINDIR)/*
+	rm -f $(BINDIR)/*
 
 CLANG ?= clang-14
 CFLAGS := -O2 -g -Wall -Werror $(CFLAGS)

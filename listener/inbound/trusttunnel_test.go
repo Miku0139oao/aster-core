@@ -4,8 +4,8 @@ import (
 	"net/netip"
 	"testing"
 
-	"github.com/metacubex/mihomo/adapter/outbound"
-	"github.com/metacubex/mihomo/listener/inbound"
+	"github.com/Miku0139oao/aster-core/adapter/outbound"
+	"github.com/Miku0139oao/aster-core/listener/inbound"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -30,7 +30,9 @@ func testInboundTrustTunnel(t *testing.T, inboundOptions inbound.TrustTunnelOpti
 	if !assert.NoError(t, err) {
 		return
 	}
-	defer in.Close()
+	defer func() {
+		assert.NoError(t, in.Close())
+	}()
 
 	addrPort, err := netip.ParseAddrPort(in.Address())
 	if !assert.NoError(t, err) {
@@ -111,4 +113,17 @@ func TestInboundTrustTunnel_H2(t *testing.T) {
 
 func TestInboundTrustTunnel_QUIC(t *testing.T) {
 	testInboundTrustTunnelTLS(t, true)
+}
+
+func TestInboundTrustTunnelFailedListenCanClose(t *testing.T) {
+	in, err := inbound.NewTrustTunnel(&inbound.TrustTunnelOption{BaseOption: inbound.BaseOption{
+		NameStr: "trusttunnel_inbound",
+		Listen:  "127.0.0.1",
+		Port:    "0",
+	}})
+	assert.NoError(t, err)
+	tunnel := NewHttpTestTunnel()
+	defer tunnel.Close()
+	assert.Error(t, in.Listen(tunnel))
+	assert.NoError(t, in.Close())
 }

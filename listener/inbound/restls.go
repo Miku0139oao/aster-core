@@ -1,7 +1,7 @@
 package inbound
 
 import (
-	LC "github.com/metacubex/mihomo/listener/config"
+	LC "github.com/Miku0139oao/aster-core/listener/config"
 )
 
 type ResTLS struct {

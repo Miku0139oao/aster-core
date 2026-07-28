@@ -5,10 +5,10 @@ import (
 	"io"
 	"net/netip"
 
-	"github.com/metacubex/mihomo/component/cidr"
-	C "github.com/metacubex/mihomo/constant"
-	P "github.com/metacubex/mihomo/constant/provider"
-	"github.com/metacubex/mihomo/log"
+	"github.com/Miku0139oao/aster-core/component/cidr"
+	C "github.com/Miku0139oao/aster-core/constant"
+	P "github.com/Miku0139oao/aster-core/constant/provider"
+	"github.com/Miku0139oao/aster-core/log"
 
 	"go4.org/netipx"
 )
