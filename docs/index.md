@@ -3,8 +3,8 @@ layout: home
 
 hero:
   name: Aster Core
-  text: 客戶端優先，建立在 Mihomo 之上
-  tagline: 連接 Xray、sing-box、SideraCore 節點，並提供 AnyTLS + REALITY、Mihomo 問題修正、效能優化、DNS、規則分流與 TUN。
+  text: 以客戶端為主，簡單連接你的代理節點
+  tagline: 支援 Xray、sing-box、SideraCore 節點和 AnyTLS + REALITY，保留 Mihomo 用法並改善穩定性與效能。
   image:
     src: /logo.png
     alt: Aster Core
@@ -82,13 +82,3 @@ Aster Core 主要安裝在你的電腦、路由器或閘道上。它連接 Xray�
 - **想直接用起來**：從[實戰教學](/tutorials/)開始，照著範例填入自己的節點資料。
 - **不知道某個欄位是什麼**：使用[設定總覽](/reference/configuration)、[接收連線](/reference/inbounds)、[遠端節點](/reference/outbounds)及[規則與 DNS](/reference/routing-dns)。
 - **想知道為什麼選 Aster**：閱讀[Aster 跟 Mihomo 有什麼不同](/reference/mihomo-differences)。
-
-## 版本基線
-
-- Aster module：`github.com/Miku0139oao/aster-core`
-- Mihomo 基線：`v1.19.29`
-- 上游 commit：`e26714a181ac0e2fa803453c0a8e9a9ce94e31cb`
-- 最低 Go：1.20
-- 授權：GPL-3.0
-
-來源與同步政策請參閱 repository 的 [NOTICE.md](https://github.com/Miku0139oao/aster-core/blob/main/NOTICE.md) 與 [UPSTREAM.md](https://github.com/Miku0139oao/aster-core/blob/main/UPSTREAM.md)。
