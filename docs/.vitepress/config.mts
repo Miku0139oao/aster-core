@@ -11,6 +11,9 @@ export default defineConfig({
   title: "Aster Core",
   description: "Aster Core 繁體中文使用、設定、管理與部署文件",
   base,
+  sitemap: {
+    hostname: "https://astercore.fubukishop.app",
+  },
   cleanUrls: true,
   lastUpdated: true,
   appearance: true,

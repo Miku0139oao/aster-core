@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <strong>English</strong> · <a href="README.zh-TW.md">繁體中文</a> · <a href="docs/index.md">Documentation</a>
+  <strong>English</strong> · <a href="README.zh-TW.md">繁體中文</a> · <a href="https://astercore.fubukishop.app/">Documentation</a>
 </p>
 
 <p align="center">
@@ -158,7 +158,7 @@ The full configuration surface is documented in [docs/config.yaml](docs/config.y
 
 ## Documentation site
 
-The repository now includes a searchable Traditional Chinese VitePress site under [`docs/`](docs/index.md). It separates inherited Mihomo behavior from Aster-specific changes and covers configuration, inbounds, outbounds, routing, DNS, the Aster API, security, deployment, architecture, testing, and troubleshooting.
+The searchable Traditional Chinese documentation is published at [astercore.fubukishop.app](https://astercore.fubukishop.app/), with its VitePress source kept under [`docs/`](docs/index.md). It separates inherited Mihomo behavior from Aster-specific changes and covers configuration, inbounds, outbounds, routing, DNS, the Aster API, security, deployment, architecture, testing, and troubleshooting.
 
 ```sh
 cd docs

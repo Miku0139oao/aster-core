@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="README.md">English</a> · <strong>繁體中文</strong> · <a href="docs/index.md">完整文件</a>
+  <a href="README.md">English</a> · <strong>繁體中文</strong> · <a href="https://astercore.fubukishop.app/">完整文件</a>
 </p>
 
 <p align="center">
@@ -154,11 +154,11 @@ anytls://<password>@proxy.example.com:443?security=reality&sni=www.microsoft.com
 | Controller | HTTP、HTTPS、Unix socket、Windows named pipe |
 | 路由輸入 | 網域、suffix、keyword、regex、wildcard、GeoIP、GeoSite、IP/CIDR、IP suffix、ASN、程序、UID、連接埠、DSCP、入站、網路類型、rule set、邏輯規則 |
 
-完整設定範例位於 [docs/config.yaml](docs/config.yaml)，敘述式參考文件請從[文件首頁](docs/index.md)開始。
+完整設定範例位於 [docs/config.yaml](docs/config.yaml)，敘述式參考文件請從[線上文件首頁](https://astercore.fubukishop.app/)開始。
 
 ## 文件站
 
-Repository 的 [`docs/`](docs/index.md) 已擴充成可全文搜尋的繁體中文 VitePress 文件站，並清楚區分 Mihomo 繼承行為與 Aster 自有變動。內容包含設定、入站、出站、規則、DNS、Aster API、安全、部署、架構、測試與疑難排解。
+可全文搜尋的繁體中文 VitePress 文件站已發布於 [astercore.fubukishop.app](https://astercore.fubukishop.app/)，原始檔保留在 repository 的 [`docs/`](docs/index.md)。文件清楚區分 Mihomo 繼承行為與 Aster 自有變動，內容包含設定、入站、出站、規則、DNS、Aster API、安全、部署、架構、測試與疑難排解。
 
 ```sh
 cd docs
