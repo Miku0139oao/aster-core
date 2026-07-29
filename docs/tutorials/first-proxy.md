@@ -1,18 +1,17 @@
-# 第一個代理設定：從安裝到 `curl` 驗證
+# 第一個代理設定
 
-這篇教學會建立一份可實際啟動的 Aster Core 用戶端設定，內容包含：
+這篇教學會從下載開始，帶你完成一個可以使用的 Aster Core 客戶端。完成後，瀏覽器或其他程式可以透過 `127.0.0.1:7890` 使用代理。
 
-- Mixed HTTP／SOCKS5 本機代理。
-- 一個 AnyTLS + REALITY 出站。
-- 可手動切換的 `select` 代理群組。
-- 由上而下比對的路由規則。
-- fake-IP DNS 與代理節點專用 DNS。
-- 設定檢查、啟動、Controller 與 `curl` 驗證。
+你會完成：
 
-完成後，瀏覽器或命令列程式可把 `127.0.0.1:7890` 當成 HTTP 或 SOCKS5 proxy 使用。
+- 填入一個 AnyTLS + REALITY 遠端節點。
+- 啟動本機 HTTP／SOCKS5 代理。
+- 在「使用代理」和「直接連線」之間切換。
+- 設定基本路由規則和 DNS。
+- 用一條指令確認代理真的有作用。
 
 ::: warning 範例不附可用節點
-本文中的主機、密碼、REALITY public key、SNI 與 short ID 全是 placeholder。Aster Core 不會替你提供代理伺服器；必須先取得自己部署或服務供應者提供的完整連線資料，逐項替換後才能連線。
+本文中的主機、密碼、REALITY public key、SNI 與 short ID 全是 placeholder。Aster Core 是客戶端，不會替你提供代理伺服器；必須先取得 Xray、sing-box、SideraCore、自建服務端或服務供應者提供的完整連線資料，逐項替換後才能連線。
 :::
 
 ## 前置條件
@@ -25,13 +24,13 @@
 
 | 本文 placeholder | 應填內容 |
 | --- | --- |
-| `<ASTER_SERVER_HOST_OR_IP>` | Aster／AnyTLS 伺服器的 IP 或網域；不是偽裝站網域 |
-| `443` | AnyTLS listener 實際連接埠；不是 443 就要修改 |
-| `<ANYTLS_PASSWORD>` | 伺服器 `users` 中分配給你的密碼 |
-| `<REALITY_SNI_FROM_SERVER>` | 伺服器 `reality-config.server-names` 允許的名稱 |
-| `<REALITY_PUBLIC_KEY>` | 伺服器 REALITY key pair 的 public key |
-| `<REALITY_SHORT_ID>` | 伺服器允許的 short ID；若伺服器未設定才可省略 |
-| `<CONTROLLER_SECRET>` | 你自己新產生的 Controller 密碼 |
+| `<ASTER_SERVER_HOST_OR_IP>` | AnyTLS 節點／服務端的 IP 或網域；不是偽裝站網域 |
+| `443` | 節點連接埠；服務端提供的不是 443 就要修改 |
+| `<ANYTLS_PASSWORD>` | 服務端提供的 AnyTLS 密碼 |
+| `<REALITY_SNI_FROM_SERVER>` | 服務端提供的偽裝網站名稱 |
+| `<REALITY_PUBLIC_KEY>` | 服務端提供的 REALITY 公開金鑰 |
+| `<REALITY_SHORT_ID>` | 服務端提供的 short ID；沒有提供時才省略 |
+| `<CONTROLLER_SECRET>` | 你自己設定的本機控制密碼 |
 
 若服務提供者給的是 `anytls://` URI，可依下列方式映射：
 
@@ -39,7 +38,7 @@
 anytls://<password>@<server>:<port>?security=reality&sni=<sni>&fp=chrome&pbk=<public-key>&sid=<short-id>
 ```
 
-不要把正式密碼、private key 或 Controller secret 貼到 issue、聊天記錄或 Git repository。
+不要把正式密碼、private key（私鑰）或本機控制密碼貼到公開 issue、聊天記錄或 Git repository。
 
 ## 1. 下載與安裝 Aster Core
 
@@ -415,7 +414,7 @@ curl -fsS \
 
 依序核對：
 
-1. `server` 與 `port` 是 Aster listener，不是偽裝站。
+1. `server` 與 `port` 是 AnyTLS 節點／服務端，不是偽裝站。
 2. `sni` 完全匹配服務端 `server-names`。
 3. `public-key` 是對應 private key 的 public key。
 4. `short-id` 是服務端允許值。

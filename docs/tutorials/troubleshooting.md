@@ -94,7 +94,7 @@ df -h
 df -i
 ```
 
-把網域換成實際 Aster server hostname。磁碟空間或 inode 用盡會讓 state、cache、provider 與 log 寫入失敗。
+把網域換成實際節點／服務端 hostname。磁碟空間或 inode 用盡會讓 state、cache、provider 與 log 寫入失敗。
 
 ## 症狀：`-t` 失敗
 

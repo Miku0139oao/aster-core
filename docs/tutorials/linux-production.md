@@ -1,6 +1,10 @@
 # Debian／Ubuntu VPS 生產部署
 
-本篇從 GitHub Release 的 Linux binary asset 開始，建立一套可驗證、使用專用帳號、由 systemd 管理，而且能安全更新與回退的 Aster Core 服務。範例以 AnyTLS + REALITY server 為主；若你只部署本機代理，可依實際用途移除公開 listener 與低連接埠 capability。
+::: warning 可選的 Aster 服務端部署
+Aster Core 的主要用途是客戶端；一般節點服務端使用 Xray、sing-box 或 SideraCore。只有在測試、全 Aster 環境或確實需要 Aster listener／管理 API 時，才需要本篇 VPS 流程。一般桌面、路由器或閘道客戶端請先看[第一個代理設定](/tutorials/first-proxy)。
+:::
+
+本篇從 GitHub Release 的 Linux binary asset 開始，建立一套可驗證、使用專用帳號、由 systemd 管理，而且能安全更新與回退的可選 Aster Core 服務端。範例以 AnyTLS + REALITY listener 為主。
 
 以下有兩種安裝模式，請選一種，不要交叉混用路徑或 unit：
 

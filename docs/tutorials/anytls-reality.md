@@ -1,22 +1,112 @@
-# 從零部署 AnyTLS + REALITY
+# AnyTLS + REALITY 客戶端實戰
 
-本篇會完成一個可實際連線的 Aster AnyTLS + REALITY 節點：
+Aster Core 的主要角色是客戶端。一般情況下，Xray、sing-box、SideraCore 或服務商負責提供遠端節點；你只要把節點資料填入 Aster。
 
 ```text
-Client app
-   │ HTTP / SOCKS / local DNS
+瀏覽器或 App
+   │
    ▼
+Aster Core
+   │ AnyTLS + REALITY
+   ▼
+遠端代理節點
+   │
+   ▼
+網際網路
+```
+
+服務端不一定使用 Aster。請向服務端或面板取得實際連線資料，不要直接複製 Xray 或 sing-box 的整份設定。
+
+## 主要路線：連接現有服務端
+
+先取得以下資料：
+
+| 你需要的資料 | 怎麼辨認 |
+| --- | --- |
+| 節點網址（`server`） | 你真正要連線的 IP 或網域，不是偽裝網站 |
+| 連接埠（`port`） | 常見是 `443`，以服務端提供的數字為準 |
+| 密碼（`password`） | 服務端分配給你的 AnyTLS 密碼 |
+| 偽裝網站（`sni`） | 看起來像一般網站的網域名稱 |
+| 瀏覽器指紋（`client-fingerprint`） | 不確定時先用 `chrome` |
+| 公開金鑰（`public-key`） | 服務端提供的 public key；絕對不要填 private key |
+| short ID | 服務端提供的一小段英數字；沒有提供時才省略 |
+
+若拿到的是以 `anytls://` 開頭的分享連結，可直接使用支援 Aster 格式的 App 匯入。若要手動設定，把下面內容儲存成 `config.yaml`，再替換所有 `<...>`：
+
+```yaml
+mixed-port: 7890
+allow-lan: false
+mode: rule
+log-level: info
+
+external-controller: 127.0.0.1:9090
+secret: "<CONTROLLER_SECRET>"
+
+proxies:
+  - name: anytls-reality
+    type: anytls
+    server: "<SERVER_HOST_OR_IP>"
+    port: 443
+    password: "<ANYTLS_PASSWORD>"
+    sni: "<REALITY_SNI>"
+    client-fingerprint: chrome
+    reality-opts:
+      public-key: "<REALITY_PUBLIC_KEY>"
+      short-id: "<REALITY_SHORT_ID>"
+    udp: true
+
+proxy-groups:
+  - name: PROXY
+    type: select
+    proxies:
+      - anytls-reality
+      - DIRECT
+
+rules:
+  - MATCH,PROXY
+```
+
+先檢查設定有沒有打錯。看到成功訊息後，再啟動：
+
+```sh
+aster-core -d ./aster-client -f ./aster-client/config.yaml -t
+aster-core -d ./aster-client -f ./aster-client/config.yaml
+```
+
+另開一個命令列視窗，測試是否能透過 Aster 開啟網站：
+
+```sh
+curl --proxy http://127.0.0.1:7890 https://www.cloudflare.com/cdn-cgi/trace
+```
+
+看到文字結果，而且沒有連線錯誤，代表基本連線成功。
+
+服務端提供的分享連結可能長這樣：
+
+```text
+anytls://<password>@proxy.example.com:443?security=reality&sni=www.microsoft.com&fp=chrome&pbk=<public-key>&sid=<short-id>#AnyTLS-REALITY
+```
+
+手動填寫時，`pbk` 是公開金鑰、`sid` 是 short ID、`fp` 是瀏覽器指紋。需要更完整的下載、啟動與測試說明，請閱讀[第一個代理設定](/tutorials/first-proxy)。
+
+::: tip 服務端由誰提供？
+一般使用 Xray、sing-box、SideraCore 或服務商提供的節點。只要取得上面列出的資料，就不需要在服務端安裝 Aster。以下內容是可選的進階路線。
+:::
+
+## 可選服務端路線
+
+只有在測試、客戶端與服務端都想使用 Aster，或確實需要 Aster 使用者管理時，才需要繼續。
+
+```text
 Aster client
    │ AnyTLS over TCP + REALITY
    ▼
-VPS 上的 Aster listener
+VPS 上的可選 Aster listener
    ├─ TCP 目的地
    └─ UDP over TCP（UoT）目的地
 ```
 
-這裡只使用 Aster/Mihomo YAML 欄位。不要把 Xray 的 `realitySettings`、`serverNames`、`shortIds`，或 sing-box 的 inbound/outbound JSON 欄位混進以下設定。
-
-## 完成後會有什麼
+## 可選路線完成後會有什麼
 
 - 一筆 DNS-only 的節點網域，例如 `edge.example.com`。
 - VPS 上監聽 TCP `443` 的 AnyTLS listener。
@@ -25,11 +115,11 @@ VPS 上的 Aster listener
 - 一份可測試 TCP 與 UDP/UoT 的 Aster client profile。
 - 一條可匯入 Aster 的 `anytls://` REALITY 分享連結。
 
-## 前置條件
+## 可選服務端前置條件
 
 - 一台有 public IPv4 的 Linux VPS，並可使用 root 或 sudo。
 - 一個能編輯 DNS 的網域。
-- VPS 與 client 都已安裝同一代 Aster Core；先用 `aster-core -v` 記下版本。
+- VPS 與 client 都已安裝相容版本的 Aster Core；先用 `aster-core -v` 記下版本。
 - VPS 的系統時間已由 NTP 同步。
 - 已決定一個 VPS 可連線的 TLS fallback 站點。本篇以 `www.microsoft.com:443` 為例，正式使用時應自行確認可用性與適用性。
 

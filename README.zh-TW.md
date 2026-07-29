@@ -5,7 +5,7 @@
 <h1 align="center">Aster Core</h1>
 
 <p align="center">
-  相容 Mihomo，原生支援 AnyTLS + REALITY 與 VLESS/AnyTLS 即時使用者管理。
+  以客戶端為主的 Mihomo 衍生核心，加入 AnyTLS + REALITY、上游問題修正與效能優化。
 </p>
 
 <p align="center">
@@ -28,12 +28,12 @@
   </a>
 </p>
 
-Aster Core 是以 [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo) 為基礎的安全強化分支。它保留 Mihomo YAML 設定格式與 Clash 相容 Controller API，並新增 AnyTLS 用戶端／伺服器雙向 REALITY，以及可選用的管理平面，用於即時更新 VLESS、AnyTLS 使用者、逐使用者流量統計、狀態持久化與訂閱連結。
+Aster Core 是以 [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo) 為基礎、以客戶端使用為主的安全強化分支。它主要執行於使用者裝置、路由器或閘道，連接由 Xray、sing-box、SideraCore 與其他相容實作提供的節點；並保留 Mihomo YAML、規則分流、DNS、TUN、代理群組與 Clash 相容 Controller API。Aster 另外加入 AnyTLS + REALITY 客戶端能力、修正 Mihomo 最新基線仍存在的問題，並對多條執行路徑做效能優化。內建協定 listener 與 VLESS/AnyTLS 即時使用者管理屬於可選的進階服務端能力，不是專案的主要定位。
 
 目前的上游基線是 Mihomo `v1.19.29`，commit `e26714a181ac0e2fa803453c0a8e9a9ce94e31cb`。來源、授權及同步政策請參閱 [NOTICE.md](NOTICE.md) 與 [UPSTREAM.md](UPSTREAM.md)。
 
 > [!IMPORTANT]
-> Aster Core 接受 Mihomo 設定，不直接接受 sing-box 或 Xray 設定。它以維持 Mihomo 與 Clash API 相容性為目標，但仍須留意 Aster 自有功能及本文列出的相容性限制。
+> Aster Core 接受 Mihomo 設定，不直接接受 sing-box 或 Xray 設定。Xray、sing-box 或 SideraCore 通常執行於服務端並提供連線參數；請把這些參數填入 Aster/Mihomo outbound，或匯入 Aster 支援的分享連結。實際互通仍取決於兩端共同支援的協定與選項。
 
 ## 目錄
 
@@ -54,72 +54,36 @@ Aster Core 是以 [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo) 為基
 
 ## 主要特色
 
+- 以客戶端為主，適用於桌面、行動裝置、路由器、閘道與 TUN。
 - 相容 Mihomo YAML、規則引擎、代理提供者、規則提供者與 Clash REST API。
-- 支援 HTTP、SOCKS5、Mixed、透明代理、TUN 及多種協定伺服器入站。
+- 支援 HTTP、SOCKS5、Mixed、透明代理與 TUN 等本機入站。
 - 支援 VLESS/XHTTP、VMess、Shadowsocks、Trojan、AnyTLS、Hysteria、TUIC、WireGuard、OpenVPN、Tailscale 等出站。
 - 內建 DNS 伺服器，包含 fake-IP、hosts、策略路由、快取及 DoH/DoT/DoQ/DHCP 上游。
 - 提供 `select`、`url-test`、`fallback`、`load-balance` 代理群組與健康檢查。
 - 可依網域、GeoIP、GeoSite、IP/CIDR、ASN、程序、連接埠、入站、使用者、網路類型及邏輯條件分流。
-- AnyTLS 入站與出站皆支援 REALITY，並可匯入 `anytls://` REALITY 連結及輸出受管使用者訂閱。
-- 不重建 listener 即可即時新增、修改、停用或刪除 VLESS 與 AnyTLS 使用者。
+- AnyTLS + REALITY 出站與 `anytls://` REALITY 分享連結匯入。
+- 進階部署可選用 AnyTLS + REALITY 服務端 listener，以及不重建 listener 的 VLESS/AnyTLS 使用者管理。
 - 逐入站、逐使用者記錄上傳、下載與活動連線。
 - Aster 狀態具備檔案鎖、generation 衝突檢查、備援檔及嚴格權限。
-- 修正 Mihomo `v1.19.29`／`e26714a1` 最新基線仍存在的 listener reload/close、Hysteria UDP 分片、VLESS packet frame、XHTTP close/session race、DNS relay buffer 與 updater 驗證問題。
-- 管理路徑採 user/token 索引、目標 listener 局部複製、零配置 atomic 流量計數及增量活動連線統計，並有 regression benchmark。
+- 修正 Mihomo 目前仍可能出現的設定重新載入、斷線重連、Hysteria UDP、VLESS 封包、XHTTP 關閉、DNS 回應與核心更新問題。
+- 減少大量使用者或連線時不必要的搜尋、資料複製、連線掃描與狀態寫入。
 - 提供 Linux、Windows、macOS、Android、FreeBSD 建置目標及 OpenWrt/Nikki 整合。
 
 ## 與 Mihomo 的差異
 
-Aster Core 不是重新開發的代理核心。協定堆疊、設定模型、規則引擎、DNS、providers、TUN 與 Clash API 均建立在 Mihomo `v1.19.29` 之上。Aster 主要新增的是運維與管理層：
+Aster 保留 Mihomo 的設定和大部分功能，再加入：
 
-| 項目 | Mihomo 基線 | Aster 新增 |
-| --- | --- | --- |
-| 專案識別 | `mihomo` module 與發行名稱 | 獨立 `aster-core` module、binary、套件、映像與來源政策 |
-| 受管入站 | 使用者主要寫在 YAML，變更通常依賴重新載入設定 | 對具名 VLESS、AnyTLS listener 提供即時使用者 CRUD |
-| AnyTLS security | Mihomo `v1.19.29` 基線提供憑證 TLS、ShadowTLS、ResTLS 與 JLS | AnyTLS listener 與 outbound 雙向支援 REALITY，另有 REALITY URI 匯入及訂閱輸出 |
-| 管理 API | Clash 相容 Controller API | 獨立 `/api/admin` API 與強制 Aster Bearer token |
-| 併發控制 | 設定層更新 | 每個 listener 有 revision；過期寫入回傳 HTTP 409 |
-| 流量統計 | 全域與連線層統計 | 持久化逐入站、逐使用者上下行流量與活動連線 |
-| 持久化 | 執行設定與 profile cache | 具鎖定、generation、原子替換、`.bak` 備援的 Aster JSON store |
-| 訂閱 | 一般 provider/profile 機制 | 可輪替 token 的單一使用者 `/sub/aster/{token}` |
-| 安全邊界 | Controller `secret` | 獨立至少 32 bytes 的 Aster secret、same-origin、明文 loopback 限制、body 上限及檔案權限檢查 |
-| 上游問題修正 | Mihomo `v1.19.29`／`e26714a1` 行為 | Listener 生命週期與 rollback、Hysteria UDP、VLESS packet、XHTTP、DNS relay、updater 與 partial-bind cleanup |
-| 管理效能 | 上游資料結構 | 索引化使用者查找、listener 定向複製、批次流量寫回與憑證更新生命週期處理 |
-| 發行整合 | Mihomo 上游產物 | Aster 原生發行，並為 Linux 套件與 OpenWrt/Nikki 保留 `/usr/bin/mihomo` 相容入口 |
-| 品質檢查 | 上游 CI | Aster 管理、持久化、生命週期、效能、race、lint 與互通測試 |
+- AnyTLS + REALITY 客戶端與分享連結匯入。
+- 修正重新載入、斷線重連、UDP、DNS 和更新問題。
+- 減少大量連線時不必要的 CPU、記憶體和磁碟負擔。
+- 可選的 VLESS／AnyTLS 服務端帳號管理。
+- Aster 自己的多平台安裝包與 OpenWrt／Nikki 支援。
 
-Aster 管理目前只支援 VLESS 與 AnyTLS。下方其他協定是繼承自 Mihomo，不能透過 Aster Admin API 自動管理。能力邊界與遷移影響請參閱[「Aster 與 Mihomo 差異」](docs/reference/mihomo-differences.md)；逐項問題、修正機制、測試與 benchmark 請看[完整變更與效能文件](docs/reference/aster-changes.md)。
+一般使用者不需要理解內部差異。請閱讀白話版的[Aster 跟 Mihomo 有什麼不同](docs/reference/mihomo-differences.md)。
 
 ## AnyTLS + REALITY
 
-Aster 在 Mihomo `v1.19.29` 的 AnyTLS 實作上加入了**用戶端與伺服器端雙向 REALITY**。Aster 伺服器不需要公開 TLS 憑證即可提供 AnyTLS listener；Aster 用戶端則使用伺服器 public key、short ID、偽裝 SNI 與 uTLS fingerprint 連線。
-
-先產生 X25519 金鑰：
-
-```sh
-aster-core generate reality-keypair
-```
-
-伺服器 listener：
-
-```yaml
-listeners:
-  - name: edge-anytls
-    type: anytls
-    listen: 0.0.0.0
-    port: 443
-    users:
-      alice: "replace-with-a-long-random-password"
-    reality-config:
-      dest: www.microsoft.com:443
-      private-key: <server-private-key>
-      short-id:
-        - 0123456789abcdef
-      server-names:
-        - www.microsoft.com
-```
-
-用戶端 outbound：
+Aster 支援 AnyTLS + REALITY。一般由 Xray、sing-box、SideraCore 或服務商提供節點網址、連接埠、密碼、SNI、公開金鑰與 short ID；把這些資料填入 Aster 即可：
 
 ```yaml
 proxies:
@@ -142,7 +106,7 @@ Aster 也能匯入及輸出對應分享連結：
 anytls://<password>@proxy.example.com:443?security=reality&sni=www.microsoft.com&fp=chrome&pbk=<server-public-key>&sid=0123456789abcdef#Aster-AnyTLS-REALITY
 ```
 
-把 listener 加入 `aster.managed-listeners` 後，可即時變更密碼而不重啟 listener；每個啟用的使用者亦可取得可輪替的 `/sub/aster/{token}`，內容就是其 AnyTLS + REALITY 連結。同一個 AnyTLS endpoint 的 REALITY、憑證 TLS、ShadowTLS、ResTLS 與 JLS 互斥，不能同時設定。欄位、部署注意事項與限制請參閱 [AnyTLS + REALITY 專頁](docs/reference/anytls-reality.md)。
+不要把 Xray 或 sing-box JSON 欄位名稱直接貼入這份 YAML，應使用服務端交付的連線值。測試、全 Aster 環境或特殊需求仍可由 Aster 自行提供 AnyTLS + REALITY listener；該可選路線也支援即時密碼與受管訂閱。請參閱[客戶端優先實戰教學](docs/tutorials/anytls-reality.md)與[AnyTLS + REALITY 欄位參考](docs/reference/anytls-reality.md)。
 
 ## 支援能力
 
@@ -161,7 +125,7 @@ anytls://<password>@proxy.example.com:443?security=reality&sni=www.microsoft.com
 
 ## 文件站
 
-可全文搜尋的繁體中文 VitePress 文件站已發布於 [astercore.fubukishop.app](https://astercore.fubukishop.app/)，原始檔保留在 repository 的 [`docs/`](docs/index.md)。請從[逐步實戰教學](https://astercore.fubukishop.app/tutorials/)取得完整設定與驗證流程；Aster 相對 Mihomo 的問題修正、效能機制、測試與 benchmark 則集中在[完整變更文件](https://astercore.fubukishop.app/reference/aster-changes)。
+可全文搜尋的繁體中文文件站已發布於 [astercore.fubukishop.app](https://astercore.fubukishop.app/)，原始檔保留在 repository 的 [`docs/`](docs/index.md)。第一次使用請從[逐步實戰教學](https://astercore.fubukishop.app/tutorials/)開始；想知道為何選擇 Aster，請看[Aster 跟 Mihomo 有什麼不同](https://astercore.fubukishop.app/reference/mihomo-differences)。
 
 ```sh
 cd docs

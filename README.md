@@ -5,7 +5,7 @@
 <h1 align="center">Aster Core</h1>
 
 <p align="center">
-  A Mihomo-compatible universal proxy core with AnyTLS + REALITY and live VLESS/AnyTLS user management.
+  A client-first Mihomo-based proxy core with AnyTLS + REALITY, upstream fixes, and performance improvements.
 </p>
 
 <p align="center">
@@ -28,12 +28,12 @@
   </a>
 </p>
 
-Aster Core is a security-focused fork of [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo). It keeps the Mihomo YAML configuration format and Clash-compatible Controller API, while adding AnyTLS + REALITY on both client and server, plus an opt-in management plane for live VLESS and AnyTLS user updates, per-user traffic accounting, persistent state, and subscription links.
+Aster Core is a client-first, security-focused fork of [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo). Its primary role is to run on user devices, routers, or gateways and connect to nodes provided by Xray, sing-box, SideraCore, and other compatible server implementations. It keeps Mihomo YAML, routing, DNS, TUN, proxy groups, and the Clash-compatible Controller API while adding AnyTLS + REALITY client support, fixes for issues still present in the current Mihomo baseline, and performance improvements. Built-in protocol listeners and live VLESS/AnyTLS user management are optional advanced server-side capabilities, not the main product role.
 
 The current upstream baseline is Mihomo `v1.19.29` at commit `e26714a181ac0e2fa803453c0a8e9a9ce94e31cb`. See [NOTICE.md](NOTICE.md) and [UPSTREAM.md](UPSTREAM.md) for provenance and the upstream update policy.
 
 > [!IMPORTANT]
-> Aster Core accepts Mihomo configuration, not sing-box or Xray configuration. It aims to preserve Mihomo and Clash API compatibility, but Aster-specific behavior and the compatibility notes below still apply.
+> Aster Core accepts Mihomo configuration, not sing-box or Xray configuration. Xray, sing-box, or SideraCore normally runs on the server and supplies connection parameters; translate those parameters into an Aster/Mihomo outbound or import a supported share link. Compatibility depends on the protocol and options enabled by both sides.
 
 ## Contents
 
@@ -54,72 +54,36 @@ The current upstream baseline is Mihomo `v1.19.29` at commit `e26714a181ac0e2fa8
 
 ## Highlights
 
+- Client-first operation for desktop, mobile, router, gateway, and TUN use cases.
 - Mihomo-compatible YAML, rule engine, proxy providers, rule providers, and Clash-compatible REST API.
-- HTTP, SOCKS5, mixed, transparent proxy, TUN, and protocol-server inbounds.
+- HTTP, SOCKS5, mixed, transparent proxy, and TUN local inbounds.
 - Broad outbound protocol support, including VLESS/XHTTP, VMess, Shadowsocks, Trojan, AnyTLS, Hysteria, TUIC, WireGuard, OpenVPN, Tailscale, and more.
 - Integrated DNS server with fake-IP, hosts, policy routing, cache, and DoH/DoT/DoQ/DHCP upstream support.
 - `select`, `url-test`, `fallback`, and `load-balance` proxy groups with health checks.
 - Domain, GeoIP, GeoSite, IP/CIDR, ASN, process, port, inbound, user, network, and logical routing rules.
-- AnyTLS + REALITY for both listeners and outbounds, including `anytls://` REALITY link import and managed subscription export.
-- Live VLESS and AnyTLS user CRUD without recreating the listener.
+- AnyTLS + REALITY outbound support, including `anytls://` REALITY link import.
+- Optional AnyTLS + REALITY server listeners and live VLESS/AnyTLS user CRUD for advanced deployments.
 - Per-principal upload, download, and active-connection accounting.
 - Durable Aster state with locking, generation checks, a redundant backup, and restrictive file permissions.
-- Fixes still absent from the Mihomo `v1.19.29` / `e26714a1` baseline, including listener reload/close lifecycle, Hysteria UDP fragmentation, VLESS packet framing, XHTTP close/session races, DNS relay buffers, and updater verification.
-- Indexed management lookups, listener-targeted store cloning, allocation-free atomic traffic accounting, incremental principal connection counts, and regression benchmarks.
+- Fixes Mihomo issues affecting configuration reloads, reconnects, Hysteria UDP, VLESS packets, XHTTP shutdown, DNS responses, and core updates.
+- Reduces repeated searches, data copies, connection scans, and state-file writes in busy deployments.
 - Linux, Windows, macOS, Android, and FreeBSD build targets; OpenWrt/Nikki integration is included.
 
 ## How Aster differs from Mihomo
 
-Aster Core is not a ground-up proxy implementation. Its protocol stack, configuration model, rule engine, DNS subsystem, providers, TUN support, and Clash-compatible API come from the Mihomo `v1.19.29` baseline. Aster adds an operational layer around that core:
+Aster keeps Mihomo configuration and most Mihomo features, then adds:
 
-| Area | Mihomo baseline | Aster addition |
-| --- | --- | --- |
-| Project identity | `mihomo` module and release naming | Independent `aster-core` module, binary, packages, image, and provenance policy |
-| Managed inbounds | Users are defined in YAML and normally changed through configuration reloads | Live CRUD for named VLESS and AnyTLS listener users |
-| AnyTLS security | Certificates, ShadowTLS, ResTLS, and JLS in the Mihomo `v1.19.29` baseline | REALITY on both the AnyTLS listener and outbound, plus REALITY URI import and subscription export |
-| Management API | Clash-compatible Controller API | Separate `/api/admin` API with its own mandatory Bearer token |
-| Concurrency control | Configuration-level updates | Per-listener revisions and HTTP `409 Conflict` for stale mutations |
-| Traffic accounting | Global and connection-level statistics | Persistent per-inbound, per-user upload/download totals and active connections |
-| Persistence | Runtime configuration and profile cache | Hardened Aster JSON store with locking, generations, atomic replacement, and `.bak` redundancy |
-| Subscriptions | General provider and profile mechanisms | Rotatable single-user `/sub/aster/{token}` links for eligible VLESS and AnyTLS listeners |
-| Security boundary | Controller `secret` | Independent 32-byte Aster secret, same-origin enforcement, loopback-only plaintext admin mounting, request limits, and state-file permission checks |
-| Upstream issue fixes | Mihomo `v1.19.29` / `e26714a1` behavior | Tested fixes for listener lifecycle and rollback, Hysteria UDP, VLESS packet frames, XHTTP, DNS relay, updater validation, and partial-bind cleanup |
-| Runtime management paths | Upstream data structures | Indexed user lookups, targeted listener cloning, batched traffic flushing, and credential-update lifecycle handling |
-| Distribution | Upstream Mihomo artifacts | Aster-native releases plus `/usr/bin/mihomo` compatibility for Linux packages and OpenWrt/Nikki |
-| Quality gates | Upstream CI | Fork-specific management, persistence, lifecycle, performance, race, lint, and interoperability coverage |
+- AnyTLS + REALITY client support and share-link import.
+- Fixes for reloads, reconnects, UDP, DNS, and core updates.
+- Lower unnecessary CPU, memory, and disk work under busy workloads.
+- Optional VLESS and AnyTLS server-user management.
+- Aster-native packages and OpenWrt/Nikki integration.
 
-Current Aster management supports VLESS and AnyTLS only. Other protocols listed below are inherited from Mihomo and are not automatically managed by the Aster admin API. See the [Aster vs. Mihomo reference](docs/reference/mihomo-differences.md) for the capability boundary, and the [evidence-backed change log](docs/reference/aster-changes.md) for individual upstream fixes, performance mechanisms, tests, and benchmark conditions.
+See the [plain-language comparison](docs/reference/mihomo-differences.md) for details.
 
 ## AnyTLS + REALITY
 
-Aster extends the Mihomo `v1.19.29` AnyTLS implementation with REALITY on **both sides of the connection**. An Aster server can expose an AnyTLS listener without a public TLS certificate, while an Aster client can connect with the server public key, short ID, camouflage SNI, and a uTLS fingerprint.
-
-Generate an X25519 key pair first:
-
-```sh
-aster-core generate reality-keypair
-```
-
-Server listener:
-
-```yaml
-listeners:
-  - name: edge-anytls
-    type: anytls
-    listen: 0.0.0.0
-    port: 443
-    users:
-      alice: "replace-with-a-long-random-password"
-    reality-config:
-      dest: www.microsoft.com:443
-      private-key: <server-private-key>
-      short-id:
-        - 0123456789abcdef
-      server-names:
-        - www.microsoft.com
-```
-
-Client outbound:
+Aster supports AnyTLS + REALITY. In a normal setup, Xray, sing-box, SideraCore, or a provider supplies the node address, port, password, SNI, public key, and short ID. Enter those values in Aster:
 
 ```yaml
 proxies:
@@ -142,7 +106,7 @@ Aster also imports and emits the corresponding share-link form:
 anytls://<password>@proxy.example.com:443?security=reality&sni=www.microsoft.com&fp=chrome&pbk=<server-public-key>&sid=0123456789abcdef#Aster-AnyTLS-REALITY
 ```
 
-When the listener is included in `aster.managed-listeners`, passwords can be changed live and each enabled user can receive a rotatable `/sub/aster/{token}` subscription containing its AnyTLS + REALITY link. REALITY, certificate TLS, ShadowTLS, ResTLS, and JLS are mutually exclusive security modes for one AnyTLS endpoint. See the dedicated [AnyTLS + REALITY guide](docs/reference/anytls-reality.md) for fields, deployment notes, and limitations.
+Do not copy Xray or sing-box JSON fields directly into this YAML; use the connection values delivered by the server. Aster can also host its own AnyTLS + REALITY listener for testing, an all-Aster environment, or specialized deployments. That optional path supports live passwords and managed subscriptions. See the [client-first tutorial](docs/tutorials/anytls-reality.md) and [field reference](docs/reference/anytls-reality.md).
 
 ## Supported capabilities
 
@@ -161,7 +125,7 @@ The full configuration surface is documented in [docs/config.yaml](docs/config.y
 
 ## Documentation site
 
-The searchable Traditional Chinese documentation is published at [astercore.fubukishop.app](https://astercore.fubukishop.app/), with its VitePress source kept under [`docs/`](docs/index.md). Start with the [step-by-step tutorials](https://astercore.fubukishop.app/tutorials/) for complete configurations and verification flows, or read the [full Aster change and optimization log](https://astercore.fubukishop.app/reference/aster-changes) for code- and test-backed differences from Mihomo.
+The searchable Traditional Chinese documentation is published at [astercore.fubukishop.app](https://astercore.fubukishop.app/), with its source kept under [`docs/`](docs/index.md). Start with the [step-by-step tutorials](https://astercore.fubukishop.app/tutorials/) or read the [plain-language Aster and Mihomo comparison](https://astercore.fubukishop.app/reference/mihomo-differences).
 
 ```sh
 cd docs

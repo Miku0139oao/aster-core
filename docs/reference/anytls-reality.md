@@ -1,39 +1,105 @@
 # AnyTLS + REALITY
 
-::: tip 先部署，再回來查欄位
-如果你要的是從 DNS、防火牆、key、server/client YAML 到 TCP/UDP 驗證的完整流程，請使用[從零部署 AnyTLS + REALITY](/tutorials/anytls-reality)。本頁保留作為欄位與限制參考。
+這一頁用來查 AnyTLS + REALITY 設定。第一次使用請先看[逐步教學](/tutorials/anytls-reality)。
+
+## 一般使用方式
+
+Aster 安裝在客戶端。遠端節點通常由 Xray、sing-box、SideraCore 或服務商提供。
+
+```text
+你的 App → Aster Core → AnyTLS + REALITY 節點 → 網際網路
+```
+
+你需要向服務端取得節點網址、連接埠、密碼、SNI、公開金鑰和 short ID。
+
+## 客戶端設定
+
+```yaml
+proxies:
+  - name: anytls-reality
+    type: anytls
+    server: proxy.example.com
+    port: 443
+    password: "replace-with-your-password"
+    sni: www.microsoft.com
+    client-fingerprint: chrome
+    reality-opts:
+      public-key: <server-public-key>
+      short-id: 0123456789abcdef
+    udp: true
+```
+
+### 每個欄位要填什麼？
+
+| 欄位 | 要填的內容 |
+| --- | --- |
+| `name` | 自己看得懂的節點名稱 |
+| `server` | 真正要連線的節點 IP 或網域，不是偽裝網站 |
+| `port` | 服務端提供的連接埠 |
+| `password` | 服務端提供的 AnyTLS 密碼 |
+| `sni` | 服務端提供的偽裝網站名稱 |
+| `client-fingerprint` | 模擬的瀏覽器類型；不確定時使用 `chrome` |
+| `public-key` | 服務端提供的 REALITY 公開金鑰 |
+| `short-id` | 服務端提供的一小段識別碼；沒有提供時才省略 |
+| `udp` | 設為 `true`，讓需要 UDP 的程式也能使用 |
+
+::: danger 不要填 private key
+客戶端只需要 public key（公開金鑰）。private key（私鑰）只能留在服務端。
 :::
 
-## 這是 Aster 新增的能力
+## 分享連結
 
-Mihomo `v1.19.29` 已包含 AnyTLS，但該基線的 AnyTLS security 只有憑證 TLS、ShadowTLS、ResTLS 與 JLS。Aster 在此基礎上補齊：
+Aster 支援這種格式：
 
-- AnyTLS listener 的 `reality-config`。
-- AnyTLS outbound 的 `reality-opts` 與 uTLS `client-fingerprint`。
-- `anytls://` REALITY 分享連結匯入。
-- Aster managed user 訂閱的 AnyTLS + REALITY 連結輸出。
-- REALITY listener 與 AnyTLS 即時使用者更新、連線追蹤及生命週期處理整合。
+```text
+anytls://<password>@proxy.example.com:443?security=reality&sni=www.microsoft.com&fp=chrome&pbk=<public-key>&sid=<short-id>#AnyTLS-REALITY
+```
 
-因此 Aster 可同時作為 AnyTLS + REALITY 伺服器與用戶端，不需要在前方另放 TLS 憑證終結器。
+| 分享連結內容 | 代表什麼 |
+| --- | --- |
+| `<password>` | AnyTLS 密碼 |
+| `proxy.example.com:443` | 節點網址和連接埠 |
+| `sni` | 偽裝網站 |
+| `fp` | 瀏覽器指紋 |
+| `pbk` | REALITY 公開金鑰 |
+| `sid` | short ID |
+| `#AnyTLS-REALITY` | 顯示名稱，可自行修改 |
 
-## 產生 REALITY 金鑰
+如果使用 `username:password@host` 的寫法，Aster 會使用冒號後面的內容當作密碼。
+
+## 常見錯誤
+
+| 看到的情況 | 先檢查 |
+| --- | --- |
+| 立即顯示連線被拒絕 | `server`、`port`、防火牆，以及服務端是否啟動 |
+| 一直等待後逾時 | DNS 是否正確、服務端是否可從外網連線 |
+| 可以連到 port，但代理仍失敗 | `password`、`sni`、`public-key`、`short-id` |
+| 網頁可開，但遊戲或語音失敗 | 是否設定 `udp: true`，以及服務端是否支援 |
+| 匯入分享連結後不能用 | 核對 `pbk`、`sid`、`sni` 和 `fp` 是否完整 |
+
+不要用 `skip-cert-verify` 掩蓋錯誤的公開金鑰、SNI 或 short ID。
+
+## 進階：用 Aster 當服務端
+
+一般使用者可以跳過這一節。只有在測試、全 Aster 環境或特殊需求下，才需要讓 Aster 接收 AnyTLS + REALITY 連線。
+
+先產生金鑰：
 
 ```sh
 aster-core generate reality-keypair
 ```
 
-輸出包含：
+你會得到：
 
 ```text
 PrivateKey: <server-private-key>
 PublicKey: <server-public-key>
 ```
 
-- Private key 只放在伺服器的 `reality-config.private-key`。
-- Public key 提供給用戶端的 `reality-opts.public-key` 或分享連結 `pbk`。
-- 不要把正式環境的 private key、AnyTLS password 或 Aster secret 提交到 Git。
+- PrivateKey 只放在服務端。
+- PublicKey 提供給客戶端。
 
-## 伺服器設定
+服務端設定：
 
 ```yaml
 listeners:
@@ -52,75 +118,21 @@ listeners:
         - www.microsoft.com
 ```
 
-### `reality-config` 欄位
-
-| 欄位 | 必要 | 說明 |
-| --- | --- | --- |
-| `dest` | 是 | REALITY 驗證失敗時的 fallback TLS 目的地，格式為 `host:port` |
-| `private-key` | 是 | `generate reality-keypair` 產生的 X25519 private key |
-| `short-id` | 建議 | Hex 字串；每個值解碼後最多 8 bytes |
-| `server-names` | 是 | 接受的 SNI 清單；用戶端 `sni` 必須匹配其中一個 |
-| `max-time-difference` | 否 | 可接受時間差，單位為 microseconds；`0` 使用實作預設行為 |
-| `proxy` | 否 | REALITY fallback 連線使用的指定 outbound |
-| `limit-fallback-upload` | 否 | Fallback upload 限速 |
-| `limit-fallback-download` | 否 | Fallback download 限速 |
-
-`certificate`/`private-key` 憑證 TLS、`shadow-tls`、`res-tls`、`jls-config` 與 `reality-config` 是互斥 security mode。一個 AnyTLS listener 只能選一種。
-
-## 用戶端設定
-
-```yaml
-proxies:
-  - name: edge-anytls-reality
-    type: anytls
-    server: proxy.example.com
-    port: 443
-    password: "replace-with-a-long-random-password"
-    sni: www.microsoft.com
-    client-fingerprint: chrome
-    reality-opts:
-      public-key: <server-public-key>
-      short-id: 0123456789abcdef
-    udp: true
-```
-
-### 用戶端欄位
-
-| 欄位 | 必要 | 說明 |
-| --- | --- | --- |
-| `server` | 是 | Aster 伺服器 IP 或網域；不是偽裝站 |
-| `port` | 是 | AnyTLS listener port |
-| `password` | 是 | `users` 中對應的 AnyTLS password |
-| `sni` | 是 | 必須匹配伺服器 `server-names` |
-| `client-fingerprint` | 是 | REALITY 使用 uTLS；一般使用 `chrome` |
-| `reality-opts.public-key` | 是 | 伺服器 public key |
-| `reality-opts.short-id` | 視伺服器而定 | 必須是伺服器允許的 short ID |
-| `reality-opts.support-x25519mlkem768` | 否 | 啟用 X25519MLKEM768；須確認對端相容性 |
-| `udp` | 否 | 透過 AnyTLS 的 UoT 支援 UDP |
-
-AnyTLS outbound 的 `reality-opts`、`shadow-tls-opts`、`restls-opts` 與 `jls-opts` 同樣互斥。
-
-## 分享連結
-
-Aster 可匯入下列格式：
-
-```text
-anytls://<password>@proxy.example.com:443?security=reality&sni=www.microsoft.com&fp=chrome&pbk=<server-public-key>&sid=0123456789abcdef#Aster-AnyTLS-REALITY
-```
-
-REALITY query：
-
-| Query | 對應 YAML |
+| 服務端欄位 | 說明 |
 | --- | --- |
-| `security=reality` | 啟用 AnyTLS REALITY |
-| `sni` | `sni` |
-| `fp` | `client-fingerprint`；省略時 Aster 匯入預設為 `chrome` |
-| `pbk` | `reality-opts.public-key`，不可省略 |
-| `sid` | `reality-opts.short-id` |
+| `listen` | `0.0.0.0` 代表接收所有 IPv4 網路介面的連線 |
+| `port` | 對外開放的 TCP 連接埠 |
+| `users` | 使用者名稱和密碼 |
+| `dest` | 驗證失敗時轉往的正常 HTTPS 網站 |
+| `private-key` | 服務端私鑰，不可外流 |
+| `short-id` | 服務端允許的 short ID |
+| `server-names` | 客戶端可以使用的 SNI |
 
-一般 AnyTLS URI 可把 password 放在 userinfo 的 username 部分。若使用 `username:password@host` 形式，Aster 取 password 部分作為 credential。
+同一個 AnyTLS 服務不能同時使用 REALITY、一般憑證 TLS、ShadowTLS、ResTLS 或 JLS；只能選一種。
 
-## 搭配 Aster 即時管理與訂閱
+## 進階：即時管理使用者
+
+把 AnyTLS 服務加入 `managed-listeners` 後，可以在不重新啟動整個服務的情況下新增、修改、停用或刪除密碼。
 
 ```yaml
 external-controller: 127.0.0.1:9090
@@ -133,46 +145,11 @@ aster:
     - edge-anytls
 ```
 
-加入 `managed-listeners` 後：
+這是進階服務端功能。完整操作請看[使用者管理教學](/tutorials/user-management)。
 
-1. YAML `users` 會在首次啟動時匯入 Aster state。
-2. Admin API 可即時新增、修改、停用或刪除 AnyTLS password，不重建 listener。
-3. 每個啟用的使用者都有獨立流量與活動連線統計。
-4. 使用者可取得可輪替 `/sub/aster/{token}`。
-5. 訂閱內容是 Base64 編碼的單一 `anytls://` REALITY 連結。
+## 相關文件
 
-Aster 會由 server private key 推導 public key，並從設定中選擇排序後第一個 `server-names` 與 `short-id` 寫入訂閱。因此若希望輸出的分享連結固定，應把預期使用的 SNI 與 short ID 明確放入設定。
-
-## 部署檢查
-
-- `dest` 應為伺服器可連線、TLS 行為穩定且與偽裝 SNI 合理對應的站點。
-- `server` 是 Aster 主機；`sni` 才是偽裝名稱，兩者不要混淆。
-- Port 443 若已由 Caddy、Nginx 或其他服務占用，需要先設計 TCP/SNI 分流。
-- 時鐘偏差可能造成 REALITY 驗證失敗；確認 NTP 正常。
-- 不要搭配 `skip-cert-verify` 來掩蓋錯誤的 public key、SNI 或 short ID。
-- 修改 REALITY private key、SNI 或 short ID 後，舊訂閱／用戶端資料也必須同步更新。
-- 只有 password 是即時 managed credential；REALITY transport 設定仍由 YAML 與設定 reload 管理。
-
-## 驗證
-
-先檢查設定：
-
-```sh
-aster-core -d /etc/aster-core -t
-```
-
-再確認：
-
-1. 伺服器 log 顯示 AnyTLS listener 已綁定預期 port。
-2. 用戶端使用正確 `pbk`、`sid`、`sni` 與 `fp`。
-3. TCP 與 UDP/UoT 分別測試。
-4. Admin API 更新 password 後，新 credential 可立即使用，已撤銷 credential 無法建立新連線。
-5. 訂閱回傳的 `anytls://` URL 可被 Aster 重新匯入。
-
-相關頁面：
-
-- [入站設定](/reference/inbounds)
-- [出站與代理群組](/reference/outbounds)
-- [Aster 管理功能](/aster/overview)
-- [Admin API](/aster/api)
-- [Aster 與 Mihomo 差異](/reference/mihomo-differences)
+- [AnyTLS + REALITY 逐步教學](/tutorials/anytls-reality)
+- [第一個代理設定](/tutorials/first-proxy)
+- [遠端節點設定](/reference/outbounds)
+- [故障排查手冊](/tutorials/troubleshooting)

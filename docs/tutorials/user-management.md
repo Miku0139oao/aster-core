@@ -1,5 +1,9 @@
 # 即時管理 VLESS、AnyTLS 使用者與訂閱
 
+::: warning 可選的進階服務端功能
+本篇只適用於你明確選擇用 Aster 提供 VLESS／AnyTLS listener 的情境。Aster 的主要用途是客戶端；一般服務端可使用 Xray、sing-box 或 SideraCore，且不需要啟用本篇管理平面。
+:::
+
 本篇會把兩個 Aster listener 納入管理平面，然後用完整 `curl` 流程完成：
 
 - 啟用 `aster.managed-listeners`、state store 與 Admin API。

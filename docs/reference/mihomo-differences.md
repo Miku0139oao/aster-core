@@ -1,255 +1,93 @@
-# Aster 與 Mihomo 差異
+# Aster 跟 Mihomo 有什麼不同？
 
-## 基線與定位
+簡單說：**Aster 保留 Mihomo 的用法，再加入新功能、問題修正與效能改善。**
 
-Aster Core 的上游基線是 MetaCubeX/mihomo `v1.19.29`：
+如果你已經會用 Mihomo，大部分設定可以繼續使用。如果你是第一次接觸代理核心，也不用先研究程式碼；從[第一個代理設定](/tutorials/first-proxy)照著做即可。
 
-```text
-e26714a181ac0e2fa803453c0a8e9a9ce94e31cb
-```
+## Aster 主要用來做什麼？
 
-Fork 建立後的主要變更分為三組：
+Aster Core 主要安裝在你的電腦、路由器或閘道上，負責：
 
-1. `bootstrap Aster core fork`：建立獨立 module、命名、Aster 管理、發行與相容封裝。
-2. `optimize Aster runtime and management paths`：改善查找、流量、snapshot、listener 更新及連線生命週期。
-3. `harden CI and enforce code quality`：固定 lint、race 與多版本測試，修正 fork 內品質問題。
+- 連接遠端代理節點。
+- 決定哪些網站要走代理。
+- 處理 DNS，降低網域解析被干擾的機會。
+- 提供 HTTP、SOCKS5 或 TUN 給其他程式使用。
+- 讓相容 Clash 的面板查看及切換節點。
 
-::: tip 想看逐項修正與效能證據？
-本頁先說明使用者可觀察到的能力邊界。一般 listener、Hysteria、VLESS packet、XHTTP、DNS relay、updater 等修正，以及 user index、局部 store clone、原子流量計數與 benchmark，集中列在[Aster 完整變更、修正與效能優化](/reference/aster-changes)。
-:::
+遠端服務端通常使用 Xray、sing-box、SideraCore 或服務商提供的系統。**一般使用者不需要在服務端安裝 Aster。**
 
-## 能力邊界
+## Aster 多了什麼？
 
-| 能力 | 來源 | 說明 |
-| --- | --- | --- |
-| Mihomo YAML | Mihomo | Aster 沿用設定模型與預設值 |
-| Clash Controller API | Mihomo | Dashboard 與既有工具可繼續使用 |
-| DNS、fake-IP、TUN、rules | Mihomo | Aster 沒有改成另一套資料平面 |
-| 各種 inbound/outbound | Mihomo 為主 | VLESS、AnyTLS 另加入 managed-user hooks |
-| AnyTLS + REALITY | Aster | 相對 `v1.19.29` 基線新增 listener、outbound、URI 匯入及受管訂閱輸出 |
-| `/api/admin` | Aster | 專用管理 API |
-| `/sub/aster/{token}` | Aster | 單一 managed user 訂閱 |
-| 逐使用者持久化流量 | Aster | 由 connection tracker principal 回報 |
-| `aster-state.json` | Aster | 獨立安全 state store |
-| Listener／transport 修正 | Aster patch | 修正關閉、reload rollback、Hysteria UDP、VLESS packet、XHTTP、DNS relay 等上游基線問題 |
-| 管理熱路徑優化 | Aster patch | User/token index、目標 listener clone、atomic traffic、增量 connection count |
-| OpenWrt/Nikki alternative | Aster | 保留 Mihomo compatibility path |
+### 1. AnyTLS + REALITY
 
-## 1. 獨立專案識別
+Aster 可以連接 AnyTLS + REALITY 節點，也可以匯入相容的 `anytls://` 分享連結。
 
-Aster 將 Go module 改為：
+服務端或服務商需要提供：
 
-```text
-github.com/Miku0139oao/aster-core
-```
+- 節點網址與連接埠。
+- 密碼。
+- SNI，也就是用來偽裝的網站名稱。
+- REALITY public key，也就是公開金鑰。
+- short ID，也就是服務端指定的一小段識別碼。
 
-發行物、Docker image、systemd units 與套件名稱使用 `aster-core`。為了既有工具相容：
+拿到這些資料後，照[AnyTLS + REALITY 教學](/tutorials/anytls-reality)填入即可。
 
-- `-v` 仍輸出 `Mihomo Meta` 前綴。
-- Linux 套件提供 `/usr/bin/mihomo` 相容連結。
-- OpenWrt package 提供 virtual `mihomo` 及 alternatives。
+### 2. 連線更穩定
 
-## 2. AnyTLS + REALITY
+Aster 修正了 Mihomo 目前版本仍可能遇到的幾類問題：
 
-Mihomo `v1.19.29` 基線已有 AnyTLS 與憑證 TLS、ShadowTLS、ResTLS、JLS，但 AnyTLS 尚未接上 REALITY。Aster 新增：
+| 原本可能看到的情況 | Aster 的改善 |
+| --- | --- |
+| 重新載入設定後，舊連接埠沒有正常釋放 | 改善服務關閉及重新載入流程 |
+| Hysteria 使用 UDP 時偶爾收錯資料或重連異常 | 修正 UDP 分段、重連及連接埠切換問題 |
+| VLESS 在少數封包情況下斷線 | 修正封包讀寫及大小檢查 |
+| XHTTP 關閉時卡住或留下舊連線 | 改善關閉及連線清理 |
+| DNS 偶爾回傳損壞或不完整的內容 | 修正 DNS 回應資料處理 |
+| 更新下載不完整或誤裝較舊版本 | 加入檔案檢查及版本保護 |
 
-- Listener `reality-config`，讓 Aster 作為 AnyTLS + REALITY server。
-- Outbound `reality-opts` 與 `client-fingerprint`，讓 Aster 作為 AnyTLS + REALITY client。
-- `anytls://` URI 的 `security=reality`、`pbk`、`sid`、`sni`、`fp` 轉換。
-- Managed user 訂閱自動輸出帶 REALITY public key 的 AnyTLS 分享連結。
-- REALITY transport 與動態 password、撤銷連線及 listener close lifecycle 的整合。
+你不需要理解內部名稱。實際效果就是：更新設定、斷線重連、UDP、DNS 與自動更新時比較不容易出現奇怪問題。
 
-這是一項 Aster 資料平面擴充，不只是管理 API 包裝。完整設定見 [AnyTLS + REALITY](/reference/anytls-reality)。
+### 3. 使用較少的額外資源
 
-## 3. 上游基線問題修正
+Aster 減少了幾種不必要的重複工作：
 
-截至 2026-07-29，Mihomo `Meta` 最新 commit 仍是本專案基線 `e26714a1`。Aster 在其上另外修正：
+- 使用者很多時，不必每次從頭尋找。
+- 流量統計先在記憶體整理，再分批儲存。
+- 更新一名使用者時，不必複製全部資料。
+- 查詢目前連線數時，不必每次重新掃描所有連線。
+- 部分 VLESS 與 Hysteria 資料可用更少的暫存空間處理。
 
-- Context listener 關閉後遺留 in-flight handshake、Accept 無法退出及 Close race。
-- Inbound reload 中途失敗時的半套 socket、非確定性 address transfer 與 rollback。
-- Trojan、Shadowsocks、VMess、Hysteria2、TUIC、ShadowQUIC、TrustTunnel 等 listener/service constructor 或 close 中的資源洩漏與生命週期問題。
-- Hysteria UDP 交錯 session 分片混淆、DialUDP flag、reconnect generation、message ID 與 port hopping 多開 socket。
-- VLESS packet short-buffer 後 frame 失步、超大 frame 與 concurrent read/write 交錯。
-- XHTTP blocked write 使 close 卡住、重複 close 及舊 session 刪除 replacement。
-- DNS 壓縮 response 沒有寫回 UDP hijack caller 的 target backing array。
-- Core updater 缺少 checksum、stable semver、HTTP status、metadata size 與 downgrade 防護。
-- Controller reload generation、`/debug` authentication、Unix socket 權限與 Windows named-pipe ACL。
-- 一般 connection statistic 的 memory counter data race。
+這些改善不代表所有網路都會固定快多少。它們主要降低大量連線或大量使用者時的 CPU、記憶體及磁碟負擔。
 
-各項原始行為、修正方式、證據入口、已有測試與 commit 請看[完整變更文件](/reference/aster-changes)。文件會區分直接 regression test 與僅有程式入口的分支。
+### 4. 可選的服務端功能
 
-## 4. Managed VLESS 與 AnyTLS
+Aster 也能接收 VLESS 或 AnyTLS 連線，並可在不中斷整個服務的情況下新增、停用或修改使用者。
 
-只有實作 `ManagedUserListener` 的 listener 才能加入：
+這是進階功能，只適合：
 
-```yaml
-aster:
-  managed-listeners:
-    - edge-vless
-    - edge-anytls
-```
+- 測試環境。
+- 客戶端與服務端都想使用 Aster。
+- 確實需要 Aster 的使用者管理介面。
 
-目前只有：
+一般服務端仍建議使用你熟悉的 Xray、sing-box 或 SideraCore。
 
-- VLESS：以 UUID 為 credential，可選 flow。
-- AnyTLS：以 password 為 credential。
+## 哪些東西跟 Mihomo 一樣？
 
-管理變更直接更新執行中的 authentication state，不需要關閉並重開 listener。未列入 `managed-listeners` 的 listener 仍由一般 YAML 設定管理。
+Aster 繼續使用：
 
-## 5. 獨立 Admin API
+- Mihomo 的 YAML 設定格式。
+- 規則、代理群組及訂閱提供者。
+- DNS、fake-IP 與 TUN。
+- Clash 相容控制介面及面板。
+- Mihomo 支援的大部分連線協定。
 
-Aster API 使用 `/api/admin`，不共用 Controller `secret`：
+注意：Aster 不能直接讀取 Xray 或 sing-box 的 JSON 設定。你需要把服務端提供的「網址、連接埠、密碼、金鑰」填入 Aster 設定，或匯入支援的分享連結。
 
-```http
-Authorization: Bearer <aster-secret>
-```
+## 我該從哪裡開始？
 
-它提供：
-
-- Overview、protocol capability、listener 狀態。
-- User list、create、read、update、delete。
-- 流量重設。
-- 訂閱 token 輪替。
-
-此 API 不替代 Clash API。兩者同時存在、權限分離，適合讓 Dashboard 與管理後台使用不同 credentials。
-
-## 6. Revision 與衝突控制
-
-每個 managed listener 有：
-
-- `revision`：持久化狀態的目前版本。
-- `applied_revision`：runtime 已套用版本。
-
-Mutation 必須帶目前 revision。若另一個管理者已先更新，舊 request 會收到：
-
-```text
-409 Conflict
-```
-
-這可防止面板、CLI 或多個後台彼此覆蓋變更。
-
-## 7. Per-principal 流量
-
-Aster 在 connection tracker 加入 principal：
-
-```text
-Inbound + UserID
-```
-
-統計包含：
-
-- `upload_bytes`
-- `download_bytes`
-- `active_connections`
-- `traffic_generation`
-
-流量不是每個 packet 都同步寫入磁碟，而是先在記憶體聚合，再由 manager 批次 flush，降低熱路徑鎖定與 I/O。
-
-## 8. 安全持久化
-
-預設 store：
-
-```text
-<home>/aster-state.json
-<home>/aster-state.json.bak
-```
-
-與一般單檔 JSON 不同，Aster store 加入：
-
-- 跨程序 lock。
-- Generation conflict check。
-- Temp file + atomic replacement。
-- Primary/backup 交叉恢復。
-- 16 MiB 大小上限。
-- 拒絕 symlink 與非 regular file。
-- Unix owner-only 目錄及 `0600`。
-- Windows ACL 驗證與修正。
-
-Store 仍是**明文 JSON**。其安全性依賴檔案系統權限，不是內容加密。
-
-## 9. 訂閱
-
-啟用 `public-base-url` 後，每個 eligible user 可取得可輪替 token：
-
-```text
-https://proxy.example.com/sub/aster/<token>
-```
-
-回應是 Base64 編碼的單一分享連結。支援範圍：
-
-- VLESS TCP、WebSocket、gRPC、基本 XHTTP。
-- VLESS/AnyTLS 的 TLS 或 REALITY。
-
-不輸出：
-
-- ShadowTLS
-- ResTLS
-- JLS
-- 進階 XHTTP placement、padding 等欄位
-
-## 10. 管理與資料平面效能
-
-Fork 的管理熱路徑加入：
-
-- ID 與 subscription token 索引，避免反覆線性掃描。
-- 只複製目標 listener，而非每次深複製完整 store。
-- Management snapshot 一次取得一致的 listener/user view。
-- 活動連線按 principal 聚合。
-- Credential 更新期間追蹤 handshake 與連線歸屬。
-- Revoked credential 關閉與既有連線保留規則。
-- AnyTLS/VLESS 更新失敗時的 fail-closed 行為。
-
-資料平面另有針對性優化：
-
-- Hysteria UDP message 直接寫入預配置 slice，不再經 `bytes.Buffer` 逐欄 `binary.Write`。
-- VLESS packet 使用 `net.Buffers` 寫入 header + payload，並維護 frame-level 併發安全。
-- 沒有 authenticated user 的 `PushUploadedFor`／`PushDownloadedFor` 會快速略過 per-principal observer。
-- Tracker 在 Join/Leave 時增量維護每位使用者活動連線，不在每個 API request 掃描完整 connection snapshot。
-- State 使用 compact JSON，降低 encode 與磁碟寫入量。
-
-一次本機 benchmark sample 顯示 100、1,000、10,000 users 的 indexed `GetUser` 都維持約 52–56 ns/op、0 allocation；`RecordTraffic` 約 24 ns/op、0 allocation。數值只代表測試機，完整條件與不誇大效能結論的說明見[完整變更文件](/reference/aster-changes)。
-
-## 11. 發行與 CI
-
-Aster 新增：
-
-- `aster-core` 多平台 release asset。
-- Docker Hub multi-arch image。
-- deb、rpm、pacman package 與 systemd units。
-- OpenWrt 24.10+ recipe。
-- Nix flake。
-- Go 1.20–1.26 CI。
-- 管理、安全、store、lifecycle、performance 與 race tests。
-- 固定 `golangci-lint v2.12.2`、`govet`、`staticcheck`、`gci`、`gofumpt`。
-
-## 遷移自 Mihomo
-
-一般 client profile 通常可直接驗證：
-
-```sh
-aster-core -d /path/to/mihomo-home -t
-```
-
-需要留意：
-
-1. `type: relay` 已移除，改用 `dialer-proxy`。
-2. 自行建置要加 `with_gvisor` 才接近正式 release。
-3. Aster 管理不會自動接管所有 listeners，必須明確列出。
-4. Aster secret 與 Controller secret 不同。
-5. Aster store 含敏感資料，需要正確 owner 與 permissions。
-6. 使用訂閱前要設定 HTTPS `public-base-url` 並設計 reverse proxy。
-7. AnyTLS + REALITY 是 Aster 擴充；需要使用支援相同 URI 與 REALITY 欄位的 client。
-
-## 上游同步政策
-
-上游變更不是自動覆蓋。更新 Mihomo 基線時必須保留：
-
-- Aster management API。
-- Managed listener hooks。
-- Principal traffic accounting。
-- Store security 與 recovery。
-- Subscription compatibility。
-- OpenWrt/Nikki compatibility。
-- Fork-specific tests。
-
-詳細政策見 [UPSTREAM.md](https://github.com/Miku0139oao/aster-core/blob/main/UPSTREAM.md)。
+| 你的情況 | 請看 |
+| --- | --- |
+| 第一次使用 | [第一個代理設定](/tutorials/first-proxy) |
+| 已有 AnyTLS + REALITY 節點 | [AnyTLS + REALITY 教學](/tutorials/anytls-reality) |
+| 網站打不開或連不上 | [故障排查手冊](/tutorials/troubleshooting) |
+| 從 Mihomo 換過來 | 先備份設定，再執行 `aster-core -d <設定資料夾> -t` 檢查 |
