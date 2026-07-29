@@ -1,0 +1,17 @@
+{
+  "name": "aster-core-docs",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prepare:assets": "node scripts/prepare-assets.mjs",
+    "dev": "npm run prepare:assets && vitepress dev . --host 0.0.0.0",
+    "build": "npm run prepare:assets && vitepress build . && node scripts/prepare-sites-dist.mjs",
+    "preview": "vitepress preview . --host 0.0.0.0"
+  },
+  "devDependencies": {
+    "vitepress": "1.6.4"
+  },
+  "overrides": {
+    "vite": "6.4.3"
+  }
+}

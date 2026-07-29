@@ -9,6 +9,10 @@
 </p>
 
 <p align="center">
+  <strong>English</strong> · <a href="README.zh-TW.md">繁體中文</a> · <a href="docs/index.md">Documentation</a>
+</p>
+
+<p align="center">
   <a href="https://github.com/Miku0139oao/aster-core/actions/workflows/test.yml">
     <img src="https://github.com/Miku0139oao/aster-core/actions/workflows/test.yml/badge.svg" alt="Test status">
   </a>
@@ -34,7 +38,9 @@ The current upstream baseline is Mihomo `v1.19.29` at commit `e26714a181ac0e2fa8
 ## Contents
 
 - [Highlights](#highlights)
+- [How Aster differs from Mihomo](#how-aster-differs-from-mihomo)
 - [Supported capabilities](#supported-capabilities)
+- [Documentation site](#documentation-site)
 - [Quick start](#quick-start)
 - [Configuration](#configuration)
 - [Aster user management](#aster-user-management)
@@ -58,6 +64,26 @@ The current upstream baseline is Mihomo `v1.19.29` at commit `e26714a181ac0e2fa8
 - Durable Aster state with locking, generation checks, a redundant backup, and restrictive file permissions.
 - Linux, Windows, macOS, Android, and FreeBSD build targets; OpenWrt/Nikki integration is included.
 
+## How Aster differs from Mihomo
+
+Aster Core is not a ground-up proxy implementation. Its protocol stack, configuration model, rule engine, DNS subsystem, providers, TUN support, and Clash-compatible API come from the Mihomo `v1.19.29` baseline. Aster adds an operational layer around that core:
+
+| Area | Mihomo baseline | Aster addition |
+| --- | --- | --- |
+| Project identity | `mihomo` module and release naming | Independent `aster-core` module, binary, packages, image, and provenance policy |
+| Managed inbounds | Users are defined in YAML and normally changed through configuration reloads | Live CRUD for named VLESS and AnyTLS listener users |
+| Management API | Clash-compatible Controller API | Separate `/api/admin` API with its own mandatory Bearer token |
+| Concurrency control | Configuration-level updates | Per-listener revisions and HTTP `409 Conflict` for stale mutations |
+| Traffic accounting | Global and connection-level statistics | Persistent per-inbound, per-user upload/download totals and active connections |
+| Persistence | Runtime configuration and profile cache | Hardened Aster JSON store with locking, generations, atomic replacement, and `.bak` redundancy |
+| Subscriptions | General provider and profile mechanisms | Rotatable single-user `/sub/aster/{token}` links for eligible VLESS and AnyTLS listeners |
+| Security boundary | Controller `secret` | Independent 32-byte Aster secret, same-origin enforcement, loopback-only plaintext admin mounting, request limits, and state-file permission checks |
+| Runtime management paths | Upstream data structures | Indexed user lookups, targeted listener cloning, batched traffic flushing, and credential-update lifecycle handling |
+| Distribution | Upstream Mihomo artifacts | Aster-native releases plus `/usr/bin/mihomo` compatibility for Linux packages and OpenWrt/Nikki |
+| Quality gates | Upstream CI | Fork-specific management, persistence, lifecycle, performance, race, lint, and interoperability coverage |
+
+Current Aster management supports VLESS and AnyTLS only. Other protocols listed below are inherited from Mihomo and are not automatically managed by the Aster admin API. See the [Aster vs. Mihomo reference](docs/reference/mihomo-differences.md) for the detailed boundary and migration implications.
+
 ## Supported capabilities
 
 | Area | Included |
@@ -72,6 +98,18 @@ The current upstream baseline is Mihomo `v1.19.29` at commit `e26714a181ac0e2fa8
 | Routing inputs | Domain, suffix, keyword, regex, wildcard, GeoIP, GeoSite, IP/CIDR, IP suffix, ASN, process, UID, ports, DSCP, inbound, network type, rule sets, logical rules |
 
 The full configuration surface is documented in [docs/config.yaml](docs/config.yaml). Mihomo-compatible options are also covered by the [Mihomo documentation](https://wiki.metacubex.one/).
+
+## Documentation site
+
+The repository now includes a searchable Traditional Chinese VitePress site under [`docs/`](docs/index.md). It separates inherited Mihomo behavior from Aster-specific changes and covers configuration, inbounds, outbounds, routing, DNS, the Aster API, security, deployment, architecture, testing, and troubleshooting.
+
+```sh
+cd docs
+npm ci
+npm run dev
+```
+
+Build the production site with `npm run build`. The original fully annotated YAML remains available as [`docs/config.yaml`](docs/config.yaml).
 
 ## Quick start
 

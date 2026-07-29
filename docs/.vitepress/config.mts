@@ -1,0 +1,148 @@
+import { defineConfig } from "vitepress";
+import { fileURLToPath } from "node:url";
+
+const base = process.env.DOCS_BASE || "/";
+const publicDir = fileURLToPath(
+  new URL("./public-runtime", import.meta.url),
+);
+
+export default defineConfig({
+  lang: "zh-TW",
+  title: "Aster Core",
+  description: "Aster Core 繁體中文使用、設定、管理與部署文件",
+  base,
+  cleanUrls: true,
+  lastUpdated: true,
+  appearance: true,
+  vite: {
+    publicDir,
+  },
+  head: [
+    ["link", { rel: "icon", type: "image/png", href: `${base}logo.png` }],
+    ["meta", { name: "theme-color", content: "#5b5bd6" }],
+    ["meta", { property: "og:type", content: "website" }],
+    ["meta", { property: "og:locale", content: "zh_TW" }],
+    ["meta", { property: "og:title", content: "Aster Core 文件" }],
+    [
+      "meta",
+      {
+        property: "og:description",
+        content: "Mihomo 相容代理核心的繁體中文使用、設定、Aster 管理與部署參考",
+      },
+    ],
+  ],
+  markdown: {
+    lineNumbers: true,
+  },
+  themeConfig: {
+    logo: "/logo.png",
+    siteTitle: "Aster Core 文件",
+    outline: {
+      level: [2, 3],
+      label: "本頁內容",
+    },
+    docFooter: {
+      prev: "上一頁",
+      next: "下一頁",
+    },
+    lastUpdated: {
+      text: "最後更新",
+      formatOptions: {
+        dateStyle: "medium",
+        timeStyle: "short",
+      },
+    },
+    returnToTopLabel: "回到頂部",
+    sidebarMenuLabel: "選單",
+    darkModeSwitchLabel: "外觀",
+    lightModeSwitchTitle: "切換至淺色模式",
+    darkModeSwitchTitle: "切換至深色模式",
+    nav: [
+      { text: "首頁", link: "/" },
+      { text: "快速開始", link: "/guide/getting-started" },
+      { text: "設定參考", link: "/reference/configuration" },
+      { text: "Aster 管理", link: "/aster/overview" },
+      { text: "與 Mihomo 差異", link: "/reference/mihomo-differences" },
+    ],
+    sidebar: [
+      {
+        text: "開始使用",
+        items: [
+          { text: "專案介紹", link: "/guide/introduction" },
+          { text: "快速開始", link: "/guide/getting-started" },
+          { text: "設定概念", link: "/guide/configuration" },
+        ],
+      },
+      {
+        text: "參考",
+        items: [
+          { text: "Aster 與 Mihomo 差異", link: "/reference/mihomo-differences" },
+          { text: "命令列與環境變數", link: "/reference/cli" },
+          { text: "設定總覽", link: "/reference/configuration" },
+          { text: "入站", link: "/reference/inbounds" },
+          { text: "出站與代理群組", link: "/reference/outbounds" },
+          { text: "規則與 DNS", link: "/reference/routing-dns" },
+        ],
+      },
+      {
+        text: "Aster 管理",
+        items: [
+          { text: "管理功能概覽", link: "/aster/overview" },
+          { text: "Admin API", link: "/aster/api" },
+          { text: "安全與持久化", link: "/aster/security" },
+        ],
+      },
+      {
+        text: "部署",
+        items: [
+          { text: "Docker", link: "/deployment/docker" },
+          { text: "Linux 與 systemd", link: "/deployment/linux" },
+          { text: "OpenWrt 與 Nikki", link: "/deployment/openwrt" },
+        ],
+      },
+      {
+        text: "開發",
+        items: [
+          { text: "架構", link: "/development/architecture" },
+          { text: "建置與測試", link: "/development/build-test" },
+          { text: "疑難排解", link: "/troubleshooting" },
+        ],
+      },
+    ],
+    socialLinks: [
+      {
+        icon: "github",
+        link: "https://github.com/Miku0139oao/aster-core",
+      },
+    ],
+    editLink: {
+      pattern:
+        "https://github.com/Miku0139oao/aster-core/edit/main/docs/:path",
+      text: "在 GitHub 編輯此頁",
+    },
+    search: {
+      provider: "local",
+      options: {
+        locales: {
+          root: {
+            translations: {
+              button: {
+                buttonText: "搜尋文件",
+                buttonAriaLabel: "搜尋文件",
+              },
+              modal: {
+                noResultsText: "找不到相關結果",
+                resetButtonTitle: "清除搜尋",
+                footer: {
+                  selectText: "選取",
+                  navigateText: "切換",
+                  closeText: "關閉",
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+});
