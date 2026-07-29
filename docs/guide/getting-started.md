@@ -1,5 +1,9 @@
 # 快速開始
 
+::: tip 想要完整可照做的流程？
+本頁是精簡啟動參考。如果要從 release、第一個遠端節點、完整 DNS/rules 一路做到 `curl` 驗證，請直接閱讀[第一個代理設定實戰](/tutorials/first-proxy)。
+:::
+
 ## 系統需求
 
 - Go 1.20 或更新版本（從原始碼建置時）。
@@ -117,6 +121,8 @@ kill -TERM <pid>  # 正常關閉
 
 ## 下一步
 
+- [建立第一個完整代理設定](/tutorials/first-proxy)
+- [照著做路由與 DNS 分流](/tutorials/routing-dns)
 - [理解設定來源與安全路徑](/guide/configuration)
 - [加入 proxies 與 proxy groups](/reference/outbounds)
 - [設定 rules 與 DNS](/reference/routing-dns)

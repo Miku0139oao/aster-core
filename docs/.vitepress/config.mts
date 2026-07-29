@@ -9,7 +9,7 @@ const publicDir = fileURLToPath(
 export default defineConfig({
   lang: "zh-TW",
   title: "Aster Core",
-  description: "Aster Core 繁體中文使用、設定、管理與部署文件",
+  description: "Aster Core 繁體中文實戰教學、AnyTLS + REALITY、Mihomo 修正、效能優化、管理與部署文件",
   base,
   sitemap: {
     hostname: "https://astercore.fubukishop.app",
@@ -30,7 +30,7 @@ export default defineConfig({
       "meta",
       {
         property: "og:description",
-        content: "Mihomo 相容代理核心的繁體中文使用、設定、Aster 管理與部署參考",
+        content: "Aster Core 的繁體中文實戰教學、AnyTLS + REALITY、Mihomo 問題修正、效能優化、管理與部署文件",
       },
     ],
   ],
@@ -62,7 +62,19 @@ export default defineConfig({
     darkModeSwitchTitle: "切換至深色模式",
     nav: [
       { text: "首頁", link: "/" },
-      { text: "快速開始", link: "/guide/getting-started" },
+      {
+        text: "實戰教學",
+        items: [
+          { text: "教學總覽", link: "/tutorials/" },
+          { text: "第一個代理設定", link: "/tutorials/first-proxy" },
+          { text: "路由與 DNS", link: "/tutorials/routing-dns" },
+          { text: "AnyTLS + REALITY", link: "/tutorials/anytls-reality" },
+          { text: "使用者與訂閱", link: "/tutorials/user-management" },
+          { text: "Linux 正式部署", link: "/tutorials/linux-production" },
+          { text: "故障排查", link: "/tutorials/troubleshooting" },
+        ],
+      },
+      { text: "完整變更", link: "/reference/aster-changes" },
       { text: "AnyTLS + REALITY", link: "/reference/anytls-reality" },
       { text: "設定參考", link: "/reference/configuration" },
       { text: "Aster 管理", link: "/aster/overview" },
@@ -78,9 +90,22 @@ export default defineConfig({
         ],
       },
       {
+        text: "實戰教學",
+        items: [
+          { text: "教學總覽", link: "/tutorials/" },
+          { text: "第一個代理設定", link: "/tutorials/first-proxy" },
+          { text: "路由與 DNS 分流", link: "/tutorials/routing-dns" },
+          { text: "AnyTLS + REALITY", link: "/tutorials/anytls-reality" },
+          { text: "使用者與訂閱", link: "/tutorials/user-management" },
+          { text: "Linux 正式部署", link: "/tutorials/linux-production" },
+          { text: "故障排查手冊", link: "/tutorials/troubleshooting" },
+        ],
+      },
+      {
         text: "參考",
         items: [
           { text: "Aster 與 Mihomo 差異", link: "/reference/mihomo-differences" },
+          { text: "完整變更、修正與效能", link: "/reference/aster-changes" },
           { text: "AnyTLS + REALITY", link: "/reference/anytls-reality" },
           { text: "命令列與環境變數", link: "/reference/cli" },
           { text: "設定總覽", link: "/reference/configuration" },

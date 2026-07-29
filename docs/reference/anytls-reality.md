@@ -1,5 +1,9 @@
 # AnyTLS + REALITY
 
+::: tip 先部署，再回來查欄位
+如果你要的是從 DNS、防火牆、key、server/client YAML 到 TCP/UDP 驗證的完整流程，請使用[從零部署 AnyTLS + REALITY](/tutorials/anytls-reality)。本頁保留作為欄位與限制參考。
+:::
+
 ## 這是 Aster 新增的能力
 
 Mihomo `v1.19.29` 已包含 AnyTLS，但該基線的 AnyTLS security 只有憑證 TLS、ShadowTLS、ResTLS 與 JLS。Aster 在此基礎上補齊：

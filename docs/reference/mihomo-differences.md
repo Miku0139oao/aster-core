@@ -14,6 +14,10 @@ Fork 建立後的主要變更分為三組：
 2. `optimize Aster runtime and management paths`：改善查找、流量、snapshot、listener 更新及連線生命週期。
 3. `harden CI and enforce code quality`：固定 lint、race 與多版本測試，修正 fork 內品質問題。
 
+::: tip 想看逐項修正與效能證據？
+本頁先說明使用者可觀察到的能力邊界。一般 listener、Hysteria、VLESS packet、XHTTP、DNS relay、updater 等修正，以及 user index、局部 store clone、原子流量計數與 benchmark，集中列在[Aster 完整變更、修正與效能優化](/reference/aster-changes)。
+:::
+
 ## 能力邊界
 
 | 能力 | 來源 | 說明 |
@@ -27,6 +31,8 @@ Fork 建立後的主要變更分為三組：
 | `/sub/aster/{token}` | Aster | 單一 managed user 訂閱 |
 | 逐使用者持久化流量 | Aster | 由 connection tracker principal 回報 |
 | `aster-state.json` | Aster | 獨立安全 state store |
+| Listener／transport 修正 | Aster patch | 修正關閉、reload rollback、Hysteria UDP、VLESS packet、XHTTP、DNS relay 等上游基線問題 |
+| 管理熱路徑優化 | Aster patch | User/token index、目標 listener clone、atomic traffic、增量 connection count |
 | OpenWrt/Nikki alternative | Aster | 保留 Mihomo compatibility path |
 
 ## 1. 獨立專案識別
@@ -55,7 +61,24 @@ Mihomo `v1.19.29` 基線已有 AnyTLS 與憑證 TLS、ShadowTLS、ResTLS、JLS�
 
 這是一項 Aster 資料平面擴充，不只是管理 API 包裝。完整設定見 [AnyTLS + REALITY](/reference/anytls-reality)。
 
-## 3. Managed VLESS 與 AnyTLS
+## 3. 上游基線問題修正
+
+截至 2026-07-29，Mihomo `Meta` 最新 commit 仍是本專案基線 `e26714a1`。Aster 在其上另外修正：
+
+- Context listener 關閉後遺留 in-flight handshake、Accept 無法退出及 Close race。
+- Inbound reload 中途失敗時的半套 socket、非確定性 address transfer 與 rollback。
+- Trojan、Shadowsocks、VMess、Hysteria2、TUIC、ShadowQUIC、TrustTunnel 等 listener/service constructor 或 close 中的資源洩漏與生命週期問題。
+- Hysteria UDP 交錯 session 分片混淆、DialUDP flag、reconnect generation、message ID 與 port hopping 多開 socket。
+- VLESS packet short-buffer 後 frame 失步、超大 frame 與 concurrent read/write 交錯。
+- XHTTP blocked write 使 close 卡住、重複 close 及舊 session 刪除 replacement。
+- DNS 壓縮 response 沒有寫回 UDP hijack caller 的 target backing array。
+- Core updater 缺少 checksum、stable semver、HTTP status、metadata size 與 downgrade 防護。
+- Controller reload generation、`/debug` authentication、Unix socket 權限與 Windows named-pipe ACL。
+- 一般 connection statistic 的 memory counter data race。
+
+各項原始行為、修正方式、證據入口、已有測試與 commit 請看[完整變更文件](/reference/aster-changes)。文件會區分直接 regression test 與僅有程式入口的分支。
+
+## 4. Managed VLESS 與 AnyTLS
 
 只有實作 `ManagedUserListener` 的 listener 才能加入：
 
@@ -73,7 +96,7 @@ aster:
 
 管理變更直接更新執行中的 authentication state，不需要關閉並重開 listener。未列入 `managed-listeners` 的 listener 仍由一般 YAML 設定管理。
 
-## 4. 獨立 Admin API
+## 5. 獨立 Admin API
 
 Aster API 使用 `/api/admin`，不共用 Controller `secret`：
 
@@ -90,7 +113,7 @@ Authorization: Bearer <aster-secret>
 
 此 API 不替代 Clash API。兩者同時存在、權限分離，適合讓 Dashboard 與管理後台使用不同 credentials。
 
-## 5. Revision 與衝突控制
+## 6. Revision 與衝突控制
 
 每個 managed listener 有：
 
@@ -105,7 +128,7 @@ Mutation 必須帶目前 revision。若另一個管理者已先更新，舊 requ
 
 這可防止面板、CLI 或多個後台彼此覆蓋變更。
 
-## 6. Per-principal 流量
+## 7. Per-principal 流量
 
 Aster 在 connection tracker 加入 principal：
 
@@ -122,7 +145,7 @@ Inbound + UserID
 
 流量不是每個 packet 都同步寫入磁碟，而是先在記憶體聚合，再由 manager 批次 flush，降低熱路徑鎖定與 I/O。
 
-## 7. 安全持久化
+## 8. 安全持久化
 
 預設 store：
 
@@ -144,7 +167,7 @@ Inbound + UserID
 
 Store 仍是**明文 JSON**。其安全性依賴檔案系統權限，不是內容加密。
 
-## 8. 訂閱
+## 9. 訂閱
 
 啟用 `public-base-url` 後，每個 eligible user 可取得可輪替 token：
 
@@ -164,7 +187,7 @@ https://proxy.example.com/sub/aster/<token>
 - JLS
 - 進階 XHTTP placement、padding 等欄位
 
-## 9. 管理路徑效能與生命週期
+## 10. 管理與資料平面效能
 
 Fork 的管理熱路徑加入：
 
@@ -176,9 +199,17 @@ Fork 的管理熱路徑加入：
 - Revoked credential 關閉與既有連線保留規則。
 - AnyTLS/VLESS 更新失敗時的 fail-closed 行為。
 
-這些是 Aster 管理層優化，不代表整個 Mihomo 資料平面被改寫。
+資料平面另有針對性優化：
 
-## 10. 發行與 CI
+- Hysteria UDP message 直接寫入預配置 slice，不再經 `bytes.Buffer` 逐欄 `binary.Write`。
+- VLESS packet 使用 `net.Buffers` 寫入 header + payload，並維護 frame-level 併發安全。
+- 沒有 authenticated user 的 `PushUploadedFor`／`PushDownloadedFor` 會快速略過 per-principal observer。
+- Tracker 在 Join/Leave 時增量維護每位使用者活動連線，不在每個 API request 掃描完整 connection snapshot。
+- State 使用 compact JSON，降低 encode 與磁碟寫入量。
+
+一次本機 benchmark sample 顯示 100、1,000、10,000 users 的 indexed `GetUser` 都維持約 52–56 ns/op、0 allocation；`RecordTraffic` 約 24 ns/op、0 allocation。數值只代表測試機，完整條件與不誇大效能結論的說明見[完整變更文件](/reference/aster-changes)。
+
+## 11. 發行與 CI
 
 Aster 新增：
 

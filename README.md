@@ -64,6 +64,8 @@ The current upstream baseline is Mihomo `v1.19.29` at commit `e26714a181ac0e2fa8
 - Live VLESS and AnyTLS user CRUD without recreating the listener.
 - Per-principal upload, download, and active-connection accounting.
 - Durable Aster state with locking, generation checks, a redundant backup, and restrictive file permissions.
+- Fixes still absent from the Mihomo `v1.19.29` / `e26714a1` baseline, including listener reload/close lifecycle, Hysteria UDP fragmentation, VLESS packet framing, XHTTP close/session races, DNS relay buffers, and updater verification.
+- Indexed management lookups, listener-targeted store cloning, allocation-free atomic traffic accounting, incremental principal connection counts, and regression benchmarks.
 - Linux, Windows, macOS, Android, and FreeBSD build targets; OpenWrt/Nikki integration is included.
 
 ## How Aster differs from Mihomo
@@ -81,11 +83,12 @@ Aster Core is not a ground-up proxy implementation. Its protocol stack, configur
 | Persistence | Runtime configuration and profile cache | Hardened Aster JSON store with locking, generations, atomic replacement, and `.bak` redundancy |
 | Subscriptions | General provider and profile mechanisms | Rotatable single-user `/sub/aster/{token}` links for eligible VLESS and AnyTLS listeners |
 | Security boundary | Controller `secret` | Independent 32-byte Aster secret, same-origin enforcement, loopback-only plaintext admin mounting, request limits, and state-file permission checks |
+| Upstream issue fixes | Mihomo `v1.19.29` / `e26714a1` behavior | Tested fixes for listener lifecycle and rollback, Hysteria UDP, VLESS packet frames, XHTTP, DNS relay, updater validation, and partial-bind cleanup |
 | Runtime management paths | Upstream data structures | Indexed user lookups, targeted listener cloning, batched traffic flushing, and credential-update lifecycle handling |
 | Distribution | Upstream Mihomo artifacts | Aster-native releases plus `/usr/bin/mihomo` compatibility for Linux packages and OpenWrt/Nikki |
 | Quality gates | Upstream CI | Fork-specific management, persistence, lifecycle, performance, race, lint, and interoperability coverage |
 
-Current Aster management supports VLESS and AnyTLS only. Other protocols listed below are inherited from Mihomo and are not automatically managed by the Aster admin API. See the [Aster vs. Mihomo reference](docs/reference/mihomo-differences.md) for the detailed boundary and migration implications.
+Current Aster management supports VLESS and AnyTLS only. Other protocols listed below are inherited from Mihomo and are not automatically managed by the Aster admin API. See the [Aster vs. Mihomo reference](docs/reference/mihomo-differences.md) for the capability boundary, and the [evidence-backed change log](docs/reference/aster-changes.md) for individual upstream fixes, performance mechanisms, tests, and benchmark conditions.
 
 ## AnyTLS + REALITY
 
@@ -158,7 +161,7 @@ The full configuration surface is documented in [docs/config.yaml](docs/config.y
 
 ## Documentation site
 
-The searchable Traditional Chinese documentation is published at [astercore.fubukishop.app](https://astercore.fubukishop.app/), with its VitePress source kept under [`docs/`](docs/index.md). It separates inherited Mihomo behavior from Aster-specific changes and covers configuration, inbounds, outbounds, routing, DNS, the Aster API, security, deployment, architecture, testing, and troubleshooting.
+The searchable Traditional Chinese documentation is published at [astercore.fubukishop.app](https://astercore.fubukishop.app/), with its VitePress source kept under [`docs/`](docs/index.md). Start with the [step-by-step tutorials](https://astercore.fubukishop.app/tutorials/) for complete configurations and verification flows, or read the [full Aster change and optimization log](https://astercore.fubukishop.app/reference/aster-changes) for code- and test-backed differences from Mihomo.
 
 ```sh
 cd docs

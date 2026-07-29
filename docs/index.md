@@ -4,25 +4,33 @@ layout: home
 hero:
   name: Aster Core
   text: AnyTLS + REALITY，建立在 Mihomo 之上
-  tagline: 從協定設定到即時使用者管理、訂閱、API、安全與部署的繁體中文參考文件。
+  tagline: 從零實戰教學、Mihomo 問題修正、效能優化、協定設定、使用者管理與正式部署的繁體中文文件。
   image:
     src: /logo.png
     alt: Aster Core
   actions:
     - theme: brand
-      text: 快速開始
-      link: /guide/getting-started
+      text: 實戰教學
+      link: /tutorials/
+    - theme: alt
+      text: 完整變更與優化
+      link: /reference/aster-changes
     - theme: alt
       text: AnyTLS + REALITY
-      link: /reference/anytls-reality
-    - theme: alt
-      text: Aster 與 Mihomo 差異
-      link: /reference/mihomo-differences
+      link: /tutorials/anytls-reality
     - theme: alt
       text: 設定參考
       link: /reference/configuration
 
 features:
+  - icon: ✓
+    title: 從零實戰
+    details: 六篇可照做的教學，包含完整 YAML、指令、預期結果、驗證、回退與症狀導向排錯。
+    link: /tutorials/
+  - icon: ⚡
+    title: 問題修正與效能
+    details: 逐項列出相對 Mihomo 最新基線的 listener、Hysteria、VLESS、XHTTP、DNS、updater 修正與 benchmark。
+    link: /reference/aster-changes
   - icon: ↗
     title: Mihomo 相容
     details: 沿用 Mihomo YAML、規則、providers、DNS、TUN 與 Clash-compatible Controller API。
@@ -51,8 +59,12 @@ Aster Core 是 [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo) 的修改
 
 | 需求 | 建議入口 |
 | --- | --- |
-| 第一次執行 | [快速開始](/guide/getting-started) |
-| 部署 AnyTLS + REALITY | [AnyTLS + REALITY](/reference/anytls-reality) |
+| 第一次建立可用代理 | [第一個代理設定實戰](/tutorials/first-proxy) |
+| 從零部署 AnyTLS + REALITY | [AnyTLS + REALITY 實戰](/tutorials/anytls-reality) |
+| 管理使用者與訂閱 | [受管使用者實戰](/tutorials/user-management) |
+| 在 VPS 正式上線 | [Linux 正式部署](/tutorials/linux-production) |
+| 依症狀排查問題 | [故障排查手冊](/tutorials/troubleshooting) |
+| 查看修正與效能證據 | [完整變更與優化](/reference/aster-changes) |
 | 從 Mihomo 遷移 | [Aster 與 Mihomo 差異](/reference/mihomo-differences) |
 | 查 YAML 欄位 | [設定總覽](/reference/configuration) |
 | 建立 VLESS/AnyTLS 管理服務 | [Aster 管理功能](/aster/overview) |
@@ -63,6 +75,12 @@ Aster Core 是 [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo) 的修改
 ::: warning 文件範圍
 本文件描述 Aster Core repository 目前的實作。Mihomo 上游選項非常多，完整 YAML 範例仍保留在 [`config.yaml`](/config.yaml)；敘述式頁面著重常用欄位、Aster 變動、限制與容易踩雷的行為。
 :::
+
+## 教學和參考現在分開
+
+- **想完成一個任務**：從[實戰教學](/tutorials/)開始，跟著前置條件、完整設定、操作、驗證與排錯走。
+- **想查一個欄位**：使用[設定總覽](/reference/configuration)、[入站](/reference/inbounds)、[出站](/reference/outbounds)及[規則與 DNS](/reference/routing-dns)。
+- **想知道 Aster 到底改了什麼**：閱讀[完整變更、問題修正與效能優化](/reference/aster-changes)，其中包含基線 SHA、實作機制、測試名稱與 benchmark。
 
 ## 版本基線
 

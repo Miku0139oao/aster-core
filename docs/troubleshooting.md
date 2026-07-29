@@ -1,5 +1,9 @@
 # 疑難排解
 
+::: tip 依症狀執行的 runbook
+需要一條從 `-t`、socket、journal、DNS、REALITY、Controller、Aster state 到 UDP 的實際排查順序，請使用[故障排查手冊](/tutorials/troubleshooting)。
+:::
+
 ## 找不到設定或讀到錯誤檔案
 
 先顯式指定：

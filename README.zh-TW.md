@@ -64,6 +64,8 @@ Aster Core 是以 [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo) 為基
 - 不重建 listener 即可即時新增、修改、停用或刪除 VLESS 與 AnyTLS 使用者。
 - 逐入站、逐使用者記錄上傳、下載與活動連線。
 - Aster 狀態具備檔案鎖、generation 衝突檢查、備援檔及嚴格權限。
+- 修正 Mihomo `v1.19.29`／`e26714a1` 最新基線仍存在的 listener reload/close、Hysteria UDP 分片、VLESS packet frame、XHTTP close/session race、DNS relay buffer 與 updater 驗證問題。
+- 管理路徑採 user/token 索引、目標 listener 局部複製、零配置 atomic 流量計數及增量活動連線統計，並有 regression benchmark。
 - 提供 Linux、Windows、macOS、Android、FreeBSD 建置目標及 OpenWrt/Nikki 整合。
 
 ## 與 Mihomo 的差異
@@ -81,11 +83,12 @@ Aster Core 不是重新開發的代理核心。協定堆疊、設定模型、規
 | 持久化 | 執行設定與 profile cache | 具鎖定、generation、原子替換、`.bak` 備援的 Aster JSON store |
 | 訂閱 | 一般 provider/profile 機制 | 可輪替 token 的單一使用者 `/sub/aster/{token}` |
 | 安全邊界 | Controller `secret` | 獨立至少 32 bytes 的 Aster secret、same-origin、明文 loopback 限制、body 上限及檔案權限檢查 |
+| 上游問題修正 | Mihomo `v1.19.29`／`e26714a1` 行為 | Listener 生命週期與 rollback、Hysteria UDP、VLESS packet、XHTTP、DNS relay、updater 與 partial-bind cleanup |
 | 管理效能 | 上游資料結構 | 索引化使用者查找、listener 定向複製、批次流量寫回與憑證更新生命週期處理 |
 | 發行整合 | Mihomo 上游產物 | Aster 原生發行，並為 Linux 套件與 OpenWrt/Nikki 保留 `/usr/bin/mihomo` 相容入口 |
 | 品質檢查 | 上游 CI | Aster 管理、持久化、生命週期、效能、race、lint 與互通測試 |
 
-Aster 管理目前只支援 VLESS 與 AnyTLS。下方其他協定是繼承自 Mihomo，不能透過 Aster Admin API 自動管理。完整邊界與遷移影響請參閱[「Aster 與 Mihomo 差異」](docs/reference/mihomo-differences.md)。
+Aster 管理目前只支援 VLESS 與 AnyTLS。下方其他協定是繼承自 Mihomo，不能透過 Aster Admin API 自動管理。能力邊界與遷移影響請參閱[「Aster 與 Mihomo 差異」](docs/reference/mihomo-differences.md)；逐項問題、修正機制、測試與 benchmark 請看[完整變更與效能文件](docs/reference/aster-changes.md)。
 
 ## AnyTLS + REALITY
 
@@ -158,7 +161,7 @@ anytls://<password>@proxy.example.com:443?security=reality&sni=www.microsoft.com
 
 ## 文件站
 
-可全文搜尋的繁體中文 VitePress 文件站已發布於 [astercore.fubukishop.app](https://astercore.fubukishop.app/)，原始檔保留在 repository 的 [`docs/`](docs/index.md)。文件清楚區分 Mihomo 繼承行為與 Aster 自有變動，內容包含設定、入站、出站、規則、DNS、Aster API、安全、部署、架構、測試與疑難排解。
+可全文搜尋的繁體中文 VitePress 文件站已發布於 [astercore.fubukishop.app](https://astercore.fubukishop.app/)，原始檔保留在 repository 的 [`docs/`](docs/index.md)。請從[逐步實戰教學](https://astercore.fubukishop.app/tutorials/)取得完整設定與驗證流程；Aster 相對 Mihomo 的問題修正、效能機制、測試與 benchmark 則集中在[完整變更文件](https://astercore.fubukishop.app/reference/aster-changes)。
 
 ```sh
 cd docs

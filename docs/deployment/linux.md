@@ -1,5 +1,9 @@
 # Linux 套件與 systemd
 
+::: tip 正式環境逐步部署
+要從 release asset、檔案權限、防火牆、systemd、驗證一路做到更新與回退，請使用[Linux VPS 正式部署實戰](/tutorials/linux-production)。
+:::
+
 ## Release packages
 
 發行流程可產生：
