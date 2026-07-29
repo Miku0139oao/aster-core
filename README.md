@@ -5,7 +5,7 @@
 <h1 align="center">Aster Core</h1>
 
 <p align="center">
-  A Mihomo-compatible universal proxy core with live VLESS and AnyTLS user management.
+  A Mihomo-compatible universal proxy core with AnyTLS + REALITY and live VLESS/AnyTLS user management.
 </p>
 
 <p align="center">
@@ -28,7 +28,7 @@
   </a>
 </p>
 
-Aster Core is a security-focused fork of [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo). It keeps the Mihomo YAML configuration format and Clash-compatible Controller API, while adding an opt-in management plane for live VLESS and AnyTLS user updates, per-user traffic accounting, persistent state, and subscription links.
+Aster Core is a security-focused fork of [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo). It keeps the Mihomo YAML configuration format and Clash-compatible Controller API, while adding AnyTLS + REALITY on both client and server, plus an opt-in management plane for live VLESS and AnyTLS user updates, per-user traffic accounting, persistent state, and subscription links.
 
 The current upstream baseline is Mihomo `v1.19.29` at commit `e26714a181ac0e2fa803453c0a8e9a9ce94e31cb`. See [NOTICE.md](NOTICE.md) and [UPSTREAM.md](UPSTREAM.md) for provenance and the upstream update policy.
 
@@ -39,6 +39,7 @@ The current upstream baseline is Mihomo `v1.19.29` at commit `e26714a181ac0e2fa8
 
 - [Highlights](#highlights)
 - [How Aster differs from Mihomo](#how-aster-differs-from-mihomo)
+- [AnyTLS + REALITY](#anytls--reality)
 - [Supported capabilities](#supported-capabilities)
 - [Documentation site](#documentation-site)
 - [Quick start](#quick-start)
@@ -59,6 +60,7 @@ The current upstream baseline is Mihomo `v1.19.29` at commit `e26714a181ac0e2fa8
 - Integrated DNS server with fake-IP, hosts, policy routing, cache, and DoH/DoT/DoQ/DHCP upstream support.
 - `select`, `url-test`, `fallback`, and `load-balance` proxy groups with health checks.
 - Domain, GeoIP, GeoSite, IP/CIDR, ASN, process, port, inbound, user, network, and logical routing rules.
+- AnyTLS + REALITY for both listeners and outbounds, including `anytls://` REALITY link import and managed subscription export.
 - Live VLESS and AnyTLS user CRUD without recreating the listener.
 - Per-principal upload, download, and active-connection accounting.
 - Durable Aster state with locking, generation checks, a redundant backup, and restrictive file permissions.
@@ -72,6 +74,7 @@ Aster Core is not a ground-up proxy implementation. Its protocol stack, configur
 | --- | --- | --- |
 | Project identity | `mihomo` module and release naming | Independent `aster-core` module, binary, packages, image, and provenance policy |
 | Managed inbounds | Users are defined in YAML and normally changed through configuration reloads | Live CRUD for named VLESS and AnyTLS listener users |
+| AnyTLS security | Certificates, ShadowTLS, ResTLS, and JLS in the Mihomo `v1.19.29` baseline | REALITY on both the AnyTLS listener and outbound, plus REALITY URI import and subscription export |
 | Management API | Clash-compatible Controller API | Separate `/api/admin` API with its own mandatory Bearer token |
 | Concurrency control | Configuration-level updates | Per-listener revisions and HTTP `409 Conflict` for stale mutations |
 | Traffic accounting | Global and connection-level statistics | Persistent per-inbound, per-user upload/download totals and active connections |
@@ -83,6 +86,60 @@ Aster Core is not a ground-up proxy implementation. Its protocol stack, configur
 | Quality gates | Upstream CI | Fork-specific management, persistence, lifecycle, performance, race, lint, and interoperability coverage |
 
 Current Aster management supports VLESS and AnyTLS only. Other protocols listed below are inherited from Mihomo and are not automatically managed by the Aster admin API. See the [Aster vs. Mihomo reference](docs/reference/mihomo-differences.md) for the detailed boundary and migration implications.
+
+## AnyTLS + REALITY
+
+Aster extends the Mihomo `v1.19.29` AnyTLS implementation with REALITY on **both sides of the connection**. An Aster server can expose an AnyTLS listener without a public TLS certificate, while an Aster client can connect with the server public key, short ID, camouflage SNI, and a uTLS fingerprint.
+
+Generate an X25519 key pair first:
+
+```sh
+aster-core generate reality-keypair
+```
+
+Server listener:
+
+```yaml
+listeners:
+  - name: edge-anytls
+    type: anytls
+    listen: 0.0.0.0
+    port: 443
+    users:
+      alice: "replace-with-a-long-random-password"
+    reality-config:
+      dest: www.microsoft.com:443
+      private-key: <server-private-key>
+      short-id:
+        - 0123456789abcdef
+      server-names:
+        - www.microsoft.com
+```
+
+Client outbound:
+
+```yaml
+proxies:
+  - name: edge-anytls-reality
+    type: anytls
+    server: proxy.example.com
+    port: 443
+    password: "replace-with-a-long-random-password"
+    sni: www.microsoft.com
+    client-fingerprint: chrome
+    reality-opts:
+      public-key: <server-public-key>
+      short-id: 0123456789abcdef
+    udp: true
+```
+
+Aster also imports and emits the corresponding share-link form:
+
+```text
+anytls://<password>@proxy.example.com:443?security=reality&sni=www.microsoft.com&fp=chrome&pbk=<server-public-key>&sid=0123456789abcdef#Aster-AnyTLS-REALITY
+```
+
+When the listener is included in `aster.managed-listeners`, passwords can be changed live and each enabled user can receive a rotatable `/sub/aster/{token}` subscription containing its AnyTLS + REALITY link. REALITY, certificate TLS, ShadowTLS, ResTLS, and JLS are mutually exclusive security modes for one AnyTLS endpoint. See the dedicated [AnyTLS + REALITY guide](docs/reference/anytls-reality.md) for fields, deployment notes, and limitations.
 
 ## Supported capabilities
 

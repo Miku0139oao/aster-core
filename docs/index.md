@@ -3,8 +3,8 @@ layout: home
 
 hero:
   name: Aster Core
-  text: Mihomo 相容代理核心
-  tagline: 從安裝、設定與協定，到 Aster 使用者管理、API、安全與部署的繁體中文參考文件。
+  text: AnyTLS + REALITY，建立在 Mihomo 之上
+  tagline: 從協定設定到即時使用者管理、訂閱、API、安全與部署的繁體中文參考文件。
   image:
     src: /logo.png
     alt: Aster Core
@@ -12,6 +12,9 @@ hero:
     - theme: brand
       text: 快速開始
       link: /guide/getting-started
+    - theme: alt
+      text: AnyTLS + REALITY
+      link: /reference/anytls-reality
     - theme: alt
       text: Aster 與 Mihomo 差異
       link: /reference/mihomo-differences
@@ -28,6 +31,10 @@ features:
     title: Aster 管理平面
     details: 對 VLESS 與 AnyTLS 提供即時使用者管理、revision、流量、持久化與訂閱。
     link: /aster/overview
+  - icon: ◈
+    title: AnyTLS + REALITY
+    details: Aster 新增 AnyTLS 用戶端／伺服器雙向 REALITY、分享連結匯入與受管訂閱輸出。
+    link: /reference/anytls-reality
   - icon: ◫
     title: 完整參考
     details: 依入站、出站、群組、規則、DNS、CLI 與環境變數分頁整理。
@@ -40,11 +47,12 @@ features:
 
 ## 先了解這個專案
 
-Aster Core 是 [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo) 的修改分支，而不是重新實作所有代理協定。Mihomo 提供成熟的資料平面、設定格式、規則、DNS、TUN 與協定支援；Aster 在此基礎上加入面向伺服器營運者的使用者管理與安全持久化能力。
+Aster Core 是 [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo) 的修改分支，而不是重新實作所有代理協定。Mihomo 提供成熟的資料平面、設定格式、規則、DNS、TUN 與協定支援；Aster 在此基礎上新增 AnyTLS + REALITY 用戶端／伺服器，並加入面向伺服器營運者的使用者管理與安全持久化能力。
 
 | 需求 | 建議入口 |
 | --- | --- |
 | 第一次執行 | [快速開始](/guide/getting-started) |
+| 部署 AnyTLS + REALITY | [AnyTLS + REALITY](/reference/anytls-reality) |
 | 從 Mihomo 遷移 | [Aster 與 Mihomo 差異](/reference/mihomo-differences) |
 | 查 YAML 欄位 | [設定總覽](/reference/configuration) |
 | 建立 VLESS/AnyTLS 管理服務 | [Aster 管理功能](/aster/overview) |

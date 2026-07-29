@@ -82,7 +82,7 @@ xhttp-opts:
 
 支援 `auto`、`stream-one`、`stream-up`、`packet-up`，以及 HTTP/1.1、HTTP/2、HTTP/3、XMUX reuse、split download 與進階 placement/padding。
 
-### REALITY
+### VLESS + REALITY
 
 ```yaml
 tls: true
@@ -92,6 +92,27 @@ reality-opts:
   short-id: 0123456789abcdef
 client-fingerprint: chrome
 ```
+
+## AnyTLS + REALITY
+
+```yaml
+proxies:
+  - name: edge-anytls-reality
+    type: anytls
+    server: proxy.example.com
+    port: 443
+    password: replace-with-a-long-random-password
+    sni: www.microsoft.com
+    client-fingerprint: chrome
+    reality-opts:
+      public-key: <server-public-key>
+      short-id: 0123456789abcdef
+    udp: true
+```
+
+這是 Aster 在 Mihomo `v1.19.29` AnyTLS outbound 上新增的 security mode。`public-key` 必須是伺服器 REALITY key pair 的 public key，`sni` 與 `short-id` 必須符合 listener 設定；REALITY 使用 uTLS，因此應明確設定 `client-fingerprint`。
+
+`reality-opts` 不能與 `shadow-tls-opts`、`restls-opts` 或 `jls-opts` 同時使用。完整說明見 [AnyTLS + REALITY](/reference/anytls-reality)。
 
 ## Proxy groups
 

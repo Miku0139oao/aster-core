@@ -7,14 +7,15 @@ Aster Core 是 Mihomo 相容的通用代理核心。它可作為本機代理、�
 專案由兩個層次組成：
 
 1. **Mihomo 基線能力**：YAML 設定、Clash API、DNS、規則、代理群組、providers、TUN、入站、出站及 transport。
-2. **Aster 新增能力**：VLESS/AnyTLS 使用者管理、逐 principal 流量、revision、安全 state store、訂閱與相容封裝。
+2. **Aster 新增能力**：AnyTLS + REALITY 用戶端／伺服器、VLESS/AnyTLS 使用者管理、逐 principal 流量、revision、安全 state store、訂閱與相容封裝。
 
-理解這個邊界很重要。看到 Aster 支援 VMess、Hysteria、WireGuard 或 TUN，不代表這些都是 Aster 新增；大多數協定能力來自 Mihomo。Aster 的主要差異集中在伺服器管理面。
+理解這個邊界很重要。看到 Aster 支援 VMess、Hysteria、WireGuard 或 TUN，不代表這些都是 Aster 新增；大多數協定能力來自 Mihomo。Aster 的主要差異集中在伺服器管理面，另有明確的資料平面擴充：[AnyTLS + REALITY](/reference/anytls-reality)。
 
 ## 適用情境
 
 - 需要沿用現有 Mihomo profile、rules、providers 或 Dashboard。
 - 想在單一核心同時提供 client 與 server 入站能力。
+- 需要部署 AnyTLS + REALITY server 或使用 Aster 作為對應 client。
 - 需要即時管理 VLESS 或 AnyTLS 帳號，不想每次都重載完整設定。
 - 需要逐使用者流量與活動連線資訊。
 - 需要讓管理狀態具備檔案鎖、衝突檢查與安全權限。

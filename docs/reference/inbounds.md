@@ -129,6 +129,8 @@ aster-core generate reality-keypair
 
 ## AnyTLS listener
 
+憑證 TLS：
+
 ```yaml
 listeners:
   - name: edge-anytls
@@ -141,7 +143,28 @@ listeners:
     private-key: ./server.key
 ```
 
-AnyTLS 支援 certificate/private key、REALITY、ShadowTLS、ResTLS、JLS 與 padding scheme。未啟用其他 security 且 `allow-insecure` 不是 `true` 時，必須提供 certificate/private key。
+### AnyTLS + REALITY
+
+```yaml
+listeners:
+  - name: edge-anytls-reality
+    type: anytls
+    listen: 0.0.0.0
+    port: 443
+    users:
+      alice: replace-with-a-long-random-password
+    reality-config:
+      dest: www.microsoft.com:443
+      private-key: <server-private-key>
+      short-id:
+        - 0123456789abcdef
+      server-names:
+        - www.microsoft.com
+```
+
+AnyTLS + REALITY listener 是 Aster 相對 Mihomo `v1.19.29` 新增的能力。AnyTLS 支援 certificate/private key、REALITY、ShadowTLS、ResTLS、JLS 與 padding scheme；這些 security mode 互斥。未啟用任何 security 且 `allow-insecure` 不是 `true` 時，設定驗證會失敗。
+
+完整的 server/client 配對、分享連結與部署檢查請參閱 [AnyTLS + REALITY](/reference/anytls-reality)。
 
 ## Aster managed listener
 

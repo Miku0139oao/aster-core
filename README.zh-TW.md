@@ -5,7 +5,7 @@
 <h1 align="center">Aster Core</h1>
 
 <p align="center">
-  相容 Mihomo、並提供 VLESS 與 AnyTLS 即時使用者管理的通用代理核心。
+  相容 Mihomo，原生支援 AnyTLS + REALITY 與 VLESS/AnyTLS 即時使用者管理。
 </p>
 
 <p align="center">
@@ -28,7 +28,7 @@
   </a>
 </p>
 
-Aster Core 是以 [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo) 為基礎的安全強化分支。它保留 Mihomo YAML 設定格式與 Clash 相容 Controller API，並新增可選用的管理平面，用於即時更新 VLESS、AnyTLS 使用者、逐使用者流量統計、狀態持久化與訂閱連結。
+Aster Core 是以 [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo) 為基礎的安全強化分支。它保留 Mihomo YAML 設定格式與 Clash 相容 Controller API，並新增 AnyTLS 用戶端／伺服器雙向 REALITY，以及可選用的管理平面，用於即時更新 VLESS、AnyTLS 使用者、逐使用者流量統計、狀態持久化與訂閱連結。
 
 目前的上游基線是 Mihomo `v1.19.29`，commit `e26714a181ac0e2fa803453c0a8e9a9ce94e31cb`。來源、授權及同步政策請參閱 [NOTICE.md](NOTICE.md) 與 [UPSTREAM.md](UPSTREAM.md)。
 
@@ -39,6 +39,7 @@ Aster Core 是以 [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo) 為基
 
 - [主要特色](#主要特色)
 - [與 Mihomo 的差異](#與-mihomo-的差異)
+- [AnyTLS + REALITY](#anytls--reality)
 - [支援能力](#支援能力)
 - [文件站](#文件站)
 - [快速開始](#快速開始)
@@ -59,6 +60,7 @@ Aster Core 是以 [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo) 為基
 - 內建 DNS 伺服器，包含 fake-IP、hosts、策略路由、快取及 DoH/DoT/DoQ/DHCP 上游。
 - 提供 `select`、`url-test`、`fallback`、`load-balance` 代理群組與健康檢查。
 - 可依網域、GeoIP、GeoSite、IP/CIDR、ASN、程序、連接埠、入站、使用者、網路類型及邏輯條件分流。
+- AnyTLS 入站與出站皆支援 REALITY，並可匯入 `anytls://` REALITY 連結及輸出受管使用者訂閱。
 - 不重建 listener 即可即時新增、修改、停用或刪除 VLESS 與 AnyTLS 使用者。
 - 逐入站、逐使用者記錄上傳、下載與活動連線。
 - Aster 狀態具備檔案鎖、generation 衝突檢查、備援檔及嚴格權限。
@@ -72,6 +74,7 @@ Aster Core 不是重新開發的代理核心。協定堆疊、設定模型、規
 | --- | --- | --- |
 | 專案識別 | `mihomo` module 與發行名稱 | 獨立 `aster-core` module、binary、套件、映像與來源政策 |
 | 受管入站 | 使用者主要寫在 YAML，變更通常依賴重新載入設定 | 對具名 VLESS、AnyTLS listener 提供即時使用者 CRUD |
+| AnyTLS security | Mihomo `v1.19.29` 基線提供憑證 TLS、ShadowTLS、ResTLS 與 JLS | AnyTLS listener 與 outbound 雙向支援 REALITY，另有 REALITY URI 匯入及訂閱輸出 |
 | 管理 API | Clash 相容 Controller API | 獨立 `/api/admin` API 與強制 Aster Bearer token |
 | 併發控制 | 設定層更新 | 每個 listener 有 revision；過期寫入回傳 HTTP 409 |
 | 流量統計 | 全域與連線層統計 | 持久化逐入站、逐使用者上下行流量與活動連線 |
@@ -83,6 +86,60 @@ Aster Core 不是重新開發的代理核心。協定堆疊、設定模型、規
 | 品質檢查 | 上游 CI | Aster 管理、持久化、生命週期、效能、race、lint 與互通測試 |
 
 Aster 管理目前只支援 VLESS 與 AnyTLS。下方其他協定是繼承自 Mihomo，不能透過 Aster Admin API 自動管理。完整邊界與遷移影響請參閱[「Aster 與 Mihomo 差異」](docs/reference/mihomo-differences.md)。
+
+## AnyTLS + REALITY
+
+Aster 在 Mihomo `v1.19.29` 的 AnyTLS 實作上加入了**用戶端與伺服器端雙向 REALITY**。Aster 伺服器不需要公開 TLS 憑證即可提供 AnyTLS listener；Aster 用戶端則使用伺服器 public key、short ID、偽裝 SNI 與 uTLS fingerprint 連線。
+
+先產生 X25519 金鑰：
+
+```sh
+aster-core generate reality-keypair
+```
+
+伺服器 listener：
+
+```yaml
+listeners:
+  - name: edge-anytls
+    type: anytls
+    listen: 0.0.0.0
+    port: 443
+    users:
+      alice: "replace-with-a-long-random-password"
+    reality-config:
+      dest: www.microsoft.com:443
+      private-key: <server-private-key>
+      short-id:
+        - 0123456789abcdef
+      server-names:
+        - www.microsoft.com
+```
+
+用戶端 outbound：
+
+```yaml
+proxies:
+  - name: edge-anytls-reality
+    type: anytls
+    server: proxy.example.com
+    port: 443
+    password: "replace-with-a-long-random-password"
+    sni: www.microsoft.com
+    client-fingerprint: chrome
+    reality-opts:
+      public-key: <server-public-key>
+      short-id: 0123456789abcdef
+    udp: true
+```
+
+Aster 也能匯入及輸出對應分享連結：
+
+```text
+anytls://<password>@proxy.example.com:443?security=reality&sni=www.microsoft.com&fp=chrome&pbk=<server-public-key>&sid=0123456789abcdef#Aster-AnyTLS-REALITY
+```
+
+把 listener 加入 `aster.managed-listeners` 後，可即時變更密碼而不重啟 listener；每個啟用的使用者亦可取得可輪替的 `/sub/aster/{token}`，內容就是其 AnyTLS + REALITY 連結。同一個 AnyTLS endpoint 的 REALITY、憑證 TLS、ShadowTLS、ResTLS 與 JLS 互斥，不能同時設定。欄位、部署注意事項與限制請參閱 [AnyTLS + REALITY 專頁](docs/reference/anytls-reality.md)。
 
 ## 支援能力
 

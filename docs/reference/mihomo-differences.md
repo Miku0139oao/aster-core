@@ -22,6 +22,7 @@ Fork 建立後的主要變更分為三組：
 | Clash Controller API | Mihomo | Dashboard 與既有工具可繼續使用 |
 | DNS、fake-IP、TUN、rules | Mihomo | Aster 沒有改成另一套資料平面 |
 | 各種 inbound/outbound | Mihomo 為主 | VLESS、AnyTLS 另加入 managed-user hooks |
+| AnyTLS + REALITY | Aster | 相對 `v1.19.29` 基線新增 listener、outbound、URI 匯入及受管訂閱輸出 |
 | `/api/admin` | Aster | 專用管理 API |
 | `/sub/aster/{token}` | Aster | 單一 managed user 訂閱 |
 | 逐使用者持久化流量 | Aster | 由 connection tracker principal 回報 |
@@ -42,7 +43,19 @@ github.com/Miku0139oao/aster-core
 - Linux 套件提供 `/usr/bin/mihomo` 相容連結。
 - OpenWrt package 提供 virtual `mihomo` 及 alternatives。
 
-## 2. Managed VLESS 與 AnyTLS
+## 2. AnyTLS + REALITY
+
+Mihomo `v1.19.29` 基線已有 AnyTLS 與憑證 TLS、ShadowTLS、ResTLS、JLS，但 AnyTLS 尚未接上 REALITY。Aster 新增：
+
+- Listener `reality-config`，讓 Aster 作為 AnyTLS + REALITY server。
+- Outbound `reality-opts` 與 `client-fingerprint`，讓 Aster 作為 AnyTLS + REALITY client。
+- `anytls://` URI 的 `security=reality`、`pbk`、`sid`、`sni`、`fp` 轉換。
+- Managed user 訂閱自動輸出帶 REALITY public key 的 AnyTLS 分享連結。
+- REALITY transport 與動態 password、撤銷連線及 listener close lifecycle 的整合。
+
+這是一項 Aster 資料平面擴充，不只是管理 API 包裝。完整設定見 [AnyTLS + REALITY](/reference/anytls-reality)。
+
+## 3. Managed VLESS 與 AnyTLS
 
 只有實作 `ManagedUserListener` 的 listener 才能加入：
 
@@ -60,7 +73,7 @@ aster:
 
 管理變更直接更新執行中的 authentication state，不需要關閉並重開 listener。未列入 `managed-listeners` 的 listener 仍由一般 YAML 設定管理。
 
-## 3. 獨立 Admin API
+## 4. 獨立 Admin API
 
 Aster API 使用 `/api/admin`，不共用 Controller `secret`：
 
@@ -77,7 +90,7 @@ Authorization: Bearer <aster-secret>
 
 此 API 不替代 Clash API。兩者同時存在、權限分離，適合讓 Dashboard 與管理後台使用不同 credentials。
 
-## 4. Revision 與衝突控制
+## 5. Revision 與衝突控制
 
 每個 managed listener 有：
 
@@ -92,7 +105,7 @@ Mutation 必須帶目前 revision。若另一個管理者已先更新，舊 requ
 
 這可防止面板、CLI 或多個後台彼此覆蓋變更。
 
-## 5. Per-principal 流量
+## 6. Per-principal 流量
 
 Aster 在 connection tracker 加入 principal：
 
@@ -109,7 +122,7 @@ Inbound + UserID
 
 流量不是每個 packet 都同步寫入磁碟，而是先在記憶體聚合，再由 manager 批次 flush，降低熱路徑鎖定與 I/O。
 
-## 6. 安全持久化
+## 7. 安全持久化
 
 預設 store：
 
@@ -131,7 +144,7 @@ Inbound + UserID
 
 Store 仍是**明文 JSON**。其安全性依賴檔案系統權限，不是內容加密。
 
-## 7. 訂閱
+## 8. 訂閱
 
 啟用 `public-base-url` 後，每個 eligible user 可取得可輪替 token：
 
@@ -151,7 +164,7 @@ https://proxy.example.com/sub/aster/<token>
 - JLS
 - 進階 XHTTP placement、padding 等欄位
 
-## 8. 管理路徑效能與生命週期
+## 9. 管理路徑效能與生命週期
 
 Fork 的管理熱路徑加入：
 
@@ -165,7 +178,7 @@ Fork 的管理熱路徑加入：
 
 這些是 Aster 管理層優化，不代表整個 Mihomo 資料平面被改寫。
 
-## 9. 發行與 CI
+## 10. 發行與 CI
 
 Aster 新增：
 
@@ -194,6 +207,7 @@ aster-core -d /path/to/mihomo-home -t
 4. Aster secret 與 Controller secret 不同。
 5. Aster store 含敏感資料，需要正確 owner 與 permissions。
 6. 使用訂閱前要設定 HTTPS `public-base-url` 並設計 reverse proxy。
+7. AnyTLS + REALITY 是 Aster 擴充；需要使用支援相同 URI 與 REALITY 欄位的 client。
 
 ## 上游同步政策
 

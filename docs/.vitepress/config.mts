@@ -60,6 +60,7 @@ export default defineConfig({
     nav: [
       { text: "首頁", link: "/" },
       { text: "快速開始", link: "/guide/getting-started" },
+      { text: "AnyTLS + REALITY", link: "/reference/anytls-reality" },
       { text: "設定參考", link: "/reference/configuration" },
       { text: "Aster 管理", link: "/aster/overview" },
       { text: "與 Mihomo 差異", link: "/reference/mihomo-differences" },
@@ -77,6 +78,7 @@ export default defineConfig({
         text: "參考",
         items: [
           { text: "Aster 與 Mihomo 差異", link: "/reference/mihomo-differences" },
+          { text: "AnyTLS + REALITY", link: "/reference/anytls-reality" },
           { text: "命令列與環境變數", link: "/reference/cli" },
           { text: "設定總覽", link: "/reference/configuration" },
           { text: "入站", link: "/reference/inbounds" },

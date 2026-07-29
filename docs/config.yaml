@@ -1621,6 +1621,10 @@ proxies: # socks5
     # jls-opts: # 使用 sni 作为 JLS SNI
     #   username: jls-user
     #   password: jls-password
+    # reality-opts: # Aster: AnyTLS REALITY；不可與 shadow-tls-opts、restls-opts 或 jls-opts 同時使用
+    #   public-key: <server-public-key>
+    #   short-id: 0123456789abcdef
+    #   support-x25519mlkem768: false
 
   # trusttunnel
   - name: trusttunnel
@@ -2418,7 +2422,7 @@ listeners:
     users:
       username1: password1
       username2: password2
-    # "shadow-tls"、"res-tls" 和 "jls-config" 均未启用且 "allow-insecure" 不为 true 时，必须填写 "certificate" 和 "private-key"；启用 ShadowTLS、ResTLS 或 JLS 时不要填写
+    # 未启用 "shadow-tls"、"res-tls"、"jls-config" 或 "reality-config"，且 "allow-insecure" 不为 true 时，必须填写 "certificate" 和 "private-key"；各 security mode 不可同時使用
     certificate: ./server.crt # 证书 PEM 格式，或者 证书的路径
     private-key: ./server.key
     # 下面两项为mTLS配置项，如果client-auth-type设置为 "verify-if-given" 或 "require-and-verify" 则client-auth-cert必须不为空
@@ -2458,7 +2462,16 @@ listeners:
     #   # alpn: [h2, http/1.1]
     #   # proxy: ""
     #   # rate-limit: 0 # fallback 转发限速，单位 bit/s；0 表示不限速
-    ### 注意，anytls listener, 如果 "allow-insecure" 不为 true, 至少需要填写 “certificate和private-key” 或 “shadow-tls” 或 “res-tls” 或 “jls-config” 的其中一项 ###
+    # reality-config: # Aster: AnyTLS REALITY；不可與 certificate/private-key、shadow-tls、res-tls 或 jls-config 同時使用
+    #   dest: www.microsoft.com:443
+    #   private-key: <server-private-key> # 可由 aster-core generate reality-keypair 生成
+    #   short-id:
+    #     - 0123456789abcdef
+    #   server-names:
+    #     - www.microsoft.com
+    #   # max-time-difference: 0 # microseconds
+    #   # proxy: ""
+    ### 注意，anytls listener, 如果 "allow-insecure" 不为 true, 至少需要填写 “certificate和private-key” 或 “shadow-tls” 或 “res-tls” 或 “jls-config” 或 “reality-config” 的其中一项 ###
     # allow-insecure: false # 是否允许不开启tls加密（注意：仅用于有 nginx, caddy 前置的情况）
     # padding-scheme: "" # https://github.com/anytls/anytls-go/blob/main/docs/protocol.md#cmdupdatepaddingscheme
 

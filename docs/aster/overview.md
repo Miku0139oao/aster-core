@@ -2,7 +2,7 @@
 
 ## 解決的問題
 
-傳統 Mihomo server listener 把使用者寫在 YAML。要變更 credentials，通常需要修改設定並重新載入整個 runtime。Aster 管理層把 VLESS 與 AnyTLS 使用者抽成可持久化、可即時更新的資源，同時保留 Mihomo 原有資料平面。
+傳統 Mihomo server listener 把使用者寫在 YAML。要變更 credentials，通常需要修改設定並重新載入整個 runtime。Aster 管理層把 VLESS 與 AnyTLS 使用者抽成可持久化、可即時更新的資源，同時保留 Mihomo 原有資料平面。協定層的主要例外是 Aster 另行新增的 [AnyTLS + REALITY](/reference/anytls-reality)。
 
 Aster 提供：
 
