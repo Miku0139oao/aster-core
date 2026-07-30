@@ -1,16 +1,12 @@
 # AnyTLS + REALITY
 
-這一頁用來查 AnyTLS + REALITY 設定。第一次使用請先看[逐步教學](/tutorials/anytls-reality)。
-
-## 一般使用方式
-
-Aster 安裝在客戶端。遠端節點通常由 Xray、sing-box、SideraCore 或服務商提供。
+Aster 通常作為 AnyTLS + REALITY 客戶端，連接 Xray、sing-box、SideraCore、Aster 或其他相容服務端。完整部署流程見[實戰教學](/tutorials/anytls-reality)。
 
 ```text
 你的 App → Aster Core → AnyTLS + REALITY 節點 → 網際網路
 ```
 
-你需要向服務端取得節點網址、連接埠、密碼、SNI、公開金鑰和 short ID。
+服務端需提供節點網址、連接埠、密碼、SNI、公開金鑰和 short ID。
 
 ## 客戶端設定
 
@@ -29,7 +25,7 @@ proxies:
     udp: true
 ```
 
-### 每個欄位要填什麼？
+### 欄位說明
 
 | 欄位 | 要填的內容 |
 | --- | --- |
@@ -43,7 +39,7 @@ proxies:
 | `short-id` | 服務端提供的一小段識別碼；沒有提供時才省略 |
 | `udp` | 設為 `true`，讓需要 UDP 的程式也能使用 |
 
-::: danger 不要填 private key
+::: danger 金鑰方向
 客戶端只需要 public key（公開金鑰）。private key（私鑰）只能留在服務端。
 :::
 
@@ -79,9 +75,9 @@ anytls://<password>@proxy.example.com:443?security=reality&sni=www.microsoft.com
 
 不要用 `skip-cert-verify` 掩蓋錯誤的公開金鑰、SNI 或 short ID。
 
-## 進階：用 Aster 當服務端
+## Aster 服務端
 
-一般使用者可以跳過這一節。只有在測試、全 Aster 環境或特殊需求下，才需要讓 Aster 接收 AnyTLS + REALITY 連線。
+Aster 也能直接接收 AnyTLS + REALITY 連線：
 
 先產生金鑰：
 
@@ -130,7 +126,7 @@ listeners:
 
 同一個 AnyTLS 服務不能同時使用 REALITY、一般憑證 TLS、ShadowTLS、ResTLS 或 JLS；只能選一種。
 
-## 進階：即時管理使用者
+## 即時管理使用者
 
 把 AnyTLS 服務加入 `managed-listeners` 後，可以在不重新啟動整個服務的情況下新增、修改、停用或刪除密碼。
 
@@ -145,7 +141,7 @@ aster:
     - edge-anytls
 ```
 
-這是進階服務端功能。完整操作請看[使用者管理教學](/tutorials/user-management)。
+完整操作見[使用者管理教學](/tutorials/user-management)。
 
 ## 相關文件
 

@@ -3,82 +3,60 @@ layout: home
 
 hero:
   name: Aster Core
-  text: 以客戶端為主，簡單連接你的代理節點
-  tagline: 支援 Xray、sing-box、SideraCore 節點和 AnyTLS + REALITY，保留 Mihomo 用法並改善穩定性與效能。
+  text: 以 Mihomo 為基礎的客戶端代理核心
+  tagline: 相容 Mihomo 設定與 Clash 面板，加入 AnyTLS + REALITY、上游問題修正及效能改善。
   image:
     src: /logo.png
     alt: Aster Core
   actions:
     - theme: brand
-      text: 第一次使用
+      text: 快速開始
       link: /tutorials/first-proxy
-    - theme: alt
-      text: Aster 改了什麼
-      link: /reference/mihomo-differences
     - theme: alt
       text: AnyTLS + REALITY
       link: /tutorials/anytls-reality
+    - theme: alt
+      text: 與 Mihomo 的差異
+      link: /reference/mihomo-differences
     - theme: alt
       text: 設定參考
       link: /reference/configuration
 
 features:
-  - icon: ✓
-    title: 照著做就能用
-    details: 從下載、填入節點資料到測試連線，每一步都有可以直接複製的設定與指令。
-    link: /tutorials/
-  - icon: ⚡
-    title: 更穩、更省資源
-    details: 改善重新載入、斷線重連、UDP、DNS 與更新問題，也減少不必要的資料複製和掃描。
-    link: /reference/mihomo-differences
   - icon: ↗
     title: Mihomo 相容
-    details: 繼續使用 Mihomo 設定、規則、DNS、TUN，以及相容 Clash 的控制面板。
+    details: 沿用 Mihomo 的 YAML、規則、DNS、TUN、代理群組與 Clash-compatible API。
     link: /guide/introduction
-  - icon: ◎
-    title: 客戶端優先
-    details: 安裝在電腦或路由器上，連接 Xray、sing-box、SideraCore 或服務商提供的節點。
-    link: /tutorials/first-proxy
   - icon: ◈
     title: AnyTLS + REALITY
-    details: 填入服務端提供的網址、密碼和金鑰即可連線，也能匯入相容的分享連結。
-    link: /reference/anytls-reality
-  - icon: ◫
-    title: 設定查詢
-    details: 不知道某個設定要填什麼時，可以依連線、節點、規則和 DNS 分類查找。
-    link: /reference/configuration
+    details: 支援客戶端連線及 anytls:// 分享連結匯入。
+    link: /tutorials/anytls-reality
+  - icon: ⚡
+    title: 修正與優化
+    details: 改善重新載入、斷線重連、UDP、DNS、核心更新與高負載下的資源使用。
+    link: /reference/mihomo-differences
+  - icon: ◎
+    title: 客戶端優先
+    details: 適合桌面、路由器與閘道，服務端可搭配 Xray、sing-box 或 SideraCore。
+    link: /tutorials/first-proxy
   - icon: ⬡
-    title: 多平台使用
-    details: 支援 Linux、Windows、macOS、Android、FreeBSD、Docker、OpenWrt 與 Nikki。
+    title: 多平台
+    details: 提供 Linux、Windows、macOS、Android、FreeBSD、Docker 與 OpenWrt 建置。
     link: /deployment/docker
 ---
 
-## 先了解這個專案
+## 關於 Aster Core
 
-Aster Core 主要安裝在你的電腦、路由器或閘道上。它連接 Xray、sing-box、SideraCore 或服務商提供的遠端節點，再按照你的規則決定流量怎麼走。
+Aster Core 是 [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo) 的衍生專案，主要用於客戶端。它通常裝在電腦、路由器或閘道上，連接由 Xray、sing-box、SideraCore 或其他相容實作提供的節點。
 
-它以 Mihomo 為基礎，所以可以繼續使用 Mihomo 設定和 Clash 相容面板。Aster 另外加入 AnyTLS + REALITY，並改善重新載入、斷線重連、UDP、DNS、更新和資源使用問題。Aster 也有可選的服務端功能，但一般使用者不需要啟用。
+專案保留 Mihomo 的設定格式、規則、DNS、TUN 與 Clash 相容控制介面，另外加入 AnyTLS + REALITY，並修正上游仍存在的連線、重新載入及更新問題。Aster 也能提供 VLESS／AnyTLS 入站與使用者管理，但這部分屬於選用功能。
 
-| 需求 | 建議入口 |
-| --- | --- |
-| 第一次建立可用客戶端 | [第一個代理設定實戰](/tutorials/first-proxy) |
-| 連接 AnyTLS + REALITY 節點 | [AnyTLS + REALITY 客戶端實戰](/tutorials/anytls-reality) |
-| 設定分流、DNS 與 TUN | [路由與 DNS 實戰](/tutorials/routing-dns) |
-| 依症狀排查問題 | [故障排查手冊](/tutorials/troubleshooting) |
-| 看 Aster 改善了什麼 | [Aster 跟 Mihomo 有什麼不同](/reference/mihomo-differences) |
-| 從 Mihomo 換過來 | [Aster 跟 Mihomo 有什麼不同](/reference/mihomo-differences) |
-| 查 YAML 欄位 | [設定總覽](/reference/configuration) |
-| 容器或路由器部署 | [部署文件](/deployment/docker) |
-| 可選：用 Aster 架設測試節點 | [AnyTLS + REALITY 進階路線](/tutorials/anytls-reality#可選服務端路線) |
-| 可選：管理 VLESS/AnyTLS 帳號 | [使用者管理教學](/tutorials/user-management) |
-| 可選：在 VPS 長期執行 Aster | [Linux 正式部署](/tutorials/linux-production) |
+## 從這裡開始
 
-::: tip 看不懂術語也沒關係
-先從[第一個代理設定](/tutorials/first-proxy)開始。遇到不懂的欄位再查參考頁，不需要先讀完全部文件。
-:::
+- 第一次使用：[建立第一份客戶端設定](/tutorials/first-proxy)
+- 已有 AnyTLS + REALITY 節點：[AnyTLS + REALITY 設定](/tutorials/anytls-reality)
+- 設定分流與 DNS：[路由與 DNS](/tutorials/routing-dns)
+- 從 Mihomo 遷移：[Aster 與 Mihomo 的差異](/reference/mihomo-differences)
+- 遇到連線問題：[故障排查](/tutorials/troubleshooting)
 
-## 教學和參考現在分開
-
-- **想直接用起來**：從[實戰教學](/tutorials/)開始，照著範例填入自己的節點資料。
-- **不知道某個欄位是什麼**：使用[設定總覽](/reference/configuration)、[接收連線](/reference/inbounds)、[遠端節點](/reference/outbounds)及[規則與 DNS](/reference/routing-dns)。
-- **想知道為什麼選 Aster**：閱讀[Aster 跟 Mihomo 有什麼不同](/reference/mihomo-differences)。
+欄位說明集中在[設定參考](/reference/configuration)，部署方式則整理在 [Docker](/deployment/docker)、[Linux](/deployment/linux) 與 [OpenWrt／Nikki](/deployment/openwrt) 頁面。

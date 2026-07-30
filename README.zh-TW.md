@@ -28,12 +28,14 @@
   </a>
 </p>
 
-Aster Core 是以 [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo) 為基礎、以客戶端使用為主的安全強化分支。它主要執行於使用者裝置、路由器或閘道，連接由 Xray、sing-box、SideraCore 與其他相容實作提供的節點；並保留 Mihomo YAML、規則分流、DNS、TUN、代理群組與 Clash 相容 Controller API。Aster 另外加入 AnyTLS + REALITY 客戶端能力、修正 Mihomo 最新基線仍存在的問題，並對多條執行路徑做效能優化。內建協定 listener 與 VLESS/AnyTLS 即時使用者管理屬於可選的進階服務端能力，不是專案的主要定位。
+Aster Core 是 [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo) 的客戶端向衍生專案，適合運行在桌面、路由器或閘道。它保留 Mihomo YAML、規則、DNS、TUN、代理群組與 Clash 相容 API，並加入 AnyTLS + REALITY、上游問題修正及效能改善。遠端服務端可使用 Xray、sing-box、SideraCore 或其他相容實作。
+
+Aster 也內建 VLESS／AnyTLS 入站及使用者管理；這些是選用的服務端功能，不影響一般客戶端設定。
 
 目前的上游基線是 Mihomo `v1.19.29`，commit `e26714a181ac0e2fa803453c0a8e9a9ce94e31cb`。來源、授權及同步政策請參閱 [NOTICE.md](NOTICE.md) 與 [UPSTREAM.md](UPSTREAM.md)。
 
 > [!IMPORTANT]
-> Aster Core 接受 Mihomo 設定，不直接接受 sing-box 或 Xray 設定。Xray、sing-box 或 SideraCore 通常執行於服務端並提供連線參數；請把這些參數填入 Aster/Mihomo outbound，或匯入 Aster 支援的分享連結。實際互通仍取決於兩端共同支援的協定與選項。
+> Aster Core 使用 Mihomo YAML，不直接讀取 sing-box 或 Xray JSON。請將服務端提供的節點參數填入 `proxies`，或匯入支援的分享連結。
 
 ## 目錄
 
@@ -79,7 +81,7 @@ Aster 保留 Mihomo 的設定和大部分功能，再加入：
 - 可選的 VLESS／AnyTLS 服務端帳號管理。
 - Aster 自己的多平台安裝包與 OpenWrt／Nikki 支援。
 
-一般使用者不需要理解內部差異。請閱讀白話版的[Aster 跟 Mihomo 有什麼不同](docs/reference/mihomo-differences.md)。
+詳細說明見[Aster 與 Mihomo](docs/reference/mihomo-differences.md)。
 
 ## AnyTLS + REALITY
 
@@ -106,7 +108,7 @@ Aster 也能匯入及輸出對應分享連結：
 anytls://<password>@proxy.example.com:443?security=reality&sni=www.microsoft.com&fp=chrome&pbk=<server-public-key>&sid=0123456789abcdef#Aster-AnyTLS-REALITY
 ```
 
-不要把 Xray 或 sing-box JSON 欄位名稱直接貼入這份 YAML，應使用服務端交付的連線值。測試、全 Aster 環境或特殊需求仍可由 Aster 自行提供 AnyTLS + REALITY listener；該可選路線也支援即時密碼與受管訂閱。請參閱[客戶端優先實戰教學](docs/tutorials/anytls-reality.md)與[AnyTLS + REALITY 欄位參考](docs/reference/anytls-reality.md)。
+Xray 或 sing-box 的 JSON 欄位不能直接貼入這份 YAML，請使用服務端交付的連線值。Aster 自帶的 AnyTLS + REALITY listener 及使用者管理見[實戰教學](docs/tutorials/anytls-reality.md)與[欄位參考](docs/reference/anytls-reality.md)。
 
 ## 支援能力
 
@@ -125,7 +127,7 @@ anytls://<password>@proxy.example.com:443?security=reality&sni=www.microsoft.com
 
 ## 文件站
 
-可全文搜尋的繁體中文文件站已發布於 [astercore.fubukishop.app](https://astercore.fubukishop.app/)，原始檔保留在 repository 的 [`docs/`](docs/index.md)。第一次使用請從[逐步實戰教學](https://astercore.fubukishop.app/tutorials/)開始；想知道為何選擇 Aster，請看[Aster 跟 Mihomo 有什麼不同](https://astercore.fubukishop.app/reference/mihomo-differences)。
+繁體中文文件位於 [astercore.fubukishop.app](https://astercore.fubukishop.app/)，原始檔保留在 [`docs/`](docs/index.md)。入門操作見[實戰教學](https://astercore.fubukishop.app/tutorials/)，專案差異見[Aster 與 Mihomo](https://astercore.fubukishop.app/reference/mihomo-differences)。
 
 ```sh
 cd docs

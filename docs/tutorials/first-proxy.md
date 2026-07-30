@@ -1,26 +1,16 @@
 # 第一個代理設定
 
-這篇教學會從下載開始，帶你完成一個可以使用的 Aster Core 客戶端。完成後，瀏覽器或其他程式可以透過 `127.0.0.1:7890` 使用代理。
+Aster 啟動後會在 `127.0.0.1:7890` 提供 HTTP／SOCKS5 代理。以下流程包含安裝、AnyTLS + REALITY 節點、代理群組、DNS、規則與連線驗證。
 
-你會完成：
-
-- 填入一個 AnyTLS + REALITY 遠端節點。
-- 啟動本機 HTTP／SOCKS5 代理。
-- 在「使用代理」和「直接連線」之間切換。
-- 設定基本路由規則和 DNS。
-- 用一條指令確認代理真的有作用。
-
-::: warning 範例不附可用節點
-本文中的主機、密碼、REALITY public key、SNI 與 short ID 全是 placeholder。Aster Core 是客戶端，不會替你提供代理伺服器；必須先取得 Xray、sing-box、SideraCore、自建服務端或服務供應者提供的完整連線資料，逐項替換後才能連線。
+::: warning 範例節點
+主機、密碼、REALITY public key、SNI 與 short ID 均為 placeholder，請替換成服務端或節點供應者提供的資料。
 :::
 
 ## 前置條件
 
-你需要：
-
-- Linux、macOS 或 Windows 主機。
-- 對應作業系統與 CPU 架構的 Aster Core release。
-- 一組可用的 AnyTLS + REALITY 用戶端資料：
+- Linux、macOS 或 Windows
+- 對應系統與 CPU 架構的 Aster Core release
+- 一組可用的 AnyTLS + REALITY 節點資料
 
 | 本文 placeholder | 應填內容 |
 | --- | --- |

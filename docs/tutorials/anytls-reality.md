@@ -1,6 +1,6 @@
-# AnyTLS + REALITY 客戶端實戰
+# AnyTLS + REALITY
 
-Aster Core 的主要角色是客戶端。一般情況下，Xray、sing-box、SideraCore 或服務商負責提供遠端節點；你只要把節點資料填入 Aster。
+Aster 可連接 AnyTLS + REALITY 節點。服務端可以是 Xray、sing-box、SideraCore、Aster，或其他支援相同參數的實作。
 
 ```text
 瀏覽器或 App
@@ -15,11 +15,11 @@ Aster Core
 網際網路
 ```
 
-服務端不一定使用 Aster。請向服務端或面板取得實際連線資料，不要直接複製 Xray 或 sing-box 的整份設定。
+客戶端與服務端不必使用同一套設定格式。Aster 使用 Mihomo YAML，請依服務端提供的連線參數填寫。
 
-## 主要路線：連接現有服務端
+## 客戶端設定
 
-先取得以下資料：
+需要的節點資料：
 
 | 你需要的資料 | 怎麼辨認 |
 | --- | --- |
@@ -31,7 +31,7 @@ Aster Core
 | 公開金鑰（`public-key`） | 服務端提供的 public key；絕對不要填 private key |
 | short ID | 服務端提供的一小段英數字；沒有提供時才省略 |
 
-若拿到的是以 `anytls://` 開頭的分享連結，可直接使用支援 Aster 格式的 App 匯入。若要手動設定，把下面內容儲存成 `config.yaml`，再替換所有 `<...>`：
+若服務端提供 `anytls://` 分享連結，可直接匯入支援 Aster 的 App。手動設定時，把以下內容儲存為 `config.yaml`，並替換所有 `<...>`：
 
 ```yaml
 mixed-port: 7890
@@ -66,47 +66,43 @@ rules:
   - MATCH,PROXY
 ```
 
-先檢查設定有沒有打錯。看到成功訊息後，再啟動：
+檢查設定並啟動：
 
 ```sh
 aster-core -d ./aster-client -f ./aster-client/config.yaml -t
 aster-core -d ./aster-client -f ./aster-client/config.yaml
 ```
 
-另開一個命令列視窗，測試是否能透過 Aster 開啟網站：
+另開終端測試連線：
 
 ```sh
 curl --proxy http://127.0.0.1:7890 https://www.cloudflare.com/cdn-cgi/trace
 ```
 
-看到文字結果，而且沒有連線錯誤，代表基本連線成功。
+命令正常回傳內容即表示基本連線可用。
 
-服務端提供的分享連結可能長這樣：
+分享連結格式：
 
 ```text
 anytls://<password>@proxy.example.com:443?security=reality&sni=www.microsoft.com&fp=chrome&pbk=<public-key>&sid=<short-id>#AnyTLS-REALITY
 ```
 
-手動填寫時，`pbk` 是公開金鑰、`sid` 是 short ID、`fp` 是瀏覽器指紋。需要更完整的下載、啟動與測試說明，請閱讀[第一個代理設定](/tutorials/first-proxy)。
+其中 `pbk` 對應公開金鑰、`sid` 對應 short ID、`fp` 對應瀏覽器指紋。完整的安裝與本機代理設定見[第一個代理設定](/tutorials/first-proxy)。
 
-::: tip 服務端由誰提供？
-一般使用 Xray、sing-box、SideraCore 或服務商提供的節點。只要取得上面列出的資料，就不需要在服務端安裝 Aster。以下內容是可選的進階路線。
-:::
+## Aster 服務端
 
-## 可選服務端路線
-
-只有在測試、客戶端與服務端都想使用 Aster，或確實需要 Aster 使用者管理時，才需要繼續。
+以下章節示範在 VPS 上使用 Aster 自帶的 AnyTLS listener。若服務端已使用 Xray、sing-box、SideraCore 或其他實作，可跳到其對應文件設定。
 
 ```text
 Aster client
    │ AnyTLS over TCP + REALITY
    ▼
-VPS 上的可選 Aster listener
+VPS 上的 Aster listener
    ├─ TCP 目的地
    └─ UDP over TCP（UoT）目的地
 ```
 
-## 可選路線完成後會有什麼
+### 部署內容
 
 - 一筆 DNS-only 的節點網域，例如 `edge.example.com`。
 - VPS 上監聽 TCP `443` 的 AnyTLS listener。
@@ -115,7 +111,7 @@ VPS 上的可選 Aster listener
 - 一份可測試 TCP 與 UDP/UoT 的 Aster client profile。
 - 一條可匯入 Aster 的 `anytls://` REALITY 分享連結。
 
-## 可選服務端前置條件
+### 準備項目
 
 - 一台有 public IPv4 的 Linux VPS，並可使用 root 或 sudo。
 - 一個能編輯 DNS 的網域。

@@ -122,7 +122,7 @@ kill -TERM <pid>  # 正常關閉
 ## 下一步
 
 - [建立第一個完整代理設定](/tutorials/first-proxy)
-- [照著做路由與 DNS 分流](/tutorials/routing-dns)
+- [路由與 DNS 分流](/tutorials/routing-dns)
 - [理解設定來源與安全路徑](/guide/configuration)
 - [加入 proxies 與 proxy groups](/reference/outbounds)
 - [設定 rules 與 DNS](/reference/routing-dns)

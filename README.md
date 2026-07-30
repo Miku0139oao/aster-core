@@ -28,12 +28,14 @@
   </a>
 </p>
 
-Aster Core is a client-first, security-focused fork of [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo). Its primary role is to run on user devices, routers, or gateways and connect to nodes provided by Xray, sing-box, SideraCore, and other compatible server implementations. It keeps Mihomo YAML, routing, DNS, TUN, proxy groups, and the Clash-compatible Controller API while adding AnyTLS + REALITY client support, fixes for issues still present in the current Mihomo baseline, and performance improvements. Built-in protocol listeners and live VLESS/AnyTLS user management are optional advanced server-side capabilities, not the main product role.
+Aster Core is a client-oriented fork of [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo) for desktops, routers, and gateways. It keeps Mihomo YAML, routing, DNS, TUN, proxy groups, and the Clash-compatible API while adding AnyTLS + REALITY, upstream fixes, and performance improvements. Remote servers may run Xray, sing-box, SideraCore, or another compatible implementation.
+
+Built-in VLESS/AnyTLS listeners and live user management are available for deployments that need Aster on the server as well.
 
 The current upstream baseline is Mihomo `v1.19.29` at commit `e26714a181ac0e2fa803453c0a8e9a9ce94e31cb`. See [NOTICE.md](NOTICE.md) and [UPSTREAM.md](UPSTREAM.md) for provenance and the upstream update policy.
 
 > [!IMPORTANT]
-> Aster Core accepts Mihomo configuration, not sing-box or Xray configuration. Xray, sing-box, or SideraCore normally runs on the server and supplies connection parameters; translate those parameters into an Aster/Mihomo outbound or import a supported share link. Compatibility depends on the protocol and options enabled by both sides.
+> Aster Core reads Mihomo YAML, not sing-box or Xray JSON. Add the connection parameters supplied by the server under `proxies`, or import a supported share link.
 
 ## Contents
 
