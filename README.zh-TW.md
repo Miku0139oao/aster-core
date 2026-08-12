@@ -66,6 +66,7 @@ Aster 也內建 VLESS／AnyTLS 入站及使用者管理；這些是選用的服�
 - AnyTLS + REALITY 出站與 `anytls://` REALITY 分享連結匯入。
 - 進階部署可選用 AnyTLS + REALITY 服務端 listener，以及不重建 listener 的 VLESS/AnyTLS 使用者管理。
 - 逐入站、逐使用者記錄上傳、下載與活動連線。
+- 持久化全域、裝置、規則、代理與策略組的流量治理、滾動配額與壓縮報表。
 - Aster 狀態具備檔案鎖、generation 衝突檢查、備援檔及嚴格權限。
 - 修正 Mihomo 目前仍可能出現的設定重新載入、斷線重連、Hysteria UDP、VLESS 封包、XHTTP 關閉、DNS 回應與核心更新問題。
 - 減少大量使用者或連線時不必要的搜尋、資料複製、連線掃描與狀態寫入。
@@ -433,6 +434,7 @@ make test
 - TProxy UDP、自動 iptables、socket routing mark 主要限 Linux；Redir 依平台而異。
 - 自動 iptables 與 TUN 不能同時啟用。
 - TUN、TProxy、Redir、低連接埠及系統路由可能需要 root 或 capabilities。
+- Linux/OpenWrt 的 `tun.kernel-direct` 需要 auto-route、auto-redirect、nftables 與經過 Aster 的 DNS；安全判定為 DIRECT 的目的位址會留在內核 forwarding path。推薦 backend 是 nftables 搭配 OpenWrt flow offload。可選的 TC eBPF DIRECT／PROXY classifier 屬實驗功能且預設關閉，因逐封包掛鉤可能降低吞吐量；只應在同 server A/B 確認有收益後啟用。
 - `-v` 刻意保留 `Mihomo Meta` 前綴，供 Nikki 相容性偵測。
 - 檔案設定可由 `SIGHUP` 重新讀取；stdin、Base64 只會重新套用啟動時資料。
 - Controller `secret` 空白時不驗證；請綁 loopback 或設定強 secret。

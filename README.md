@@ -66,6 +66,7 @@ The current upstream baseline is Mihomo `v1.19.29` at commit `e26714a181ac0e2fa8
 - AnyTLS + REALITY outbound support, including `anytls://` REALITY link import.
 - Optional AnyTLS + REALITY server listeners and live VLESS/AnyTLS user CRUD for advanced deployments.
 - Per-principal upload, download, and active-connection accounting.
+- Persistent global, device, rule, proxy, and proxy-group traffic governance with rolling quotas and compressed reports.
 - Durable Aster state with locking, generation checks, a redundant backup, and restrictive file permissions.
 - Fixes Mihomo issues affecting configuration reloads, reconnects, Hysteria UDP, VLESS packets, XHTTP shutdown, DNS responses, and core updates.
 - Reduces repeated searches, data copies, connection scans, and state-file writes in busy deployments.
@@ -487,6 +488,7 @@ make test
 - TProxy UDP, automatic iptables configuration, and socket routing marks are Linux-specific. Redir support is platform-dependent.
 - Automatic iptables management and TUN mode cannot be enabled at the same time.
 - TUN, TProxy, redir, low ports, and system routing changes may require root privileges or specific capabilities.
+- Linux/OpenWrt `tun.kernel-direct` requires auto-route, auto-redirect, nftables, and DNS through Aster; it keeps safely classified DIRECT destinations in the kernel forwarding path. The recommended backend is nftables with OpenWrt flow offload. The optional TC eBPF DIRECT/PROXY classifier is experimental and disabled by default because its per-packet hook can reduce throughput; enable it only after a same-server A/B test.
 - `-v` intentionally retains the `Mihomo Meta` prefix because Nikki uses it for compatibility detection.
 - `SIGHUP` re-reads file-backed configuration. Configurations supplied through stdin or Base64 reapply the original in-memory bytes.
 - A configured Controller with an empty `secret` is unauthenticated. Bind it to loopback or set a strong secret.
