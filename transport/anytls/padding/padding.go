@@ -2,13 +2,12 @@ package padding
 
 import (
 	"crypto/md5"
-	"crypto/rand"
 	"fmt"
-	"math/big"
 	"strconv"
 	"strings"
 	"sync/atomic"
 
+	"github.com/Miku0139oao/aster-core/common/utils"
 	"github.com/Miku0139oao/aster-core/transport/anytls/util"
 )
 
@@ -25,10 +24,16 @@ var DefaultPaddingScheme = []byte(`stop=8
 7=500-1000`)
 
 type PaddingFactory struct {
-	scheme    util.StringMap
+	records   map[uint32][]recordSize
 	RawScheme []byte
 	Stop      uint32
 	Md5       string
+}
+
+type recordSize struct {
+	min       int64
+	randomMax uint64
+	checkMark bool
 }
 
 func UpdatePaddingScheme(rawScheme []byte, to *atomic.Pointer[PaddingFactory]) bool {
@@ -53,40 +58,72 @@ func NewPaddingFactory(rawScheme []byte) *PaddingFactory {
 	} else {
 		return nil
 	}
-	p.scheme = scheme
+	p.records = make(map[uint32][]recordSize, len(scheme)-1)
+	for key, value := range scheme {
+		if key == "stop" {
+			continue
+		}
+		pkt, err := strconv.ParseUint(key, 10, 32)
+		if err != nil {
+			continue
+		}
+		if records := parseRecordSizes(value); len(records) > 0 {
+			p.records[uint32(pkt)] = records
+		}
+	}
 	return p
 }
 
-func (p *PaddingFactory) GenerateRecordPayloadSizes(pkt uint32) (pktSizes []int) {
-	if s, ok := p.scheme[strconv.Itoa(int(pkt))]; ok {
-		sRanges := strings.Split(s, ",")
-		for _, sRange := range sRanges {
-			sRangeMinMax := strings.Split(sRange, "-")
-			if len(sRangeMinMax) == 2 {
-				_min, err := strconv.ParseInt(sRangeMinMax[0], 10, 64)
-				if err != nil {
-					continue
-				}
-				_max, err := strconv.ParseInt(sRangeMinMax[1], 10, 64)
-				if err != nil {
-					continue
-				}
-				if _min > _max {
-					_min, _max = _max, _min
-				}
-				if _min <= 0 || _max <= 0 {
-					continue
-				}
-				if _min == _max {
-					pktSizes = append(pktSizes, int(_min))
-				} else {
-					i, _ := rand.Int(rand.Reader, big.NewInt(_max-_min))
-					pktSizes = append(pktSizes, int(i.Int64()+_min))
-				}
-			} else if sRange == "c" {
-				pktSizes = append(pktSizes, CheckMark)
+func parseRecordSizes(value string) []recordSize {
+	records := make([]recordSize, 0, strings.Count(value, ",")+1)
+	for _, valueRange := range strings.Split(value, ",") {
+		minMax := strings.Split(valueRange, "-")
+		if len(minMax) == 2 {
+			min, err := strconv.ParseInt(minMax[0], 10, 64)
+			if err != nil {
+				continue
+			}
+			max, err := strconv.ParseInt(minMax[1], 10, 64)
+			if err != nil {
+				continue
+			}
+			if min > max {
+				min, max = max, min
+			}
+			if min <= 0 || max <= 0 {
+				continue
+			}
+			record := recordSize{min: min}
+			if min != max {
+				record.randomMax = uint64(max - min)
+			}
+			records = append(records, record)
+		} else if valueRange == "c" {
+			records = append(records, recordSize{checkMark: true})
+		}
+	}
+	return records
+}
+
+func (p *PaddingFactory) GenerateRecordPayloadSizes(pkt uint32) []int {
+	records := p.records[pkt]
+	if len(records) == 0 {
+		return nil
+	}
+
+	pktSizes := make([]int, 0, len(records))
+	for _, record := range records {
+		switch {
+		case record.checkMark:
+			pktSizes = append(pktSizes, CheckMark)
+		case record.randomMax == 0:
+			pktSizes = append(pktSizes, int(record.min))
+		default:
+			random, err := utils.CryptoRandomUint64n(record.randomMax)
+			if err == nil {
+				pktSizes = append(pktSizes, int(int64(random)+record.min))
 			}
 		}
 	}
-	return
+	return pktSizes
 }

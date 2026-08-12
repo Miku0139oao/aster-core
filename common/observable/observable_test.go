@@ -60,7 +60,9 @@ func TestObservable_UnSubscribe(t *testing.T) {
 	src := NewObservable[int](iter)
 	data, err := src.Subscribe()
 	assert.Nil(t, err)
+	assert.True(t, src.HasSubscribers())
 	src.UnSubscribe(data)
+	assert.False(t, src.HasSubscribers())
 	_, open := <-data
 	assert.False(t, open)
 }
@@ -75,6 +77,9 @@ func TestObservable_SubscribeClosedSource(t *testing.T) {
 	case <-time.After(time.Second):
 		assert.Fail(t, "timeout not stop")
 	}
+	assert.False(t, src.HasSubscribers())
+	src.UnSubscribe(data)
+	assert.False(t, src.HasSubscribers())
 }
 
 func TestObservable_UnSubscribeWithNotExistSubscription(t *testing.T) {

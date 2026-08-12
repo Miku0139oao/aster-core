@@ -28,6 +28,7 @@ import (
 	"github.com/Miku0139oao/aster-core/component/resolver"
 	"github.com/Miku0139oao/aster-core/component/resource"
 	"github.com/Miku0139oao/aster-core/component/sniffer"
+	trafficControl "github.com/Miku0139oao/aster-core/component/trafficcontrol"
 	"github.com/Miku0139oao/aster-core/component/trie"
 	"github.com/Miku0139oao/aster-core/component/updater"
 	"github.com/Miku0139oao/aster-core/config"
@@ -108,6 +109,9 @@ func ApplyConfig(cfg *config.Config, force bool) error {
 	updateUsers(cfg.Users)
 	updateProxies(cfg.Proxies, cfg.Providers)
 	updateRules(cfg.Rules, cfg.SubRules, cfg.RuleProviders)
+	if err := trafficControl.Default.Configure(cfg.TrafficControl); err != nil {
+		return fmt.Errorf("apply traffic-control configuration: %w", err)
+	}
 	updateSniffer(cfg.Sniffer)
 	updateHosts(cfg.Hosts)
 	updateGeneral(cfg.General, true)
@@ -596,6 +600,9 @@ func Shutdown() {
 	statistic.DefaultManager.SetTrafficObserver(nil)
 	if err := asterManager.Default.Flush(); err != nil {
 		log.Warnln("Final Aster traffic flush failed: %s", err)
+	}
+	if err := trafficControl.Default.Close(); err != nil {
+		log.Warnln("Final traffic-control flush failed: %s", err)
 	}
 	listener.Cleanup()
 	tproxy.CleanupTProxyIPTables()

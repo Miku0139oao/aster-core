@@ -4,6 +4,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/Miku0139oao/aster-core/common/utils"
 	C "github.com/Miku0139oao/aster-core/constant"
 
 	"github.com/stretchr/testify/require"
@@ -30,11 +31,11 @@ func TestManagerTracksConnectionCountsByPrincipal(t *testing.T) {
 	manager := &Manager{}
 	first := &trackerManagerTest{
 		id:   "first",
-		info: &TrackerInfo{Metadata: &C.Metadata{InName: "vless-in", InUser: "user-id"}},
+		info: &TrackerInfo{UUID: utils.NewUUIDV4(), Metadata: &C.Metadata{InName: "vless-in", InUser: "user-id"}},
 	}
 	second := &trackerManagerTest{
 		id:   "second",
-		info: &TrackerInfo{Metadata: &C.Metadata{InName: "vless-in", InUser: "user-id"}},
+		info: &TrackerInfo{UUID: utils.NewUUIDV4(), Metadata: &C.Metadata{InName: "vless-in", InUser: "user-id"}},
 	}
 
 	manager.Join(first)

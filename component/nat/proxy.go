@@ -2,21 +2,27 @@ package nat
 
 import (
 	"net"
+	"sync"
 
-	"github.com/Miku0139oao/aster-core/common/atomic"
 	C "github.com/Miku0139oao/aster-core/constant"
 )
 
 type writeBackProxy struct {
-	wb atomic.TypedValue[C.WriteBack]
+	mu sync.RWMutex
+	wb C.WriteBack
 }
 
 func (w *writeBackProxy) WriteBack(b []byte, addr net.Addr) (n int, err error) {
-	return w.wb.Load().WriteBack(b, addr)
+	w.mu.RLock()
+	wb := w.wb
+	w.mu.RUnlock()
+	return wb.WriteBack(b, addr)
 }
 
 func (w *writeBackProxy) UpdateWriteBack(wb C.WriteBack) {
-	w.wb.Store(wb)
+	w.mu.Lock()
+	w.wb = wb
+	w.mu.Unlock()
 }
 
 func NewWriteBackProxy(wb C.WriteBack) C.WriteBackProxy {

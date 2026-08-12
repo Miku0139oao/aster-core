@@ -10,11 +10,13 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	stdatomic "sync/atomic"
 	"time"
 
 	"github.com/Miku0139oao/aster-core/common/atomic"
 	N "github.com/Miku0139oao/aster-core/common/net"
 	"github.com/Miku0139oao/aster-core/common/utils"
+	"github.com/Miku0139oao/aster-core/component/kerneldirect"
 	"github.com/Miku0139oao/aster-core/component/loopback"
 	"github.com/Miku0139oao/aster-core/component/nat"
 	"github.com/Miku0139oao/aster-core/component/process"
@@ -68,7 +70,30 @@ var (
 	sniffingEnable    = false
 
 	ruleUpdateCallback = utils.NewCallback[P.RuleProvider]()
+	routingState       stdatomic.Pointer[routingSnapshot]
 )
+
+type routingSnapshot struct {
+	proxies  map[string]C.Proxy
+	rules    []C.Rule
+	subRules map[string][]C.Rule
+	mode     TunnelMode
+}
+
+func init() {
+	publishRoutingState()
+}
+
+// publishRoutingState must be called while configMux is held, except during
+// package initialization before concurrent access is possible.
+func publishRoutingState() {
+	routingState.Store(&routingSnapshot{
+		proxies:  proxies,
+		rules:    rules,
+		subRules: subRules,
+		mode:     mode,
+	})
+}
 
 type tunnel struct{}
 
@@ -104,13 +129,13 @@ func (t tunnel) HandleUDPPacket(packet C.UDPPacket, metadata *C.Metadata) {
 	packetAdapter := C.NewPacketAdapter(packet, metadata)
 	key := packetAdapter.Key()
 
-	hash := utils.MapHash(key)
+	hash := utils.MapHashComparable(key)
 	queueNo := uint(hash) % uint(len(udpQueues))
 
 	select {
 	case udpQueues[queueNo] <- packetAdapter:
 	default:
-		packet.Drop()
+		packetAdapter.Drop()
 	}
 }
 
@@ -210,7 +235,9 @@ func UpdateRules(newRules []C.Rule, newSubRule map[string][]C.Rule, rp map[strin
 	rules = newRules
 	ruleProviders = rp
 	subRules = newSubRule
+	publishRoutingState()
 	configMux.Unlock()
+	kerneldirect.Flush()
 }
 
 // Proxies return all proxies
@@ -233,7 +260,9 @@ func UpdateProxies(newProxies map[string]C.Proxy, newProviders map[string]P.Prox
 	configMux.Lock()
 	proxies = newProxies
 	providers = newProviders
+	publishRoutingState()
 	configMux.Unlock()
+	kerneldirect.Flush()
 }
 
 func UpdateListeners(newListeners map[string]C.InboundListener) {
@@ -251,12 +280,16 @@ func UpdateSniffer(dispatcher *sniffer.Dispatcher) {
 
 // Mode return current mode
 func Mode() TunnelMode {
-	return mode
+	return routingState.Load().mode
 }
 
 // SetMode change the mode of tunnel
 func SetMode(m TunnelMode) {
+	configMux.Lock()
 	mode = m
+	publishRoutingState()
+	configMux.Unlock()
+	kerneldirect.Flush()
 }
 
 func FindProcessMode() process.FindProcessMode {
@@ -316,10 +349,23 @@ func preHandleMetadata(metadata *C.Metadata) error {
 	return nil
 }
 
+// preCheckMetadata performs the only failing part of preHandleMetadata without
+// cloning and mutating the complete per-packet metadata object.
+func preCheckMetadata(metadata *C.Metadata) error {
+	if !needLookupIP(metadata) {
+		return nil
+	}
+	if _, exist := resolver.FindHostByIP(metadata.DstIP); !exist && resolver.IsFakeIP(metadata.DstIP) {
+		return fmt.Errorf("fake DNS record %s missing", metadata.DstIP)
+	}
+	return nil
+}
+
 func resolveMetadata(metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, err error) {
+	state := routingState.Load()
 	if metadata.SpecialProxy != "" {
 		var exist bool
-		proxy, exist = proxies[metadata.SpecialProxy]
+		proxy, exist = state.proxies[metadata.SpecialProxy]
 		if !exist {
 			err = fmt.Errorf("proxy %s not found", metadata.SpecialProxy)
 		}
@@ -379,7 +425,7 @@ func resolveMetadata(metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, err erro
 			}
 		},
 		CheckPassRule: func(adapterName string) bool {
-			adapter, ok := proxies[adapterName]
+			adapter, ok := state.proxies[adapterName]
 			if !ok {
 				return false
 			}
@@ -400,14 +446,14 @@ func resolveMetadata(metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, err erro
 		helper.FindProcess = nil
 	}
 
-	switch mode {
+	switch state.mode {
 	case Direct:
-		proxy = proxies["DIRECT"]
+		proxy = state.proxies["DIRECT"]
 	case Global:
-		proxy = proxies["GLOBAL"]
+		proxy = state.proxies["GLOBAL"]
 	// Rule
 	default:
-		proxy, rule, err = match(metadata, helper)
+		proxy, rule, err = matchWithState(metadata, helper, state)
 	}
 	return
 }
@@ -433,7 +479,7 @@ func handleUDPConn(packet C.PacketAdapter) {
 	}
 	fixMetadata(metadata) // fix some metadata not set via metadata.SetRemoteAddr or metadata.SetRemoteAddress
 
-	if err := preHandleMetadata(metadata.Clone()); err != nil { // precheck without modify metadata
+	if err := preCheckMetadata(metadata); err != nil {
 		packet.Drop()
 		log.Debugln("[Metadata PreHandle] error: %s", err)
 		return
@@ -482,7 +528,7 @@ func handleUDPConn(packet C.PacketAdapter) {
 
 			sender.AddMapping(originMetadata, dialMetadata)
 			oAddrPort := dialMetadata.AddrPort()
-			writeBackProxy := nat.NewWriteBackProxy(packet)
+			writeBackProxy := nat.NewWriteBackProxy(packet.WriteBackTarget())
 
 			go handleUDPToLocal(writeBackProxy, pc, sender, key, oAddrPort)
 			return pc, writeBackProxy, nil
@@ -635,6 +681,9 @@ func logMetadataErr(metadata *C.Metadata, rule C.Rule, proxy C.ProxyAdapter, err
 }
 
 func logMetadata(metadata *C.Metadata, rule C.Rule, remoteConn C.Connection) {
+	if !log.Enabled(log.INFO) {
+		return
+	}
 	switch {
 	case metadata.SpecialProxy != "":
 		log.Infoln("[%s] %s --> %s using %s", strings.ToUpper(metadata.NetWork.String()), metadata.SourceDetail(), metadata.RemoteAddress(), remoteConn.Chains().String())
@@ -644,9 +693,9 @@ func logMetadata(metadata *C.Metadata, rule C.Rule, remoteConn C.Connection) {
 		} else {
 			log.Infoln("[%s] %s --> %s match %s using %s", strings.ToUpper(metadata.NetWork.String()), metadata.SourceDetail(), metadata.RemoteAddress(), rule.RuleType().String(), remoteConn.Chains().String())
 		}
-	case mode == Global:
+	case Mode() == Global:
 		log.Infoln("[%s] %s --> %s using GLOBAL", strings.ToUpper(metadata.NetWork.String()), metadata.SourceDetail(), metadata.RemoteAddress())
-	case mode == Direct:
+	case Mode() == Direct:
 		log.Infoln("[%s] %s --> %s using DIRECT", strings.ToUpper(metadata.NetWork.String()), metadata.SourceDetail(), metadata.RemoteAddress())
 	default:
 		log.Infoln("[%s] %s --> %s doesn't match any rule using %s", strings.ToUpper(metadata.NetWork.String()), metadata.SourceDetail(), metadata.RemoteAddress(), remoteConn.Chains().String())
@@ -654,17 +703,18 @@ func logMetadata(metadata *C.Metadata, rule C.Rule, remoteConn C.Connection) {
 }
 
 func match(metadata *C.Metadata, helper C.RuleMatchHelper) (C.Proxy, C.Rule, error) {
-	configMux.RLock()
-	defer configMux.RUnlock()
+	return matchWithState(metadata, helper, routingState.Load())
+}
 
+func matchWithState(metadata *C.Metadata, helper C.RuleMatchHelper, state *routingSnapshot) (C.Proxy, C.Rule, error) {
 	var rematchChain []string
 	for {
 		var rematchProxy C.Proxy
 		var rematchRule C.Rule
 	GetRules:
-		for _, rule := range getRules(metadata) {
+		for _, rule := range getRules(metadata, state) {
 			if matched, ada := rule.Match(metadata, helper); matched {
-				adapter, ok := proxies[ada]
+				adapter, ok := state.proxies[ada]
 				if !ok {
 					continue
 				}
@@ -708,17 +758,17 @@ func match(metadata *C.Metadata, helper C.RuleMatchHelper) (C.Proxy, C.Rule, err
 			log.Debugln("[Rule] rematch proxy %s update metadata to rematch-name=%q sub-rule=%q", rematchProxy.Name(), metadata.InName, metadata.SpecialRules)
 			continue
 		}
-		return proxies["DIRECT"], nil, nil
+		return state.proxies["DIRECT"], nil, nil
 	}
 }
 
-func getRules(metadata *C.Metadata) []C.Rule {
-	if sr, ok := subRules[metadata.SpecialRules]; ok {
+func getRules(metadata *C.Metadata, state *routingSnapshot) []C.Rule {
+	if sr, ok := state.subRules[metadata.SpecialRules]; ok {
 		log.Debugln("[Rule] use %s rules", metadata.SpecialRules)
 		return sr
 	} else {
 		log.Debugln("[Rule] use default rules")
-		return rules
+		return state.rules
 	}
 }
 

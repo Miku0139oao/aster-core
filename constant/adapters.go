@@ -279,14 +279,57 @@ type PacketAdapter interface {
 	// Metadata returns destination metadata
 	Metadata() *Metadata
 	// Key is a SNAT key
-	Key() string
+	Key() UDPNatKey
+	// WriteBackTarget returns the underlying packet write-back handle, whose
+	// lifetime is independent of this pooled adapter wrapper.
+	WriteBackTarget() WriteBack
+}
+
+// UDPNatKey is the allocation-free form of a UDP source address used to keep
+// packets from the same transparent-proxy flow on the same worker and NAT
+// entry. Non-IP/custom addresses fall back to Raw.
+type UDPNatKey struct {
+	AddrPort netip.AddrPort
+	Raw      string
+}
+
+func NewUDPNatKey(addr net.Addr) UDPNatKey {
+	if addrPorter, ok := addr.(interface{ AddrPort() netip.AddrPort }); ok {
+		if addrPort := addrPorter.AddrPort(); addrPort.IsValid() {
+			return UDPNatKey{AddrPort: addrPort}
+		}
+	}
+	if addr == nil {
+		return UDPNatKey{}
+	}
+	return UDPNatKey{Raw: addr.String()}
+}
+
+func ParseUDPNatKey(raw string) UDPNatKey {
+	if addrPort, err := netip.ParseAddrPort(raw); err == nil {
+		return UDPNatKey{AddrPort: addrPort}
+	}
+	return UDPNatKey{Raw: raw}
+}
+
+func (k UDPNatKey) IsValid() bool {
+	return k.AddrPort.IsValid() || k.Raw != ""
+}
+
+func (k UDPNatKey) String() string {
+	if k.AddrPort.IsValid() {
+		return k.AddrPort.String()
+	}
+	return k.Raw
 }
 
 type packetAdapter struct {
 	UDPPacket
 	metadata *Metadata
-	key      string
+	key      UDPNatKey
 }
+
+var packetAdapterPool = sync.Pool{New: func() any { return new(packetAdapter) }}
 
 // Metadata returns destination metadata
 func (s *packetAdapter) Metadata() *Metadata {
@@ -294,16 +337,27 @@ func (s *packetAdapter) Metadata() *Metadata {
 }
 
 // Key is a SNAT key
-func (s *packetAdapter) Key() string {
+func (s *packetAdapter) Key() UDPNatKey {
 	return s.key
 }
 
+func (s *packetAdapter) WriteBackTarget() WriteBack {
+	return s.UDPPacket
+}
+
+func (s *packetAdapter) Drop() {
+	packet := s.UDPPacket
+	*s = packetAdapter{}
+	packetAdapterPool.Put(s)
+	packet.Drop()
+}
+
 func NewPacketAdapter(packet UDPPacket, metadata *Metadata) PacketAdapter {
-	return &packetAdapter{
-		packet,
-		metadata,
-		packet.LocalAddr().String(),
-	}
+	adapter := packetAdapterPool.Get().(*packetAdapter)
+	adapter.UDPPacket = packet
+	adapter.metadata = metadata
+	adapter.key = NewUDPNatKey(packet.LocalAddr())
+	return adapter
 }
 
 type WriteBack interface {
@@ -330,12 +384,15 @@ type PacketSender interface {
 	// RestoreReadFrom restore destination NAT for ReadFrom
 	// the implement must ensure returned netip.Add is valid (or just return input addr)
 	RestoreReadFrom(addr netip.Addr) netip.Addr
+	// RefreshReadDeadline keeps the UDP association alive without resetting the
+	// underlying socket deadline for every packet.
+	RefreshReadDeadline(PacketConn)
 }
 
 type NatTable interface {
-	GetOrCreate(key string, maker func() PacketSender) (PacketSender, bool)
+	GetOrCreate(key UDPNatKey, maker func() PacketSender) (PacketSender, bool)
 
-	Delete(key string)
+	Delete(key UDPNatKey)
 
 	GetForLocalConn(lAddr, rAddr string) *net.UDPConn
 

@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=aster-core
 PKG_VERSION:=1.14.514
-PKG_RELEASE:=2
+PKG_RELEASE:=4
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_SUBDIR:=$(PKG_NAME)-$(PKG_VERSION)
@@ -44,7 +44,7 @@ define Package/aster-core
   CATEGORY:=Network
   TITLE:=Mihomo-compatible universal proxy core
   URL:=https://github.com/Miku0139oao/aster-core
-  DEPENDS:=$(GO_ARCH_DEPENDS) +ca-bundle +ip-full +kmod-inet-diag +kmod-tun
+  DEPENDS:=$(GO_ARCH_DEPENDS) +ca-bundle +ip-full +kmod-inet-diag +kmod-tun +kmod-sched-bpf
   PROVIDES:=mihomo
   CONFLICTS:=mihomo-alpha mihomo-meta
   ALTERNATIVES:=400:/usr/bin/mihomo:/usr/libexec/aster-core

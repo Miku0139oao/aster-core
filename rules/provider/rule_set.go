@@ -59,6 +59,16 @@ func (rs *RuleSet) ProviderNames() []string {
 	return []string{rs.ruleProviderName}
 }
 
+// KernelDirectMatchSafe reports whether this rule can be evaluated from only
+// a DNS name and destination IP without changing its routing meaning.
+func (rs *RuleSet) KernelDirectMatchSafe() bool {
+	if rs.isSrc {
+		return false
+	}
+	provider, ok := rs.getProvider()
+	return ok && provider.Behavior() != P.Classical
+}
+
 func (rs *RuleSet) getProvider() (P.RuleProvider, bool) {
 	pp, ok := tunnel.RuleProviders()[rs.ruleProviderName]
 	return pp, ok

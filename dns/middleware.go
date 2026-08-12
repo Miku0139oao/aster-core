@@ -7,6 +7,7 @@ import (
 
 	"github.com/Miku0139oao/aster-core/common/lru"
 	"github.com/Miku0139oao/aster-core/component/fakeip"
+	"github.com/Miku0139oao/aster-core/component/kerneldirect"
 	"github.com/Miku0139oao/aster-core/component/resolver"
 	C "github.com/Miku0139oao/aster-core/constant"
 	icontext "github.com/Miku0139oao/aster-core/context"
@@ -19,6 +20,43 @@ type (
 	handler    func(ctx *icontext.DNSContext, r *D.Msg) (*D.Msg, error)
 	middleware func(next handler) handler
 )
+
+func withKernelDirectObservation() middleware {
+	return func(next handler) handler {
+		return func(ctx *icontext.DNSContext, r *D.Msg) (*D.Msg, error) {
+			msg, err := next(ctx, r)
+			if err != nil || msg == nil || len(r.Question) == 0 {
+				return msg, err
+			}
+			host := strings.TrimRight(r.Question[0].Name, ".")
+			answers := make([]kerneldirect.DNSAnswer, 0, len(msg.Answer))
+			for _, answer := range msg.Answer {
+				var addr netip.Addr
+				var ttl uint32
+				switch record := answer.(type) {
+				case *D.A:
+					addr, _ = netip.AddrFromSlice(record.A)
+					ttl = record.Hdr.Ttl
+				case *D.AAAA:
+					addr, _ = netip.AddrFromSlice(record.AAAA)
+					ttl = record.Hdr.Ttl
+				default:
+					continue
+				}
+				addr = addr.Unmap()
+				if !addr.IsValid() || resolver.IsFakeIP(addr) {
+					continue
+				}
+				answers = append(answers, kerneldirect.DNSAnswer{
+					Addr: addr,
+					TTL:  time.Duration(ttl) * time.Second,
+				})
+			}
+			kerneldirect.ObserveDNS(host, answers)
+			return msg, nil
+		}
+	}
+}
 
 func withHosts(mapping *lru.LruCache[netip.Addr, string]) middleware {
 	return func(next handler) handler {
@@ -231,7 +269,7 @@ func compose(middlewares []middleware, endpoint handler) handler {
 }
 
 func newHandler(resolver resolver.Resolver, mapper *ResolverEnhancer) handler {
-	var middlewares []middleware
+	middlewares := []middleware{withKernelDirectObservation()}
 
 	if mapper.useHosts {
 		middlewares = append(middlewares, withHosts(mapper.mapping))

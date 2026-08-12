@@ -26,6 +26,7 @@ import (
 	"github.com/Miku0139oao/aster-core/component/process"
 	"github.com/Miku0139oao/aster-core/component/resolver"
 	"github.com/Miku0139oao/aster-core/component/sniffer"
+	"github.com/Miku0139oao/aster-core/component/trafficcontrol"
 	"github.com/Miku0139oao/aster-core/component/trie"
 	C "github.com/Miku0139oao/aster-core/constant"
 	P "github.com/Miku0139oao/aster-core/constant/provider"
@@ -200,25 +201,26 @@ type TLS struct {
 
 // Config is mihomo config manager
 type Config struct {
-	General       *General
-	Controller    *Controller
-	Aster         *Aster
-	Experimental  *Experimental
-	IPTables      *IPTables
-	NTP           *NTP
-	DNS           *DNS
-	Hosts         *trie.DomainTrie[resolver.HostValue]
-	Profile       *Profile
-	Rules         []C.Rule
-	SubRules      map[string][]C.Rule
-	Users         []auth.AuthUser
-	Proxies       map[string]C.Proxy
-	Listeners     map[string]C.InboundListener
-	Providers     map[string]P.ProxyProvider
-	RuleProviders map[string]P.RuleProvider
-	Tunnels       []LC.Tunnel
-	Sniffer       *sniffer.Config
-	TLS           *TLS
+	General        *General
+	Controller     *Controller
+	Aster          *Aster
+	TrafficControl *trafficcontrol.Config
+	Experimental   *Experimental
+	IPTables       *IPTables
+	NTP            *NTP
+	DNS            *DNS
+	Hosts          *trie.DomainTrie[resolver.HostValue]
+	Profile        *Profile
+	Rules          []C.Rule
+	SubRules       map[string][]C.Rule
+	Users          []auth.AuthUser
+	Proxies        map[string]C.Proxy
+	Listeners      map[string]C.InboundListener
+	Providers      map[string]P.ProxyProvider
+	RuleProviders  map[string]P.RuleProvider
+	Tunnels        []LC.Tunnel
+	Sniffer        *sniffer.Config
+	TLS            *TLS
 }
 
 type RawCors struct {
@@ -294,6 +296,18 @@ type RawTun struct {
 	IPRoute2TableIndex                    int            `yaml:"iproute2-table-index" json:"iproute2-table-index,omitempty"`
 	IPRoute2RuleIndex                     int            `yaml:"iproute2-rule-index" json:"iproute2-rule-index,omitempty"`
 	AutoRedirect                          bool           `yaml:"auto-redirect" json:"auto-redirect,omitempty"`
+	KernelDirect                          bool           `yaml:"kernel-direct" json:"kernel-direct,omitempty"`
+	KernelDirectEBPF                      bool           `yaml:"kernel-direct-ebpf" json:"kernel-direct-ebpf,omitempty"`
+	KernelDirectEBPFRequired              bool           `yaml:"kernel-direct-ebpf-required" json:"kernel-direct-ebpf-required,omitempty"`
+	KernelDirectEBPFInterfaces            []string       `yaml:"kernel-direct-ebpf-interfaces" json:"kernel-direct-ebpf-interfaces,omitempty"`
+	KernelDirectEBPFMark                  uint32         `yaml:"kernel-direct-ebpf-mark" json:"kernel-direct-ebpf-mark,omitempty"`
+	KernelDirectEBPFMaxEntries            uint32         `yaml:"kernel-direct-ebpf-max-entries" json:"kernel-direct-ebpf-max-entries,omitempty"`
+	KernelDirectEBPFProxy                 bool           `yaml:"kernel-direct-ebpf-proxy" json:"kernel-direct-ebpf-proxy,omitempty"`
+	KernelDirectEBPFProxyRedirect         bool           `yaml:"kernel-direct-ebpf-proxy-redirect" json:"kernel-direct-ebpf-proxy-redirect,omitempty"`
+	KernelDirectEBPFProxyMark             uint32         `yaml:"kernel-direct-ebpf-proxy-mark" json:"kernel-direct-ebpf-proxy-mark,omitempty"`
+	KernelDirectEBPFFlowEntries           uint32         `yaml:"kernel-direct-ebpf-flow-entries" json:"kernel-direct-ebpf-flow-entries,omitempty"`
+	KernelDirectEBPFDirectPrefixes        []netip.Prefix `yaml:"kernel-direct-ebpf-direct-prefixes" json:"kernel-direct-ebpf-direct-prefixes,omitempty"`
+	KernelDirectEBPFProxyPrefixes         []netip.Prefix `yaml:"kernel-direct-ebpf-proxy-prefixes" json:"kernel-direct-ebpf-proxy-prefixes,omitempty"`
 	AutoRedirectInputMark                 uint32         `yaml:"auto-redirect-input-mark" json:"auto-redirect-input-mark,omitempty"`
 	AutoRedirectOutputMark                uint32         `yaml:"auto-redirect-output-mark" json:"auto-redirect-output-mark,omitempty"`
 	AutoRedirectIPRoute2FallbackRuleIndex int            `yaml:"auto-redirect-iproute2-fallback-rule-index" json:"auto-redirect-iproute2-fallback-rule-index,omitempty"`
@@ -412,53 +426,54 @@ type RawAster struct {
 }
 
 type RawConfig struct {
-	Port                          int                     `yaml:"port" json:"port"`
-	SocksPort                     int                     `yaml:"socks-port" json:"socks-port"`
-	RedirPort                     int                     `yaml:"redir-port" json:"redir-port"`
-	TProxyPort                    int                     `yaml:"tproxy-port" json:"tproxy-port"`
-	MixedPort                     int                     `yaml:"mixed-port" json:"mixed-port"`
-	ShadowSocksConfig             string                  `yaml:"ss-config" json:"ss-config"`
-	VmessConfig                   string                  `yaml:"vmess-config" json:"vmess-config"`
-	InboundTfo                    bool                    `yaml:"inbound-tfo" json:"inbound-tfo"`
-	InboundMPTCP                  bool                    `yaml:"inbound-mptcp" json:"inbound-mptcp"`
-	Authentication                []string                `yaml:"authentication" json:"authentication"`
-	SkipAuthPrefixes              []netip.Prefix          `yaml:"skip-auth-prefixes" json:"skip-auth-prefixes"`
-	LanAllowedIPs                 []netip.Prefix          `yaml:"lan-allowed-ips" json:"lan-allowed-ips"`
-	LanDisAllowedIPs              []netip.Prefix          `yaml:"lan-disallowed-ips" json:"lan-disallowed-ips"`
-	AllowLan                      bool                    `yaml:"allow-lan" json:"allow-lan"`
-	BindAddress                   string                  `yaml:"bind-address" json:"bind-address"`
-	Mode                          T.TunnelMode            `yaml:"mode" json:"mode"`
-	UnifiedDelay                  bool                    `yaml:"unified-delay" json:"unified-delay"`
-	LogLevel                      log.LogLevel            `yaml:"log-level" json:"log-level"`
-	IPv6                          bool                    `yaml:"ipv6" json:"ipv6"`
-	ExternalController            string                  `yaml:"external-controller" json:"external-controller"`
-	ExternalControllerRoutingMark int                     `yaml:"external-controller-routing-mark" json:"external-controller-routing-mark"`
-	ExternalControllerPipe        string                  `yaml:"external-controller-pipe" json:"external-controller-pipe"`
-	ExternalControllerUnix        string                  `yaml:"external-controller-unix" json:"external-controller-unix"`
-	ExternalControllerTLS         string                  `yaml:"external-controller-tls" json:"external-controller-tls"`
-	ExternalControllerCors        RawCors                 `yaml:"external-controller-cors" json:"external-controller-cors"`
-	ExternalUI                    string                  `yaml:"external-ui" json:"external-ui"`
-	ExternalUIURL                 string                  `yaml:"external-ui-url" json:"external-ui-url"`
-	ExternalUIName                string                  `yaml:"external-ui-name" json:"external-ui-name"`
-	ExternalDohServer             string                  `yaml:"external-doh-server" json:"external-doh-server"`
-	Secret                        string                  `yaml:"secret" json:"secret"`
-	Aster                         *RawAster               `yaml:"aster,omitempty" json:"aster,omitempty"`
-	Interface                     string                  `yaml:"interface-name" json:"interface-name"`
-	RoutingMark                   int                     `yaml:"routing-mark" json:"routing-mark"`
-	Tunnels                       []LC.Tunnel             `yaml:"tunnels" json:"tunnels"`
-	GeoAutoUpdate                 bool                    `yaml:"geo-auto-update" json:"geo-auto-update"`
-	GeoUpdateInterval             int                     `yaml:"geo-update-interval" json:"geo-update-interval"`
-	GeodataMode                   bool                    `yaml:"geodata-mode" json:"geodata-mode"`
-	GeodataLoader                 string                  `yaml:"geodata-loader" json:"geodata-loader"`
-	GeositeMatcher                string                  `yaml:"geosite-matcher" json:"geosite-matcher"`
-	TCPConcurrent                 bool                    `yaml:"tcp-concurrent" json:"tcp-concurrent"`
-	FindProcessMode               process.FindProcessMode `yaml:"find-process-mode" json:"find-process-mode"`
-	GlobalClientFingerprint       string                  `yaml:"global-client-fingerprint" json:"global-client-fingerprint"`
-	GlobalUA                      string                  `yaml:"global-ua" json:"global-ua"`
-	ETagSupport                   bool                    `yaml:"etag-support" json:"etag-support"`
-	KeepAliveIdle                 int                     `yaml:"keep-alive-idle" json:"keep-alive-idle"`
-	KeepAliveInterval             int                     `yaml:"keep-alive-interval" json:"keep-alive-interval"`
-	DisableKeepAlive              bool                    `yaml:"disable-keep-alive" json:"disable-keep-alive"`
+	Port                          int                       `yaml:"port" json:"port"`
+	SocksPort                     int                       `yaml:"socks-port" json:"socks-port"`
+	RedirPort                     int                       `yaml:"redir-port" json:"redir-port"`
+	TProxyPort                    int                       `yaml:"tproxy-port" json:"tproxy-port"`
+	MixedPort                     int                       `yaml:"mixed-port" json:"mixed-port"`
+	ShadowSocksConfig             string                    `yaml:"ss-config" json:"ss-config"`
+	VmessConfig                   string                    `yaml:"vmess-config" json:"vmess-config"`
+	InboundTfo                    bool                      `yaml:"inbound-tfo" json:"inbound-tfo"`
+	InboundMPTCP                  bool                      `yaml:"inbound-mptcp" json:"inbound-mptcp"`
+	Authentication                []string                  `yaml:"authentication" json:"authentication"`
+	SkipAuthPrefixes              []netip.Prefix            `yaml:"skip-auth-prefixes" json:"skip-auth-prefixes"`
+	LanAllowedIPs                 []netip.Prefix            `yaml:"lan-allowed-ips" json:"lan-allowed-ips"`
+	LanDisAllowedIPs              []netip.Prefix            `yaml:"lan-disallowed-ips" json:"lan-disallowed-ips"`
+	AllowLan                      bool                      `yaml:"allow-lan" json:"allow-lan"`
+	BindAddress                   string                    `yaml:"bind-address" json:"bind-address"`
+	Mode                          T.TunnelMode              `yaml:"mode" json:"mode"`
+	UnifiedDelay                  bool                      `yaml:"unified-delay" json:"unified-delay"`
+	LogLevel                      log.LogLevel              `yaml:"log-level" json:"log-level"`
+	IPv6                          bool                      `yaml:"ipv6" json:"ipv6"`
+	ExternalController            string                    `yaml:"external-controller" json:"external-controller"`
+	ExternalControllerRoutingMark int                       `yaml:"external-controller-routing-mark" json:"external-controller-routing-mark"`
+	ExternalControllerPipe        string                    `yaml:"external-controller-pipe" json:"external-controller-pipe"`
+	ExternalControllerUnix        string                    `yaml:"external-controller-unix" json:"external-controller-unix"`
+	ExternalControllerTLS         string                    `yaml:"external-controller-tls" json:"external-controller-tls"`
+	ExternalControllerCors        RawCors                   `yaml:"external-controller-cors" json:"external-controller-cors"`
+	ExternalUI                    string                    `yaml:"external-ui" json:"external-ui"`
+	ExternalUIURL                 string                    `yaml:"external-ui-url" json:"external-ui-url"`
+	ExternalUIName                string                    `yaml:"external-ui-name" json:"external-ui-name"`
+	ExternalDohServer             string                    `yaml:"external-doh-server" json:"external-doh-server"`
+	Secret                        string                    `yaml:"secret" json:"secret"`
+	Aster                         *RawAster                 `yaml:"aster,omitempty" json:"aster,omitempty"`
+	TrafficControl                *trafficcontrol.RawConfig `yaml:"traffic-control,omitempty" json:"traffic-control,omitempty"`
+	Interface                     string                    `yaml:"interface-name" json:"interface-name"`
+	RoutingMark                   int                       `yaml:"routing-mark" json:"routing-mark"`
+	Tunnels                       []LC.Tunnel               `yaml:"tunnels" json:"tunnels"`
+	GeoAutoUpdate                 bool                      `yaml:"geo-auto-update" json:"geo-auto-update"`
+	GeoUpdateInterval             int                       `yaml:"geo-update-interval" json:"geo-update-interval"`
+	GeodataMode                   bool                      `yaml:"geodata-mode" json:"geodata-mode"`
+	GeodataLoader                 string                    `yaml:"geodata-loader" json:"geodata-loader"`
+	GeositeMatcher                string                    `yaml:"geosite-matcher" json:"geosite-matcher"`
+	TCPConcurrent                 bool                      `yaml:"tcp-concurrent" json:"tcp-concurrent"`
+	FindProcessMode               process.FindProcessMode   `yaml:"find-process-mode" json:"find-process-mode"`
+	GlobalClientFingerprint       string                    `yaml:"global-client-fingerprint" json:"global-client-fingerprint"`
+	GlobalUA                      string                    `yaml:"global-ua" json:"global-ua"`
+	ETagSupport                   bool                      `yaml:"etag-support" json:"etag-support"`
+	KeepAliveIdle                 int                       `yaml:"keep-alive-idle" json:"keep-alive-idle"`
+	KeepAliveInterval             int                       `yaml:"keep-alive-interval" json:"keep-alive-interval"`
+	DisableKeepAlive              bool                      `yaml:"disable-keep-alive" json:"disable-keep-alive"`
 
 	ProxyProvider map[string]map[string]any `yaml:"proxy-providers" json:"proxy-providers"`
 	RuleProvider  map[string]map[string]any `yaml:"rule-providers" json:"rule-providers"`
@@ -703,6 +718,18 @@ func ParseRawConfig(rawCfg *RawConfig) (*Config, error) {
 		return nil, err
 	}
 	config.Aster = aster
+
+	trafficControl, err := trafficcontrol.ParseConfig(rawCfg.TrafficControl, func(path string) (string, error) {
+		resolved := C.Path.Resolve(path)
+		if !C.Path.IsSafePath(resolved) {
+			return "", C.Path.ErrNotSafePath(resolved)
+		}
+		return resolved, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	config.TrafficControl = trafficControl
 
 	log.Infoln("Geodata Loader mode: %s", geodata.LoaderName())
 	log.Infoln("Geosite Matcher implementation: %s", geodata.SiteMatcherName())
@@ -1751,6 +1778,27 @@ func parseIPV6(rawCfg *RawConfig) {
 }
 
 func parseTun(rawTun RawTun, dns *DNS, general *General) error {
+	if rawTun.KernelDirect && (!rawTun.AutoRoute || !rawTun.AutoRedirect) {
+		return errors.New("tun kernel-direct requires auto-route and auto-redirect")
+	}
+	if rawTun.KernelDirectEBPF && !rawTun.KernelDirect {
+		return errors.New("tun kernel-direct-ebpf requires kernel-direct")
+	}
+	if rawTun.KernelDirectEBPFRequired && !rawTun.KernelDirectEBPF {
+		return errors.New("tun kernel-direct-ebpf-required requires kernel-direct-ebpf")
+	}
+	if rawTun.KernelDirectEBPF && len(rawTun.KernelDirectEBPFInterfaces) == 0 {
+		return errors.New("tun kernel-direct-ebpf requires kernel-direct-ebpf-interfaces")
+	}
+	if rawTun.KernelDirectEBPFProxy && !rawTun.KernelDirectEBPF {
+		return errors.New("tun kernel-direct-ebpf-proxy requires kernel-direct-ebpf")
+	}
+	if rawTun.KernelDirectEBPFProxyRedirect && !rawTun.KernelDirectEBPFProxy {
+		return errors.New("tun kernel-direct-ebpf-proxy-redirect requires kernel-direct-ebpf-proxy")
+	}
+	if len(rawTun.KernelDirectEBPFProxyPrefixes) > 0 && !rawTun.KernelDirectEBPFProxy {
+		return errors.New("tun kernel-direct-ebpf-proxy-prefixes requires kernel-direct-ebpf-proxy")
+	}
 	tunAddressPrefix := dns.FakeIPRange
 	if !tunAddressPrefix.IsValid() {
 		tunAddressPrefix = netip.MustParsePrefix("198.18.0.1/16")
@@ -1773,6 +1821,18 @@ func parseTun(rawTun RawTun, dns *DNS, general *General) error {
 		IPRoute2TableIndex:                    rawTun.IPRoute2TableIndex,
 		IPRoute2RuleIndex:                     rawTun.IPRoute2RuleIndex,
 		AutoRedirect:                          rawTun.AutoRedirect,
+		KernelDirect:                          rawTun.KernelDirect,
+		KernelDirectEBPF:                      rawTun.KernelDirectEBPF,
+		KernelDirectEBPFRequired:              rawTun.KernelDirectEBPFRequired,
+		KernelDirectEBPFInterfaces:            rawTun.KernelDirectEBPFInterfaces,
+		KernelDirectEBPFMark:                  rawTun.KernelDirectEBPFMark,
+		KernelDirectEBPFMaxEntries:            rawTun.KernelDirectEBPFMaxEntries,
+		KernelDirectEBPFProxy:                 rawTun.KernelDirectEBPFProxy,
+		KernelDirectEBPFProxyRedirect:         rawTun.KernelDirectEBPFProxyRedirect,
+		KernelDirectEBPFProxyMark:             rawTun.KernelDirectEBPFProxyMark,
+		KernelDirectEBPFFlowEntries:           rawTun.KernelDirectEBPFFlowEntries,
+		KernelDirectEBPFDirectPrefixes:        rawTun.KernelDirectEBPFDirectPrefixes,
+		KernelDirectEBPFProxyPrefixes:         rawTun.KernelDirectEBPFProxyPrefixes,
 		AutoRedirectInputMark:                 rawTun.AutoRedirectInputMark,
 		AutoRedirectOutputMark:                rawTun.AutoRedirectOutputMark,
 		AutoRedirectIPRoute2FallbackRuleIndex: rawTun.AutoRedirectIPRoute2FallbackRuleIndex,

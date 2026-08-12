@@ -9,6 +9,8 @@ import (
 	"github.com/Miku0139oao/aster-core/common/atomic"
 	"github.com/Miku0139oao/aster-core/common/xsync"
 	"github.com/Miku0139oao/aster-core/component/memory"
+
+	"github.com/gofrs/uuid/v5"
 )
 
 var DefaultManager *Manager
@@ -28,7 +30,7 @@ func init() {
 }
 
 type Manager struct {
-	connections   xsync.Map[string, Tracker]
+	connections   xsync.Map[uuid.UUID, Tracker]
 	uploadTemp    atomic.Int64
 	downloadTemp  atomic.Int64
 	uploadBlip    atomic.Int64
@@ -56,14 +58,14 @@ type trafficObserverHolder struct {
 }
 
 func (m *Manager) Join(c Tracker) {
-	if _, loaded := m.connections.LoadOrStore(c.ID(), c); loaded {
+	if _, loaded := m.connections.LoadOrStore(c.Info().UUID, c); loaded {
 		return
 	}
 	m.updatePrincipalConnections(c, 1)
 }
 
 func (m *Manager) Leave(c Tracker) {
-	stored, loaded := m.connections.LoadAndDelete(c.ID())
+	stored, loaded := m.connections.LoadAndDelete(c.Info().UUID)
 	if !loaded {
 		return
 	}
@@ -104,14 +106,18 @@ func (m *Manager) ActiveConnectionsByPrincipal() map[Principal]int {
 }
 
 func (m *Manager) Get(id string) (c Tracker) {
-	if value, ok := m.connections.Load(id); ok {
+	parsedID, err := uuid.FromString(id)
+	if err != nil {
+		return nil
+	}
+	if value, ok := m.connections.Load(parsedID); ok {
 		c = value
 	}
 	return
 }
 
 func (m *Manager) Range(f func(c Tracker) bool) {
-	m.connections.Range(func(key string, value Tracker) bool {
+	m.connections.Range(func(key uuid.UUID, value Tracker) bool {
 		return f(value)
 	})
 }

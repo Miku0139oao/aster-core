@@ -9,7 +9,7 @@ import (
 )
 
 type Table struct {
-	mapping xsync.Map[string, *entry]
+	mapping xsync.Map[C.UDPNatKey, *entry]
 }
 
 type entry struct {
@@ -18,7 +18,7 @@ type entry struct {
 	LocalLockMap    xsync.Map[string, *sync.Cond]
 }
 
-func (t *Table) GetOrCreate(key string, maker func() C.PacketSender) (C.PacketSender, bool) {
+func (t *Table) GetOrCreate(key C.UDPNatKey, maker func() C.PacketSender) (C.PacketSender, bool) {
 	item, loaded := t.mapping.LoadOrStoreFn(key, func() *entry {
 		return &entry{
 			PacketSender: maker(),
@@ -27,7 +27,7 @@ func (t *Table) GetOrCreate(key string, maker func() C.PacketSender) (C.PacketSe
 	return item.PacketSender, loaded
 }
 
-func (t *Table) Delete(key string) {
+func (t *Table) Delete(key C.UDPNatKey) {
 	t.mapping.Delete(key)
 }
 
@@ -86,7 +86,7 @@ func (t *Table) DeleteLockForLocalConn(lAddr, key string) {
 }
 
 func (t *Table) getEntry(key string) (*entry, bool) {
-	return t.mapping.Load(key)
+	return t.mapping.Load(C.ParseUDPNatKey(key))
 }
 
 func makeLock() *sync.Cond {
