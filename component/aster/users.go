@@ -115,11 +115,15 @@ func (m *Manager) ListUsers(inbound string) ([]User, error) {
 	}
 	m.syncTrafficLocked()
 	users := make([]User, 0)
-	for listenerName := range m.runtime.Load().managed {
+	for _, listenerName := range m.config.ManagedListeners {
 		if inbound != "" && listenerName != inbound {
 			continue
 		}
-		for _, user := range m.store.Listeners[listenerName].Users {
+		state := m.store.Listeners[listenerName]
+		if state == nil {
+			continue
+		}
+		for _, user := range state.Users {
 			users = append(users, *user)
 		}
 	}
@@ -143,11 +147,14 @@ func (m *Manager) ListUserRecords(inbound string) ([]UserRecord, error) {
 	}
 	m.syncTrafficLocked()
 	records := make([]UserRecord, 0)
-	for listenerName := range m.runtime.Load().managed {
+	for _, listenerName := range m.config.ManagedListeners {
 		if inbound != "" && listenerName != inbound {
 			continue
 		}
 		state := m.store.Listeners[listenerName]
+		if state == nil {
+			continue
+		}
 		for _, user := range state.Users {
 			records = append(records, UserRecord{User: *user, Revision: state.Revision, AppliedRevision: state.AppliedRevision})
 		}
