@@ -35,6 +35,8 @@ import (
 
 type Listener struct {
 	closed     atomic.Bool
+	closeOnce  sync.Once
+	closeErr   error
 	config     LC.VlessServer
 	listeners  []net.Listener
 	httpServer *http.Server
@@ -329,25 +331,25 @@ func New(config LC.VlessServer, lc C.InboundListenConfig, tunnel C.Tunnel, addit
 }
 
 func (l *Listener) Close() error {
-	l.closed.Store(true)
-	l.service.Close()
-	l.closeTransportConnections()
-	var retErr error
-	for _, lis := range l.listeners {
-		err := lis.Close()
-		if err != nil {
-			retErr = err
+	l.closeOnce.Do(func() {
+		l.closed.Store(true)
+		l.service.Close()
+		l.closeTransportConnections()
+		for _, lis := range l.listeners {
+			if err := lis.Close(); err != nil {
+				l.closeErr = errors.Join(l.closeErr, err)
+			}
 		}
-	}
-	if l.httpServer != nil {
-		if err := l.httpServer.Close(); err != nil {
-			retErr = errors.Join(retErr, err)
+		if l.httpServer != nil {
+			if err := l.httpServer.Close(); err != nil {
+				l.closeErr = errors.Join(l.closeErr, err)
+			}
 		}
-	}
-	if l.decryption != nil {
-		_ = l.decryption.Close()
-	}
-	return retErr
+		if l.decryption != nil {
+			_ = l.decryption.Close()
+		}
+	})
+	return l.closeErr
 }
 
 func (l *Listener) UpdateUsers(users []LC.VlessUser) error {
