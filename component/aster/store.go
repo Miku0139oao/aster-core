@@ -25,6 +25,18 @@ type Store struct {
 	Generation    uint64                    `json:"generation"`
 	Listeners     map[string]*ListenerState `json:"listeners"`
 	Subscriptions map[string]string         `json:"subscriptions,omitempty"`
+
+	sharedSubscriptions bool `json:"-"`
+}
+
+// persistHint is valid only for the process that holds the store lock and last
+// persisted this path. It lets Flush skip re-reading and re-validating both
+// state files on every write.
+type persistHint struct {
+	path       string
+	generation uint64
+	recovered  bool
+	ready      bool
 }
 
 type ListenerState struct {
@@ -176,12 +188,22 @@ func prepareStoreDirectory(path string) error {
 }
 
 func saveStoreLocked(path string, store *Store) error {
-	committed, recovered, err := loadStore(path)
-	if err != nil {
-		return err
-	}
-	if committed.Generation != store.Generation {
-		return fmt.Errorf("%w: Aster store generation changed from %d to %d", ErrConflict, store.Generation, committed.Generation)
+	return saveStoreLockedWithHint(path, store, nil)
+}
+
+func saveStoreLockedWithHint(path string, store *Store, hint *persistHint) error {
+	recovered := false
+	if hint != nil && hint.ready && hint.path == path && hint.generation == store.Generation {
+		recovered = hint.recovered
+	} else {
+		committed, recoveredFromDisk, err := loadStore(path)
+		if err != nil {
+			return err
+		}
+		if committed.Generation != store.Generation {
+			return fmt.Errorf("%w: Aster store generation changed from %d to %d", ErrConflict, store.Generation, committed.Generation)
+		}
+		recovered = recoveredFromDisk
 	}
 
 	if store.Generation == math.MaxUint64 {
@@ -209,8 +231,15 @@ func saveStoreLocked(path string, store *Store) error {
 		return err
 	}
 	store.Generation = candidate.Generation
-	if err := writeStoreFile(secondPath, data); err != nil {
-		log.Warnln("Aster redundant state update failed; latest state remains in %s: %s", firstPath, err)
+	secondErr := writeStoreFile(secondPath, data)
+	if secondErr != nil {
+		log.Warnln("Aster redundant state update failed; latest state remains in %s: %s", firstPath, secondErr)
+	}
+	if hint != nil {
+		hint.path = path
+		hint.generation = store.Generation
+		hint.recovered = secondErr != nil && firstPath == path+".bak"
+		hint.ready = true
 	}
 	return nil
 }
@@ -266,10 +295,11 @@ func syncDirectory(path string) error {
 
 func cloneStoreForListener(store *Store, inbound string) *Store {
 	cloned := &Store{
-		Version:       store.Version,
-		Generation:    store.Generation,
-		Listeners:     make(map[string]*ListenerState, len(store.Listeners)),
-		Subscriptions: make(map[string]string, len(store.Subscriptions)),
+		Version:             store.Version,
+		Generation:          store.Generation,
+		Listeners:           make(map[string]*ListenerState, len(store.Listeners)),
+		Subscriptions:       store.Subscriptions,
+		sharedSubscriptions: true,
 	}
 	for name, listener := range store.Listeners {
 		cloned.Listeners[name] = listener
@@ -278,10 +308,19 @@ func cloneStoreForListener(store *Store, inbound string) *Store {
 		clonedListener := cloneListenerState(listener)
 		cloned.Listeners[inbound] = &clonedListener
 	}
-	for userID, token := range store.Subscriptions {
-		cloned.Subscriptions[userID] = token
-	}
 	return cloned
+}
+
+func (store *Store) detachSubscriptions() {
+	if store == nil || !store.sharedSubscriptions {
+		return
+	}
+	cloned := make(map[string]string, len(store.Subscriptions))
+	for userID, token := range store.Subscriptions {
+		cloned[userID] = token
+	}
+	store.Subscriptions = cloned
+	store.sharedSubscriptions = false
 }
 
 func cloneStore(store *Store) *Store {

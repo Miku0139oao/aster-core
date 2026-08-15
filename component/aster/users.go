@@ -115,14 +115,11 @@ func (m *Manager) ListUsers(inbound string) ([]User, error) {
 	}
 	m.syncTrafficLocked()
 	users := make([]User, 0)
-	for listenerName := range m.runtime.Load().managed {
-		if inbound != "" && listenerName != inbound {
-			continue
-		}
-		for _, user := range m.store.Listeners[listenerName].Users {
+	m.forEachManagedListenerLocked(inbound, func(state *ListenerState) {
+		for _, user := range state.Users {
 			users = append(users, *user)
 		}
-	}
+	})
 	sort.Slice(users, func(i, j int) bool {
 		if users[i].Inbound != users[j].Inbound {
 			return users[i].Inbound < users[j].Inbound
@@ -143,15 +140,11 @@ func (m *Manager) ListUserRecords(inbound string) ([]UserRecord, error) {
 	}
 	m.syncTrafficLocked()
 	records := make([]UserRecord, 0)
-	for listenerName := range m.runtime.Load().managed {
-		if inbound != "" && listenerName != inbound {
-			continue
-		}
-		state := m.store.Listeners[listenerName]
+	m.forEachManagedListenerLocked(inbound, func(state *ListenerState) {
 		for _, user := range state.Users {
 			records = append(records, UserRecord{User: *user, Revision: state.Revision, AppliedRevision: state.AppliedRevision})
 		}
-	}
+	})
 	sort.Slice(records, func(i, j int) bool {
 		if records[i].User.Inbound != records[j].User.Inbound {
 			return records[i].User.Inbound < records[j].User.Inbound
@@ -228,6 +221,7 @@ func (m *Manager) CreateUser(input CreateUserInput, expectedRevision int64) (Use
 		if err != nil {
 			return err
 		}
+		candidate.detachSubscriptions()
 		candidate.Subscriptions[user.ID] = token
 		listenerState.Users = append(listenerState.Users, user)
 		createdID = user.ID
@@ -298,6 +292,7 @@ func (m *Manager) DeleteUser(userID string, expectedRevision int64) (int64, erro
 		for i, user := range listenerState.Users {
 			if user.ID == userID {
 				listenerState.Users = append(listenerState.Users[:i], listenerState.Users[i+1:]...)
+				candidate.detachSubscriptions()
 				delete(candidate.Subscriptions, userID)
 				return nil
 			}
@@ -358,6 +353,7 @@ func (m *Manager) RotateSubscription(userID string, expectedRevision int64) (str
 		if err != nil {
 			return err
 		}
+		candidate.detachSubscriptions()
 		candidate.Subscriptions[userID] = token
 		return nil
 	})
@@ -463,6 +459,22 @@ func (m *Manager) mutateListenerLocked(inbound string, expectedRevision int64, m
 	m.publishLocked()
 	committed = true
 	return candidateState, nil
+}
+
+func (m *Manager) forEachManagedListenerLocked(inbound string, fn func(*ListenerState)) {
+	if m.config == nil {
+		return
+	}
+	for _, listenerName := range m.config.ManagedListeners {
+		if inbound != "" && listenerName != inbound {
+			continue
+		}
+		state := m.store.Listeners[listenerName]
+		if state == nil {
+			continue
+		}
+		fn(state)
+	}
 }
 
 func buildUserIndex(store *Store) map[string]userLocation {

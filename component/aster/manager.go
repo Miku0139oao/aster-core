@@ -76,17 +76,18 @@ type Manager struct {
 	runtime      atomic.Pointer[runtimeState]
 	dirty        atomic.Bool
 	flushCancel  chan struct{}
+	persistHint  persistHint
 }
 
 var Default = NewManager()
 
 func NewManager() *Manager {
 	manager := &Manager{
-		store:        newStore(),
-		userIndex:    make(map[string]userLocation),
-		persistStore: saveStoreLocked,
-		instances:    make(map[string]uintptr),
+		store:     newStore(),
+		userIndex: make(map[string]userLocation),
+		instances: make(map[string]uintptr),
 	}
+	manager.persistStore = manager.saveWithHint
 	manager.runtime.Store(newRuntimeState())
 	return manager
 }
@@ -130,7 +131,7 @@ func (m *Manager) Configure(config *Config) error {
 		}()
 	}
 
-	store, _, err := loadStore(config.StorePath)
+	store, recovered, err := loadStore(config.StorePath)
 	if err != nil {
 		return err
 	}
@@ -152,7 +153,10 @@ func (m *Manager) Configure(config *Config) error {
 			store.Listeners[change.name].AppliedRevision = store.Listeners[change.name].Revision
 		}
 	}
+	previousHint := m.persistHint
+	m.persistHint = persistHint{path: config.StorePath, generation: store.Generation, recovered: recovered, ready: true}
 	if err := m.persistStore(config.StorePath, store); err != nil {
+		m.persistHint = previousHint
 		rollbackErr := rollbackChanges(changes)
 		if rollbackErr != nil {
 			rollbackErr = errors.Join(rollbackErr, m.failClosedStateLocked(config.ManagedListeners))
@@ -201,6 +205,7 @@ func (m *Manager) Configure(config *Config) error {
 		m.userIndex = buildUserIndex(store)
 		m.storePath = config.StorePath
 		m.instances = instances
+		m.persistHint = persistHint{path: config.StorePath, generation: store.Generation, recovered: false, ready: true}
 		if oldUnlock != nil {
 			oldUnlock()
 		}
@@ -377,6 +382,11 @@ func (m *Manager) releaseStoreLocked() {
 	m.store = newStore()
 	m.userIndex = make(map[string]userLocation)
 	m.storePath = ""
+	m.persistHint = persistHint{}
+}
+
+func (m *Manager) saveWithHint(path string, store *Store) error {
+	return saveStoreLockedWithHint(path, store, &m.persistHint)
 }
 
 func applyChanges(changes []listenerChange) error {
@@ -435,6 +445,7 @@ func seedListener(name string, schema C.ManagedUserSchema, configured []C.Manage
 		Revision: nextRevision(0),
 	}
 	names := make(map[string]struct{}, len(configured))
+	newTokens := make(map[string]string, len(configured))
 	for i, user := range configured {
 		userID := utils.NewUUIDV4().String()
 		nameCandidate := strings.TrimSpace(user.Name)
@@ -467,6 +478,9 @@ func seedListener(name string, schema C.ManagedUserSchema, configured []C.Manage
 		if err != nil {
 			return nil, err
 		}
+		newTokens[userID] = token
+	}
+	for userID, token := range newTokens {
 		subscriptions[userID] = token
 	}
 	return state, nil

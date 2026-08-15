@@ -161,8 +161,6 @@ func getAsterOverview(writer http.ResponseWriter, request *http.Request) {
 	}
 	upload, download := statistic.DefaultManager.Total()
 	connectionCount := statistic.DefaultManager.ConnectionCount()
-	var memory runtime.MemStats
-	runtime.ReadMemStats(&memory)
 	now := time.Now()
 	render.JSON(writer, request, render.M{
 		"version":        C.Version,
@@ -172,7 +170,7 @@ func getAsterOverview(writer http.ResponseWriter, request *http.Request) {
 		"uptime_seconds": int64(now.Sub(asterStartedAt).Seconds()),
 		"platform": render.M{
 			"os": runtime.GOOS, "arch": runtime.GOARCH, "cpu_cores": runtime.NumCPU(),
-			"memory_bytes": memory.Sys, "goroutines": runtime.NumGoroutine(),
+			"memory_bytes": statistic.DefaultManager.Memory(), "goroutines": runtime.NumGoroutine(),
 		},
 		"traffic": render.M{
 			"uplink_total": upload, "downlink_total": download, "active_connections": connectionCount,

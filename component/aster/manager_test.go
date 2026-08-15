@@ -585,6 +585,38 @@ func TestManagerHoldsExclusiveStoreLockWhileEnabled(t *testing.T) {
 	require.NoError(t, second.Configure(nil))
 }
 
+func TestListUsersAndRecordsSkipMissingManagedListener(t *testing.T) {
+	manager := NewManager()
+	manager.config = &Config{
+		Secret:           "0123456789abcdef0123456789abcdef",
+		ManagedListeners: []string{"missing", "present"},
+	}
+	store := newStore()
+	store.Listeners["present"] = &ListenerState{
+		ID: "present-id", Name: "present", Protocol: "vless", Revision: 1, AppliedRevision: 1,
+		Users: []*User{{
+			ID: "user-id", Inbound: "present", Protocol: "vless", Name: "present-user",
+			UUID: "6d27a52f-4539-4ac1-9bd4-b8e05e53c197", Enabled: true,
+			TrafficGeneration: 1, CreatedAt: 1, UpdatedAt: 1,
+		}},
+	}
+	manager.store = store
+
+	users, err := manager.ListUsers("")
+	require.NoError(t, err)
+	require.Len(t, users, 1)
+	require.Equal(t, "present-user", users[0].Name)
+
+	records, err := manager.ListUserRecords("missing")
+	require.NoError(t, err)
+	require.Empty(t, records)
+
+	records, err = manager.ListUserRecords("")
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	require.Equal(t, "user-id", records[0].User.ID)
+}
+
 func TestManagerRejectsListenerUpdateFailure(t *testing.T) {
 	managed := newManagedVLESSTestListener()
 	managed.updateErr = errors.New("injected update failure")

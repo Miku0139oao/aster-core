@@ -128,9 +128,50 @@ func TestCloneStoreForListenerOnlyDeepCopiesTarget(t *testing.T) {
 	require.NotSame(t, store.Listeners["vless-in"], cloned.Listeners["vless-in"])
 	require.NotSame(t, store.Listeners["vless-in"].Users[0], cloned.Listeners["vless-in"].Users[0])
 	require.Same(t, store.Listeners["other"], cloned.Listeners["other"])
+	require.True(t, cloned.sharedSubscriptions)
 
 	cloned.Listeners["vless-in"].Users[0].Name = "changed"
-	cloned.Subscriptions["user-id"] = "changed-token"
 	require.Equal(t, "target", store.Listeners["vless-in"].Users[0].Name)
+
+	cloned.detachSubscriptions()
+	require.False(t, cloned.sharedSubscriptions)
+	cloned.Subscriptions["user-id"] = "changed-token"
 	require.NotEqual(t, cloned.Subscriptions["user-id"], store.Subscriptions["user-id"])
+	require.Equal(t, "other-token", store.Subscriptions["other-user"])
+}
+
+func TestSaveStoreLockedWithHintSkipsReloadAndKeepsGeneration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "aster-state.json")
+	store := validTestStore(t, "hint")
+	require.NoError(t, saveStore(path, store))
+
+	hint := persistHint{path: path, generation: store.Generation, recovered: false, ready: true}
+	store.Listeners["vless-in"].Users[0].UploadBytes = 9
+	require.NoError(t, saveStoreLockedWithHint(path, store, &hint))
+	require.True(t, hint.ready)
+	require.Equal(t, path, hint.path)
+	require.Equal(t, store.Generation, hint.generation)
+	require.False(t, hint.recovered)
+
+	loaded, recovered, err := loadStore(path)
+	require.NoError(t, err)
+	require.False(t, recovered)
+	require.EqualValues(t, 9, loaded.Listeners["vless-in"].Users[0].UploadBytes)
+	require.Equal(t, store.Generation, loaded.Generation)
+}
+
+func TestSaveStoreLockedWithHintFallsBackWhenPathDiffers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "aster-state.json")
+	store := validTestStore(t, "hint-path")
+	require.NoError(t, saveStore(path, store))
+
+	hint := persistHint{path: path + ".other", generation: store.Generation, recovered: true, ready: true}
+	store.Listeners["vless-in"].Users[0].DownloadBytes = 4
+	require.NoError(t, saveStoreLockedWithHint(path, store, &hint))
+	require.Equal(t, path, hint.path)
+	require.False(t, hint.recovered)
+
+	loaded, _, err := loadStore(path)
+	require.NoError(t, err)
+	require.EqualValues(t, 4, loaded.Listeners["vless-in"].Users[0].DownloadBytes)
 }
