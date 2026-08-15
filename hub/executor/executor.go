@@ -90,12 +90,6 @@ func ApplyConfig(cfg *config.Config, force bool) error {
 	log.SetLevel(cfg.General.LogLevel)
 
 	tunnel.OnSuspend()
-	running := false
-	defer func() {
-		if !running {
-			tunnel.OnRunning()
-		}
-	}()
 
 	ca.ResetCertificate()
 	for _, c := range cfg.TLS.CustomTrustCert {
@@ -114,14 +108,10 @@ func ApplyConfig(cfg *config.Config, force bool) error {
 	updateNTP(cfg.NTP)
 	updateDNS(cfg.DNS, cfg.General.IPv6)
 	stageManagedListeners(cfg.Aster, cfg.Listeners)
-	if err := updateListeners(cfg.General, cfg.Listeners, force); err != nil {
-		statistic.DefaultManager.SetTrafficObserver(nil)
-		closeErr := asterManager.Default.FailClosed(configuredListenerNames(cfg.Aster))
-		return errors.Join(fmt.Errorf("update listeners: %w", err), closeErr)
-	}
-	if err := updateAster(cfg.Aster); err != nil {
-		return err
-	}
+	// Inbound and Aster management fail closed, but the rest of the configuration
+	// must still be applied: skipping it leaves proxy providers unloaded and the
+	// tun, tunnel and inner listeners bound to the retired configuration.
+	inboundErr := updateInbounds(cfg, force)
 	updateTun(cfg.General) // tun should not care "force"
 	updateIPTables(cfg)
 	updateTunnels(cfg.Tunnels)
@@ -134,11 +124,19 @@ func ApplyConfig(cfg *config.Config, force bool) error {
 	loadProvider(cfg.RuleProviders)
 	runtime.GC()
 	tunnel.OnRunning()
-	running = true
 	updateUpdater(cfg)
 
 	resolver.ResetConnection()
-	return nil
+	return inboundErr
+}
+
+func updateInbounds(cfg *config.Config, force bool) error {
+	if err := updateListeners(cfg.General, cfg.Listeners, force); err != nil {
+		statistic.DefaultManager.SetTrafficObserver(nil)
+		closeErr := asterManager.Default.FailClosed(configuredListenerNames(cfg.Aster))
+		return errors.Join(fmt.Errorf("update listeners: %w", err), closeErr)
+	}
+	return updateAster(cfg.Aster)
 }
 
 func stageManagedListeners(config *config.Aster, listeners map[string]C.InboundListener) {

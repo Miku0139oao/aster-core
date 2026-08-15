@@ -53,11 +53,11 @@ func WithSecret(secret string) Option {
 
 // ApplyConfig dispatch configure to all parts include ExternalController
 func ApplyConfig(cfg *config.Config) error {
-	if err := executor.ApplyConfig(cfg, true); err != nil {
-		return err
-	}
+	// The controller has to come up even when inbound management failed, otherwise
+	// the failure cannot be inspected or repaired through the API.
+	err := executor.ApplyConfig(cfg, true)
 	applyRoute(cfg)
-	return nil
+	return err
 }
 
 func applyRoute(cfg *config.Config) {
