@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/Miku0139oao/aster-core/adapter/inbound"
 	N "github.com/Miku0139oao/aster-core/common/net"
@@ -28,7 +29,7 @@ import (
 const maxPacketLength = 0x3fff
 
 type Listener struct {
-	closed    bool
+	closed    atomic.Bool
 	config    LC.SnellServer
 	listeners []net.Listener
 }
@@ -109,7 +110,7 @@ func New(config LC.SnellServer, lc C.InboundListenConfig, tunnel C.Tunnel, addit
 			for {
 				conn, err := ln.Accept()
 				if err != nil {
-					if l.closed {
+					if l.closed.Load() {
 						return
 					}
 					continue
@@ -122,7 +123,7 @@ func New(config LC.SnellServer, lc C.InboundListenConfig, tunnel C.Tunnel, addit
 }
 
 func (l *Listener) Close() error {
-	l.closed = true
+	l.closed.Store(true)
 	var retErr error
 	for _, ln := range l.listeners {
 		if err := ln.Close(); err != nil {
