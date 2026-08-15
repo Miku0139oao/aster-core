@@ -20,8 +20,6 @@ import (
 	"github.com/metacubex/http"
 )
 
-const asterRequestBodyLimit = 1 << 20
-
 var asterStartedAt = time.Now()
 
 type asterUserInput struct {
@@ -405,9 +403,8 @@ func asterUserConnections(user asterManager.User) int {
 }
 
 func decodeAsterUserInput(writer http.ResponseWriter, request *http.Request) (asterUserInput, bool) {
-	request.Body = http.MaxBytesReader(writer, request.Body, asterRequestBodyLimit)
 	var input asterUserInput
-	if err := render.DecodeJSON(request.Body, &input); err != nil {
+	if err := decodeRequestJSON(writer, request, &input); err != nil {
 		writeAsterError(writer, request, http.StatusBadRequest, err.Error())
 		return asterUserInput{}, false
 	}

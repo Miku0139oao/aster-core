@@ -14,8 +14,19 @@ import (
 	N "github.com/Miku0139oao/aster-core/common/net"
 
 	"github.com/metacubex/chi"
+	"github.com/metacubex/chi/render"
 	"github.com/metacubex/http"
 )
+
+// requestBodyLimit caps request bodies the controller decodes, so that a client
+// cannot exhaust memory by streaming an unbounded JSON document.
+const requestBodyLimit = 1 << 20
+
+// decodeRequestJSON decodes a bounded JSON request body.
+func decodeRequestJSON(w http.ResponseWriter, r *http.Request, value any) error {
+	r.Body = http.MaxBytesReader(w, r.Body, requestBodyLimit)
+	return render.DecodeJSON(r.Body, value)
+}
 
 // When name is composed of a partial escape string, Golang does not unescape it
 func getEscapeParam(r *http.Request, paramName string) string {

@@ -319,7 +319,7 @@ func pointerOrDefaultTuicServer(p *tuicServerSchema, def LC.TuicServer) LC.TuicS
 
 func patchConfigs(w http.ResponseWriter, r *http.Request) {
 	general := &configSchema{}
-	if err := render.DecodeJSON(r.Body, &general); err != nil {
+	if err := decodeRequestJSON(w, r, &general); err != nil {
 		render.Status(r, http.StatusBadRequest)
 		render.JSON(w, r, ErrBadRequest)
 		return
@@ -393,7 +393,7 @@ func updateConfigs(w http.ResponseWriter, r *http.Request) {
 		Path    string `json:"path"`
 		Payload string `json:"payload"`
 	}{}
-	if err := render.DecodeJSON(r.Body, &req); err != nil {
+	if err := decodeRequestJSON(w, r, &req); err != nil {
 		render.Status(r, http.StatusBadRequest)
 		render.JSON(w, r, ErrBadRequest)
 		return
