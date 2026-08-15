@@ -148,16 +148,10 @@ func requestFromLoopbackAddress(remoteAddress string) bool {
 }
 
 func getAsterOverview(writer http.ResponseWriter, request *http.Request) {
-	snapshot, err := asterManager.Default.ManagementSnapshot("")
+	summary, err := asterManager.Default.Summary()
 	if err != nil {
 		writeAsterManagerError(writer, request, err)
 		return
-	}
-	var enabled int
-	for _, record := range snapshot.Users {
-		if record.User.Enabled {
-			enabled++
-		}
 	}
 	upload, download := statistic.DefaultManager.Total()
 	connectionCount := statistic.DefaultManager.ConnectionCount()
@@ -179,11 +173,12 @@ func getAsterOverview(writer http.ResponseWriter, request *http.Request) {
 			"uplink_total": upload, "downlink_total": download, "active_connections": connectionCount,
 		},
 		"users": render.M{
-			"total": len(snapshot.Users), "enabled": enabled, "disabled": len(snapshot.Users) - enabled,
+			"total": summary.TotalUsers, "enabled": summary.EnabledUsers,
+			"disabled": summary.TotalUsers - summary.EnabledUsers,
 		},
 		"capabilities":           render.M{"quota": false, "expiration": false},
 		"authentication_enabled": true,
-		"inbounds":               makeAsterInboundSummaries(snapshot.Listeners),
+		"inbounds":               makeAsterSummaryInbounds(summary.Listeners),
 	})
 }
 
@@ -345,26 +340,44 @@ func asterInboundSummaries() ([]asterInboundSummary, error) {
 	return makeAsterInboundSummaries(listeners), nil
 }
 
+func makeAsterInboundSummary(name, protocol string, userCount, enabledUserCount int, revision, appliedRevision int64) asterInboundSummary {
+	credential := "password"
+	flow := false
+	if protocol == "vless" {
+		credential = "uuid"
+		flow = true
+	}
+	return asterInboundSummary{
+		Tag: name, Type: protocol, Managed: true, Credential: credential,
+		Flow: flow, Traffic: true, UserCount: userCount, EnabledUserCount: enabledUserCount,
+		Revision: revision, AppliedRevision: appliedRevision, Pending: revision != appliedRevision,
+	}
+}
+
 func makeAsterInboundSummaries(listeners []asterManager.ListenerState) []asterInboundSummary {
 	summaries := make([]asterInboundSummary, 0, len(listeners))
 	for _, listener := range listeners {
-		credential := "password"
-		flow := false
-		if listener.Protocol == "vless" {
-			credential = "uuid"
-			flow = true
-		}
-		summary := asterInboundSummary{
-			Tag: listener.Name, Type: listener.Protocol, Managed: true, Credential: credential,
-			Flow: flow, Traffic: true, UserCount: len(listener.Users), Revision: listener.Revision,
-			AppliedRevision: listener.AppliedRevision, Pending: listener.Revision != listener.AppliedRevision,
-		}
+		enabled := 0
 		for _, user := range listener.Users {
 			if user.Enabled {
-				summary.EnabledUserCount++
+				enabled++
 			}
 		}
-		summaries = append(summaries, summary)
+		summaries = append(summaries, makeAsterInboundSummary(
+			listener.Name, listener.Protocol, len(listener.Users), enabled,
+			listener.Revision, listener.AppliedRevision,
+		))
+	}
+	return summaries
+}
+
+func makeAsterSummaryInbounds(listeners []asterManager.ListenerSummary) []asterInboundSummary {
+	summaries := make([]asterInboundSummary, 0, len(listeners))
+	for _, listener := range listeners {
+		summaries = append(summaries, makeAsterInboundSummary(
+			listener.Name, listener.Protocol, listener.UserCount, listener.EnabledUserCount,
+			listener.Revision, listener.AppliedRevision,
+		))
 	}
 	return summaries
 }
