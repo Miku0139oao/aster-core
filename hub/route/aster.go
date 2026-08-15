@@ -161,8 +161,9 @@ func getAsterOverview(writer http.ResponseWriter, request *http.Request) {
 	}
 	upload, download := statistic.DefaultManager.Total()
 	connectionCount := statistic.DefaultManager.ConnectionCount()
-	var memory runtime.MemStats
-	runtime.ReadMemStats(&memory)
+	// runtime.ReadMemStats stops the world, which a polled dashboard endpoint must
+	// not do; the manager already samples the process resident set size.
+	memoryBytes := statistic.DefaultManager.Memory()
 	now := time.Now()
 	render.JSON(writer, request, render.M{
 		"version":        C.Version,
@@ -172,7 +173,7 @@ func getAsterOverview(writer http.ResponseWriter, request *http.Request) {
 		"uptime_seconds": int64(now.Sub(asterStartedAt).Seconds()),
 		"platform": render.M{
 			"os": runtime.GOOS, "arch": runtime.GOARCH, "cpu_cores": runtime.NumCPU(),
-			"memory_bytes": memory.Sys, "goroutines": runtime.NumGoroutine(),
+			"memory_bytes": memoryBytes, "goroutines": runtime.NumGoroutine(),
 		},
 		"traffic": render.M{
 			"uplink_total": upload, "downlink_total": download, "active_connections": connectionCount,
@@ -226,7 +227,7 @@ func getAsterUser(writer http.ResponseWriter, request *http.Request) {
 		writeAsterManagerError(writer, request, err)
 		return
 	}
-	view := makeAsterUserView(user, revision, asterActiveConnections()[statistic.Principal{Inbound: user.Inbound, UserID: user.ID}], true)
+	view := makeAsterUserView(user, revision, asterUserConnections(user), true)
 	view.SubscriptionURL, _ = asterManager.Default.SubscriptionURL(user.ID)
 	render.JSON(writer, request, view)
 }
@@ -266,7 +267,7 @@ func updateAsterUser(writer http.ResponseWriter, request *http.Request) {
 		writeAsterManagerError(writer, request, err)
 		return
 	}
-	view := makeAsterUserView(updated, revision, asterActiveConnections()[statistic.Principal{Inbound: updated.Inbound, UserID: updated.ID}], true)
+	view := makeAsterUserView(updated, revision, asterUserConnections(updated), true)
 	view.SubscriptionURL, _ = asterManager.Default.SubscriptionURL(updated.ID)
 	render.JSON(writer, request, view)
 }
@@ -294,7 +295,7 @@ func resetAsterUserTraffic(writer http.ResponseWriter, request *http.Request) {
 		writeAsterManagerError(writer, request, err)
 		return
 	}
-	view := makeAsterUserView(user, revision, asterActiveConnections()[statistic.Principal{Inbound: user.Inbound, UserID: user.ID}], true)
+	view := makeAsterUserView(user, revision, asterUserConnections(user), true)
 	view.SubscriptionURL, _ = asterManager.Default.SubscriptionURL(user.ID)
 	render.JSON(writer, request, view)
 }
@@ -384,6 +385,10 @@ func makeAsterUserView(user asterManager.User, revision int64, connections int, 
 
 func asterActiveConnections() map[statistic.Principal]int {
 	return statistic.DefaultManager.ActiveConnectionsByPrincipal()
+}
+
+func asterUserConnections(user asterManager.User) int {
+	return statistic.DefaultManager.ActiveConnections(statistic.Principal{Inbound: user.Inbound, UserID: user.ID})
 }
 
 func decodeAsterUserInput(writer http.ResponseWriter, request *http.Request) (asterUserInput, bool) {
