@@ -102,6 +102,128 @@ func TestManagerPushTrafficForPrincipal(t *testing.T) {
 	observer.mu.Unlock()
 }
 
+func TestManagerActiveConnectionsForSinglePrincipal(t *testing.T) {
+	manager := &Manager{}
+	tracked := &trackerManagerTest{
+		id:   "tracked",
+		info: &TrackerInfo{Metadata: &C.Metadata{InName: "vless-in", InUser: "user-id"}},
+	}
+	manager.Join(tracked)
+
+	require.Equal(t, 1, manager.ActiveConnections(Principal{Inbound: "vless-in", UserID: "user-id"}))
+	require.Zero(t, manager.ActiveConnections(Principal{Inbound: "vless-in", UserID: "other"}))
+
+	manager.Leave(tracked)
+	require.Zero(t, manager.ActiveConnections(Principal{Inbound: "vless-in", UserID: "user-id"}))
+}
+
+func TestPrincipalReportsOnlyOnceThresholdIsReached(t *testing.T) {
+	manager := &Manager{}
+	observer := &trafficObserverTest{}
+	manager.SetTrafficObserver(observer)
+	p := newPrincipal(&C.Metadata{InName: "vless-in", InUser: "user-id"})
+	require.NotNil(t, p)
+
+	p.reportUpload(manager, principalReportThreshold-1)
+	observer.mu.Lock()
+	require.Zero(t, observer.upload, "traffic below the threshold must not reach the observer")
+	observer.mu.Unlock()
+
+	p.reportUpload(manager, 1)
+	observer.mu.Lock()
+	require.EqualValues(t, principalReportThreshold, observer.upload)
+	observer.mu.Unlock()
+
+	// Whatever never reached the threshold must still be reported eventually, so
+	// that per-user totals are exact once the connection ends.
+	p.reportUpload(manager, 5)
+	p.reportDownload(manager, 9)
+	p.flush(manager)
+	observer.mu.Lock()
+	require.EqualValues(t, principalReportThreshold+5, observer.upload)
+	require.EqualValues(t, 9, observer.download)
+	observer.mu.Unlock()
+
+	// A drained principal has nothing left to report.
+	p.flush(manager)
+	observer.mu.Lock()
+	require.EqualValues(t, principalReportThreshold+5, observer.upload)
+	observer.mu.Unlock()
+}
+
+func TestPrincipalRequiresAuthenticatedInbound(t *testing.T) {
+	require.Nil(t, newPrincipal(nil))
+	require.Nil(t, newPrincipal(&C.Metadata{InName: "vless-in"}))
+	require.Nil(t, newPrincipal(&C.Metadata{InUser: "user-id"}))
+	require.NotNil(t, newPrincipal(&C.Metadata{InName: "vless-in", InUser: "user-id"}))
+}
+
+// Accumulated traffic must survive concurrent reporting from the read and write
+// directions of the same connection.
+func TestPrincipalAccumulatesConcurrently(t *testing.T) {
+	manager := &Manager{}
+	observer := &trafficObserverTest{}
+	manager.SetTrafficObserver(observer)
+	p := newPrincipal(&C.Metadata{InName: "vless-in", InUser: "user-id"})
+
+	const goroutines, perGoroutine, size = 8, 512, 1024
+	var wg sync.WaitGroup
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < perGoroutine; j++ {
+				p.reportUpload(manager, size)
+			}
+		}()
+	}
+	wg.Wait()
+	p.flush(manager)
+
+	observer.mu.Lock()
+	require.EqualValues(t, goroutines*perGoroutine*size, observer.upload)
+	observer.mu.Unlock()
+}
+
+func BenchmarkPrincipalReportUpload(b *testing.B) {
+	manager := &Manager{}
+	manager.SetTrafficObserver(&trafficObserverTest{})
+	p := newPrincipal(&C.Metadata{InName: "vless-in", InUser: "user-id"})
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		p.reportUpload(manager, 1500)
+	}
+}
+
+// Each connection accumulates into its own principal, so concurrent connections
+// must not contend. Compared against reporting every write straight through to
+// the observer, which is what the shared path costs.
+func BenchmarkPrincipalReportUploadParallel(b *testing.B) {
+	manager := &Manager{}
+	manager.SetTrafficObserver(&trafficObserverTest{})
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		p := newPrincipal(&C.Metadata{InName: "vless-in", InUser: "user-id"})
+		for pb.Next() {
+			p.reportUpload(manager, 1500)
+		}
+	})
+}
+
+func BenchmarkManagerPushUploadedForParallel(b *testing.B) {
+	manager := &Manager{}
+	manager.SetTrafficObserver(&trafficObserverTest{})
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			manager.PushUploadedFor("vless-in", "user-id", 1500)
+		}
+	})
+}
+
 func BenchmarkManagerPushUploaded(b *testing.B) {
 	manager := &Manager{}
 	b.ReportAllocs()
