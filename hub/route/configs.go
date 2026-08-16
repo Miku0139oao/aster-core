@@ -1,11 +1,13 @@
 package route
 
 import (
+	"fmt"
 	"net/netip"
 	"path/filepath"
 
 	"github.com/Miku0139oao/aster-core/adapter/inbound"
 	"github.com/Miku0139oao/aster-core/component/dialer"
+	"github.com/Miku0139oao/aster-core/component/kerneldirect"
 	"github.com/Miku0139oao/aster-core/component/process"
 	"github.com/Miku0139oao/aster-core/component/resolver"
 	"github.com/Miku0139oao/aster-core/component/updater"
@@ -60,7 +62,7 @@ type configSchema struct {
 }
 
 type tunSchema struct {
-	Enable              bool        `yaml:"enable" json:"enable"`
+	Enable              *bool       `yaml:"enable" json:"enable,omitempty"`
 	Device              *string     `yaml:"device" json:"device"`
 	Stack               *C.TUNStack `yaml:"stack" json:"stack"`
 	DNSHijack           *[]string   `yaml:"dns-hijack" json:"dns-hijack"`
@@ -76,6 +78,7 @@ type tunSchema struct {
 	IPRoute2RuleIndex                     *int            `yaml:"iproute2-rule-index" json:"iproute2-rule-index,omitempty"`
 	AutoRedirect                          *bool           `yaml:"auto-redirect" json:"auto-redirect,omitempty"`
 	KernelDirect                          *bool           `yaml:"kernel-direct" json:"kernel-direct,omitempty"`
+	KernelDirectMaxEntries                *uint32         `yaml:"kernel-direct-max-entries" json:"kernel-direct-max-entries,omitempty"`
 	KernelDirectEBPF                      *bool           `yaml:"kernel-direct-ebpf" json:"kernel-direct-ebpf,omitempty"`
 	KernelDirectEBPFRequired              *bool           `yaml:"kernel-direct-ebpf-required" json:"kernel-direct-ebpf-required,omitempty"`
 	KernelDirectEBPFInterfaces            *[]string       `yaml:"kernel-direct-ebpf-interfaces" json:"kernel-direct-ebpf-interfaces,omitempty"`
@@ -123,7 +126,7 @@ type tunSchema struct {
 }
 
 type tuicServerSchema struct {
-	Enable                bool               `yaml:"enable" json:"enable"`
+	Enable                *bool              `yaml:"enable" json:"enable,omitempty"`
 	Listen                *string            `yaml:"listen" json:"listen"`
 	Token                 *[]string          `yaml:"token" json:"token"`
 	Users                 *map[string]string `yaml:"users" json:"users,omitempty"`
@@ -152,7 +155,9 @@ func pointerOrDefault[T any](p *T, def T) T {
 
 func pointerOrDefaultTun(p *tunSchema, def LC.Tun) LC.Tun {
 	if p != nil {
-		def.Enable = p.Enable
+		if p.Enable != nil {
+			def.Enable = *p.Enable
+		}
 		if p.Device != nil {
 			def.Device = *p.Device
 		}
@@ -194,6 +199,11 @@ func pointerOrDefaultTun(p *tunSchema, def LC.Tun) LC.Tun {
 		}
 		if p.KernelDirect != nil {
 			def.KernelDirect = *p.KernelDirect
+		}
+		if p.KernelDirectMaxEntries != nil {
+			if normalized, err := kerneldirect.NormalizeMaxEntries(*p.KernelDirectMaxEntries); err == nil {
+				def.KernelDirectMaxEntries = normalized
+			}
 		}
 		if p.KernelDirectEBPF != nil {
 			def.KernelDirectEBPF = *p.KernelDirectEBPF
@@ -324,7 +334,9 @@ func pointerOrDefaultTun(p *tunSchema, def LC.Tun) LC.Tun {
 
 func pointerOrDefaultTuicServer(p *tuicServerSchema, def LC.TuicServer) LC.TuicServer {
 	if p != nil {
-		def.Enable = p.Enable
+		if p.Enable != nil {
+			def.Enable = *p.Enable
+		}
 		if p.Listen != nil {
 			def.Listen = *p.Listen
 		}
@@ -370,6 +382,12 @@ func patchConfigs(w http.ResponseWriter, r *http.Request) {
 	if err := render.DecodeJSON(r.Body, &general); err != nil {
 		render.Status(r, http.StatusBadRequest)
 		render.JSON(w, r, ErrBadRequest)
+		return
+	}
+
+	if general.Tun != nil && general.Tun.KernelDirectMaxEntries != nil && *general.Tun.KernelDirectMaxEntries > kerneldirect.MaximumMaxEntries {
+		render.Status(r, http.StatusBadRequest)
+		render.JSON(w, r, newError(fmt.Sprintf("tun kernel-direct-max-entries exceeds maximum %d", kerneldirect.MaximumMaxEntries)))
 		return
 	}
 

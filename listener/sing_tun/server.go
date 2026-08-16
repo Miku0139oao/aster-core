@@ -167,6 +167,11 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 		if disabled, parseErr := strconv.ParseBool(os.Getenv("DISABLE_NFTABLES")); parseErr == nil && disabled {
 			return nil, E.New("kernel-direct requires nftables")
 		}
+		maxEntries, normalizeErr := kerneldirect.NormalizeMaxEntries(options.KernelDirectMaxEntries)
+		if normalizeErr != nil {
+			return nil, normalizeErr
+		}
+		options.KernelDirectMaxEntries = maxEntries
 	}
 	if options.GSOMaxSize == 0 {
 		options.GSOMaxSize = 65536
@@ -613,7 +618,7 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 			}
 			l.kernelDirectCloser = kerneldirect.Register(func(host string, addr netip.Addr) bool {
 				return directClassifier.ClassifyKernelDirect(kernelDirectMetadata, host, addr)
-			}, l.updateKernelDirectSet)
+			}, l.updateKernelDirectSet, kerneldirect.ControllerOptions{MaxEntries: options.KernelDirectMaxEntries})
 		}
 	}
 

@@ -170,6 +170,7 @@ tun:
   auto-route: true
   auto-redirect: true
   kernel-direct: true
+  kernel-direct-max-entries: 4096
   # Experimental; keep disabled until a same-server A/B test proves a benefit.
   kernel-direct-ebpf: false
   kernel-direct-ebpf-interfaces:
@@ -204,6 +205,7 @@ Map 更新先發布奇數 generation，使 classifier 暫時 fail-open，再同�
 - `kernel-direct-ebpf-required: true`：TC、BPF map 或 nft mark rule 任一建立失敗時拒絕啟動 TUN；預設為 `false`，失敗會記錄警告並自動降級為 nftables。
 - `kernel-direct-ebpf-interfaces`：必填，OpenWrt 通常填 `br-lan`；多個 LAN/guest bridge 應全部列出。狀態 API 的 `requested-interfaces` 是設定值，`interfaces` 是實際掛載的 bridge ports。
 - `kernel-direct-ebpf-mark`：預設 `0x40000000`。Aster 使用 bit mask 比對，不覆寫其他 mark bits。
+- `kernel-direct-max-entries`：learned address set 容量上限，預設 4096，最大 65536；`0` 代表使用預設值，YAML 解析與 `PATCH /configs` 都會把 `0` 寫成 4096，超過上限則拒絕（PATCH 回 400）。
 - `kernel-direct-ebpf-max-entries`：IPv4/IPv6 LPM prefix 總安全上限，預設 65536。
 - `kernel-direct-ebpf-proxy`：啟用雙向 DIRECT/PROXY steering 與安全的 PROXY `/0` fallback；預設關閉。
 - `kernel-direct-ebpf-proxy-redirect`：把 PROXY 決策由 TC 直接送入目前的 Aster TUN，移除 PROXY nftables shim；需要 `kernel-direct-ebpf-proxy`，預設關閉。
@@ -212,6 +214,14 @@ Map 更新先發布奇數 generation，使 classifier 暫時 fail-open，再同�
 - `kernel-direct-ebpf-direct-prefixes`／`kernel-direct-ebpf-proxy-prefixes`：可選靜態 CIDR；longest-prefix 優先，相同 prefix 時 PROXY 優先。
 
 狀態可從 `GET /api/aster/kernel-direct/status` 取得；未啟用 TC 時 backend 為推薦的 `nftables`，相容 mark 模式為 `ebpf-tc-lpm-lru`，TC 直接導入 TUN 時為 `ebpf-tc-lpm-lru-redirect`。`packets`／`bytes` 等同 DIRECT 計數，PROXY 使用獨立的 `proxy-packets`／`proxy-bytes`；狀態也會回傳 redirect interface、direct/proxy/bypass prefix、flow hits、LRU 容量與最後同步錯誤。
+
+同一個回應還包含 `learned_sets`、`process`、`aster_traffic` 與相容欄位 `proxy_traffic`：
+
+- `learned_sets`：各 kernel-direct consumer 的 snapshot，含 `max_entries`、`max_records`（domain budget，通常為 `max_entries × 4`）、`learned_addresses`、`direct_addresses`、`proxy_addresses`、`learned_domains`、`evictions`。
+- `process`：controller 行程 `pid` 與 `started_at`（Unix 秒）。
+- `aster_traffic`：目前所有由 Aster 處理的流量估計，包含 TUN DIRECT／default-tun fallback，不含已被 kernel-direct 繞過的 DIRECT。
+- `proxy_traffic`：已棄用別名，內容與 `aster_traffic` 完全相同，不是「僅代理流量」。`GET /api/aster/capabilities` 的 `kernel_direct.deprecated_fields` 會列出此欄位。
+- `learned_sets[].evictions`：行程啟動以來 address LRU 因容量上限淘汰的次數；TTL 到期、規則 reload flush 或 set collapse 不計入。
 
 實機吞吐量必須以同一 server A/B。曾有一台 OpenWrt 路由器在 TC eBPF 開啟時約 692 Mbps，卸載後約 1,647 Mbps，持久關閉重啟後約 1,644 Mbps；原因是逐封包 TC 工作與 flow offload 互動，而不是「eBPF 天生較慢」。詳見 [OpenWrt 與 Nikki](/deployment/openwrt)及 [效能優化與基準](/reference/performance)。
 

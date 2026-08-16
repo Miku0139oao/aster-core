@@ -119,7 +119,7 @@ curl -H "Authorization: Bearer $SECRET" \
   http://192.168.1.1:9090/api/aster/kernel-direct/status
 ```
 
-status 顯示 `backend: nftables` 是推薦且正常的工作狀態，不代表 eBPF 載入失敗。此模式沒有 TC filter，較容易保留 OpenWrt software/hardware flow offload 的收益。
+status 顯示 `backend: nftables` 是推薦且正常的工作狀態，不代表 eBPF 載入失敗。此模式沒有 TC filter，較容易保留 OpenWrt software/hardware flow offload 的收益。同一個回應還包含 `learned_sets`（含 `max_entries` 與 `evictions`）、`process`、`aster_traffic`。`proxy_traffic` 是已棄用別名，數值等於 `aster_traffic`（所有經 Aster 處理的流量，不是僅代理；被 kernel 繞過的 DIRECT 不計入）。`evictions` 只計 address LRU 因容量上限淘汰的次數，不含 TTL、flush 或 collapse。
 
 所有使用 Kernel DIRECT 的 client DNS 都必須經過 Aster；未被觀察的 DoH/DoT 或舊 DNS cache 無法提供網域判定，尤其共享 CDN IP 不能保證符合 domain rule。建議使用 redir-host/mapping DNS，或把希望 bypass 的網域放進 `fake-ip-filter`。規則、proxy、mode 或 provider 更新時 learned set 會先清空，再由新 DNS 回應保守重建。
 
@@ -195,9 +195,12 @@ tun:
   auto-route: true
   auto-redirect: true
   kernel-direct: true
+  kernel-direct-max-entries: 4096
   dns-hijack:
     - any:53
 ```
+
+`kernel-direct-max-entries` 是 learned address set 容量上限，預設 4096，最大 65536；`0` 代表使用預設值。
 
 不要設定 `DISABLE_NFTABLES=1`。建議啟用前清除 client DNS cache，先停用 flow offload 驗證分流、DNS、TCP、UDP、IPv4/IPv6 與 reload，再重新啟用 software/hardware flow offload 並確認 DIRECT throughput。`nft list table inet mihomo` 可檢查 `inet4_route_exclude_address_set`／`inet6_route_exclude_address_set`。繞過的 DIRECT 流量不會出現在 Aster connection／traffic 統計中。
 

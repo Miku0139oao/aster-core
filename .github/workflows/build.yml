@@ -25,6 +25,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         jobs:
           - { goos: linux, goarch: '386', go386: sse2, output: '386', debian: i386, rpm: i386}

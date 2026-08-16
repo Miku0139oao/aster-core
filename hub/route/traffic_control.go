@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	trafficControl "github.com/Miku0139oao/aster-core/component/trafficcontrol"
 	C "github.com/Miku0139oao/aster-core/constant"
 	"github.com/Miku0139oao/aster-core/tunnel"
+	"github.com/Miku0139oao/aster-core/tunnel/statistic"
 
 	"github.com/metacubex/chi"
 	"github.com/metacubex/chi/render"
@@ -18,6 +20,8 @@ import (
 )
 
 const trafficControlBodyLimit = 1 << 20
+
+var kernelDirectMetricsStartedAt = time.Now()
 
 func trafficControlRouter() http.Handler {
 	router := chi.NewRouter()
@@ -40,7 +44,11 @@ func getTrafficControlCapabilities(writer http.ResponseWriter, request *http.Req
 			"version": 1, "enabled": trafficControl.Default.Enabled(), "dimensions": []string{"global", "device", "rule", "target"},
 			"reports": []string{"hour", "day", "month"}, "compression": "zstd", "persistence": true,
 		},
-		"kernel_direct": render.M{"version": 3, "backends": []string{"nftables", "ebpf-tc", "ebpf-tc-lpm-lru", "ebpf-tc-lpm-lru-redirect"}, "features": []string{"ipv4-lpm", "ipv6-lpm", "5-tuple-lru", "proxy-steering", "atomic-generation", "tc-tun-redirect", "local-address-bypass"}},
+		"kernel_direct": render.M{
+			"version": 4, "backends": []string{"nftables", "ebpf-tc", "ebpf-tc-lpm-lru", "ebpf-tc-lpm-lru-redirect"},
+			"features":          []string{"ipv4-lpm", "ipv6-lpm", "5-tuple-lru", "proxy-steering", "atomic-generation", "tc-tun-redirect", "local-address-bypass", "control-plane-traffic-estimate", "bounded-learned-set"},
+			"deprecated_fields": []string{"proxy_traffic"},
+		},
 	})
 }
 
@@ -50,7 +58,26 @@ func getKernelDirectStatus(writer http.ResponseWriter, request *http.Request) {
 	if len(paths) > 0 {
 		backend = paths[0].Backend
 	}
-	render.JSON(writer, request, render.M{"backend": backend, "fast_paths": paths})
+	uploadRate, downloadRate := statistic.DefaultManager.Now()
+	uploadTotal, downloadTotal := statistic.DefaultManager.Total()
+	asterTraffic := render.M{
+		"upload_bytes": uploadTotal, "download_bytes": downloadTotal,
+		"upload_rate_bytes_per_second": uploadRate, "download_rate_bytes_per_second": downloadRate,
+		"active_connections": statistic.DefaultManager.ConnectionCount(),
+	}
+	render.JSON(writer, request, render.M{
+		"backend":      backend,
+		"fast_paths":   paths,
+		"learned_sets": kerneldirect.Statuses(),
+		"process": render.M{
+			"pid": os.Getpid(), "started_at": kernelDirectMetricsStartedAt.Unix(),
+		},
+		"aster_traffic": asterTraffic,
+		// Deprecated alias of aster_traffic: all Aster-handled traffic,
+		// including TUN DIRECT/default-tun fallback. Not proxy-only.
+		// Kernel-bypassed DIRECT is excluded.
+		"proxy_traffic": asterTraffic,
+	})
 }
 
 func getTrafficControlPolicies(writer http.ResponseWriter, request *http.Request) {

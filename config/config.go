@@ -23,6 +23,7 @@ import (
 	"github.com/Miku0139oao/aster-core/component/cidr"
 	"github.com/Miku0139oao/aster-core/component/fakeip"
 	"github.com/Miku0139oao/aster-core/component/geodata"
+	"github.com/Miku0139oao/aster-core/component/kerneldirect"
 	"github.com/Miku0139oao/aster-core/component/process"
 	"github.com/Miku0139oao/aster-core/component/resolver"
 	"github.com/Miku0139oao/aster-core/component/sniffer"
@@ -297,6 +298,7 @@ type RawTun struct {
 	IPRoute2RuleIndex                     int            `yaml:"iproute2-rule-index" json:"iproute2-rule-index,omitempty"`
 	AutoRedirect                          bool           `yaml:"auto-redirect" json:"auto-redirect,omitempty"`
 	KernelDirect                          bool           `yaml:"kernel-direct" json:"kernel-direct,omitempty"`
+	KernelDirectMaxEntries                uint32         `yaml:"kernel-direct-max-entries" json:"kernel-direct-max-entries,omitempty"`
 	KernelDirectEBPF                      bool           `yaml:"kernel-direct-ebpf" json:"kernel-direct-ebpf,omitempty"`
 	KernelDirectEBPFRequired              bool           `yaml:"kernel-direct-ebpf-required" json:"kernel-direct-ebpf-required,omitempty"`
 	KernelDirectEBPFInterfaces            []string       `yaml:"kernel-direct-ebpf-interfaces" json:"kernel-direct-ebpf-interfaces,omitempty"`
@@ -1799,6 +1801,10 @@ func parseTun(rawTun RawTun, dns *DNS, general *General) error {
 	if len(rawTun.KernelDirectEBPFProxyPrefixes) > 0 && !rawTun.KernelDirectEBPFProxy {
 		return errors.New("tun kernel-direct-ebpf-proxy-prefixes requires kernel-direct-ebpf-proxy")
 	}
+	maxEntries, err := kerneldirect.NormalizeMaxEntries(rawTun.KernelDirectMaxEntries)
+	if err != nil {
+		return err
+	}
 	tunAddressPrefix := dns.FakeIPRange
 	if !tunAddressPrefix.IsValid() {
 		tunAddressPrefix = netip.MustParsePrefix("198.18.0.1/16")
@@ -1822,6 +1828,7 @@ func parseTun(rawTun RawTun, dns *DNS, general *General) error {
 		IPRoute2RuleIndex:                     rawTun.IPRoute2RuleIndex,
 		AutoRedirect:                          rawTun.AutoRedirect,
 		KernelDirect:                          rawTun.KernelDirect,
+		KernelDirectMaxEntries:                maxEntries,
 		KernelDirectEBPF:                      rawTun.KernelDirectEBPF,
 		KernelDirectEBPFRequired:              rawTun.KernelDirectEBPFRequired,
 		KernelDirectEBPFInterfaces:            rawTun.KernelDirectEBPFInterfaces,

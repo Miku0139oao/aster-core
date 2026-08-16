@@ -14,12 +14,53 @@ func TestParseTunKernelDirectRequirements(t *testing.T) {
 	}
 
 	general := &General{}
-	err := parseTun(RawTun{KernelDirect: true, AutoRoute: true, AutoRedirect: true}, &DNS{}, general)
+	err := parseTun(RawTun{KernelDirect: true, KernelDirectMaxEntries: 2048, AutoRoute: true, AutoRedirect: true}, &DNS{}, general)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !general.Tun.KernelDirect {
 		t.Fatal("kernel-direct was not propagated to listener config")
+	}
+	if general.Tun.KernelDirectMaxEntries != 2048 {
+		t.Fatalf("kernel-direct-max-entries was not propagated: %d", general.Tun.KernelDirectMaxEntries)
+	}
+}
+
+func TestParseTunKernelDirectMaxEntriesContract(t *testing.T) {
+	tests := []struct {
+		name       string
+		configured uint32
+		want       uint32
+		wantError  bool
+	}{
+		{name: "zero defaults and persists", configured: 0, want: 4096},
+		{name: "explicit value persists", configured: 2048, want: 2048},
+		{name: "maximum persists", configured: 65536, want: 65536},
+		{name: "over maximum errors", configured: 65537, wantError: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			general := &General{}
+			err := parseTun(RawTun{
+				KernelDirect:           true,
+				KernelDirectMaxEntries: test.configured,
+				AutoRoute:              true,
+				AutoRedirect:           true,
+			}, &DNS{}, general)
+			if test.wantError {
+				if err == nil {
+					t.Fatalf("parseTun accepted kernel-direct-max-entries %d; config/config.go must reject values over 65536", test.configured)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseTun rejected kernel-direct-max-entries %d: %v", test.configured, err)
+			}
+			if got := general.Tun.KernelDirectMaxEntries; got != test.want {
+				t.Fatalf("parseTun persisted kernel-direct-max-entries %d, want %d; update config/config.go default propagation", got, test.want)
+			}
+		})
 	}
 }
 

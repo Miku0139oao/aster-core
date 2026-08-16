@@ -74,6 +74,7 @@ traffic-control:
 所有端點使用標準 Controller Bearer secret：
 
 - `GET /api/aster/capabilities`
+- `GET /api/aster/kernel-direct/status`
 - `GET /api/aster/traffic-control/status`
 - `GET/PUT /api/aster/traffic-control/policies`
 - `GET /api/aster/traffic-control/rules`
@@ -81,5 +82,16 @@ traffic-control:
 - `GET /api/aster/traffic-control/reports`
 - `GET /api/aster/traffic-control/reports/summary`
 - `GET /api/aster/traffic-control/reports/export.csv`
+
+`GET /api/aster/capabilities` 的 `kernel_direct` 物件為 version `4`（v4 未發布過，此次直接採用，沒有跳到 5）。`deprecated_fields` 含 `proxy_traffic`。
+
+`GET /api/aster/kernel-direct/status` 除既有的 `backend`／`fast_paths` 外還回傳：
+
+- `learned_sets`：各 kernel-direct consumer 的 snapshot，含 `max_entries`、`max_records`（domain budget，通常為 `max_entries × 4`）、`learned_addresses`、`direct_addresses`、`proxy_addresses`、`learned_domains`、`evictions`。
+- `process`：controller 行程 `pid` 與 `started_at`（Unix 秒）。
+- `aster_traffic`：目前所有由 Aster 處理的流量估計，包含 TUN DIRECT／default-tun fallback，不含已被 kernel-direct 繞過的 DIRECT。
+- `proxy_traffic`：已棄用別名，內容與 `aster_traffic` 完全相同，不是「僅代理流量」。
+
+`learned_sets[].evictions` 是行程啟動以來 address LRU 因容量上限淘汰的次數；TTL 到期、規則 reload flush 或 set collapse 不計入。
 
 報表查詢接受 `key`、`granularity=hour|day|month`、`from` 與 `to` Unix timestamp。交叉維度 key 使用 `|` 連接，例如 `device:phone|rule:video-rule`。

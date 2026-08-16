@@ -26,6 +26,7 @@ type Tun struct {
 	IPRoute2RuleIndex                     int            `yaml:"iproute2-rule-index" json:"iproute2-rule-index,omitempty"`
 	AutoRedirect                          bool           `yaml:"auto-redirect" json:"auto-redirect,omitempty"`
 	KernelDirect                          bool           `yaml:"kernel-direct" json:"kernel-direct,omitempty"`
+	KernelDirectMaxEntries                uint32         `yaml:"kernel-direct-max-entries" json:"kernel-direct-max-entries,omitempty"`
 	KernelDirectEBPF                      bool           `yaml:"kernel-direct-ebpf" json:"kernel-direct-ebpf,omitempty"`
 	KernelDirectEBPFRequired              bool           `yaml:"kernel-direct-ebpf-required" json:"kernel-direct-ebpf-required,omitempty"`
 	KernelDirectEBPFInterfaces            []string       `yaml:"kernel-direct-ebpf-interfaces" json:"kernel-direct-ebpf-interfaces,omitempty"`
@@ -152,6 +153,9 @@ func (t *Tun) Equal(other Tun) bool {
 		return false
 	}
 	if t.KernelDirect != other.KernelDirect {
+		return false
+	}
+	if t.KernelDirectMaxEntries != other.KernelDirectMaxEntries {
 		return false
 	}
 	if t.KernelDirectEBPF != other.KernelDirectEBPF {

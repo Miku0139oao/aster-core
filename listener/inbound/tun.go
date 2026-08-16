@@ -4,6 +4,7 @@ import (
 	"encoding"
 	"net/netip"
 
+	"github.com/Miku0139oao/aster-core/component/kerneldirect"
 	C "github.com/Miku0139oao/aster-core/constant"
 	LC "github.com/Miku0139oao/aster-core/listener/config"
 	"github.com/Miku0139oao/aster-core/listener/sing_tun"
@@ -27,6 +28,7 @@ type TunOption struct {
 	IPRoute2RuleIndex                     int            `inbound:"iproute2-rule-index,omitempty"`
 	AutoRedirect                          bool           `inbound:"auto-redirect,omitempty"`
 	KernelDirect                          bool           `inbound:"kernel-direct,omitempty"`
+	KernelDirectMaxEntries                uint32         `inbound:"kernel-direct-max-entries,omitempty"`
 	KernelDirectEBPF                      bool           `inbound:"kernel-direct-ebpf,omitempty"`
 	KernelDirectEBPFRequired              bool           `inbound:"kernel-direct-ebpf-required,omitempty"`
 	KernelDirectEBPFInterfaces            []string       `inbound:"kernel-direct-ebpf-interfaces,omitempty"`
@@ -96,6 +98,11 @@ type Tun struct {
 }
 
 func NewTun(options *TunOption) (*Tun, error) {
+	maxEntries, err := kerneldirect.NormalizeMaxEntries(options.KernelDirectMaxEntries)
+	if err != nil {
+		return nil, err
+	}
+	options.KernelDirectMaxEntries = maxEntries
 	base, err := NewBase(&options.BaseOption)
 	if err != nil {
 		return nil, err
@@ -119,6 +126,7 @@ func NewTun(options *TunOption) (*Tun, error) {
 			IPRoute2RuleIndex:                     options.IPRoute2RuleIndex,
 			AutoRedirect:                          options.AutoRedirect,
 			KernelDirect:                          options.KernelDirect,
+			KernelDirectMaxEntries:                maxEntries,
 			KernelDirectEBPF:                      options.KernelDirectEBPF,
 			KernelDirectEBPFRequired:              options.KernelDirectEBPFRequired,
 			KernelDirectEBPFInterfaces:            options.KernelDirectEBPFInterfaces,
