@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Miku0139oao/aster-core/transport/anytls/pipe"
@@ -22,7 +23,9 @@ type Stream struct {
 
 	dieOnce sync.Once
 	dieHook func()
-	dieErr  error
+	// dieErr is set once the stream dies, and is read by Read and Write from
+	// whichever goroutine is using that direction.
+	dieErr atomic.Pointer[error]
 
 	reportOnce sync.Once
 }
@@ -37,11 +40,24 @@ func newStream(id uint32, sess *Session) *Stream {
 	return s
 }
 
+func (s *Stream) dieError() error {
+	if err := s.dieErr.Load(); err != nil {
+		return *err
+	}
+	return nil
+}
+
+func (s *Stream) setDieError(err error) {
+	s.dieErr.Store(&err)
+}
+
 // Read implements net.Conn
 func (s *Stream) Read(b []byte) (n int, err error) {
 	n, err = s.pipeR.Read(b)
-	if n == 0 && s.dieErr != nil {
-		err = s.dieErr
+	if n == 0 {
+		if dieErr := s.dieError(); dieErr != nil {
+			err = dieErr
+		}
 	}
 	return
 }
@@ -53,8 +69,8 @@ func (s *Stream) Write(b []byte) (n int, err error) {
 		return 0, os.ErrDeadlineExceeded
 	default:
 	}
-	if s.dieErr != nil {
-		return 0, s.dieErr
+	if dieErr := s.dieError(); dieErr != nil {
+		return 0, dieErr
 	}
 	n, err = s.sess.writeDataFrame(s.id, b)
 	return
@@ -69,7 +85,7 @@ func (s *Stream) Close() error {
 func (s *Stream) closeLocally() {
 	var once bool
 	s.dieOnce.Do(func() {
-		s.dieErr = net.ErrClosed
+		s.setDieError(net.ErrClosed)
 		s.pipeR.Close()
 		once = true
 	})
@@ -84,7 +100,7 @@ func (s *Stream) closeLocally() {
 func (s *Stream) closeWithError(err error) error {
 	var once bool
 	s.dieOnce.Do(func() {
-		s.dieErr = err
+		s.setDieError(err)
 		s.pipeR.Close()
 		once = true
 	})
@@ -96,7 +112,7 @@ func (s *Stream) closeWithError(err error) error {
 		}
 		return err
 	} else {
-		return s.dieErr
+		return s.dieError()
 	}
 }
 
