@@ -24,6 +24,7 @@ formatters:
     - gofumpt
   settings:
     gci:
+      custom-order: true
       sections:
         - standard
         - prefix(github.com/Miku0139oao/aster-core)
