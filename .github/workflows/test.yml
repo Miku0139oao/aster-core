@@ -126,4 +126,6 @@ jobs:
           ./listener/sing_vless
           ./listener/sing_vmess
           ./listener/trojan
+          ./transport/snell
+          ./transport/vless
           ./tunnel/statistic
