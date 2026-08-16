@@ -78,6 +78,12 @@ func (v *AnyTLS) Config() C.InboundConfig {
 
 // Address implements constant.InboundListener
 func (v *AnyTLS) Address() string {
+	v.managedMu.RLock()
+	defer v.managedMu.RUnlock()
+	return v.addressLocked()
+}
+
+func (v *AnyTLS) addressLocked() string {
 	var addrList []string
 	if v.l != nil {
 		for _, addr := range v.l.AddrList() {
@@ -109,12 +115,16 @@ func (v *AnyTLS) Listen(tunnel C.Tunnel) error {
 	v.l = listener
 	v.managedUsers = managedUsers
 	v.managedUsersStaged = false
-	log.Infoln("AnyTLS[%s] proxy listening at: %s", v.Name(), v.Address())
+	log.Infoln("AnyTLS[%s] proxy listening at: %s", v.Name(), v.addressLocked())
 	return nil
 }
 
 // Close implements constant.InboundListener
 func (v *AnyTLS) Close() error {
+	// Guarded by the same mutex as Listen, so that closing cannot be lost to a
+	// listener that is still being started.
+	v.managedMu.Lock()
+	defer v.managedMu.Unlock()
 	l := v.l
 	v.l = nil
 	if l == nil {
@@ -124,6 +134,12 @@ func (v *AnyTLS) Close() error {
 }
 
 func (v *AnyTLS) UpdateUsers(users map[string]string) error {
+	v.managedMu.Lock()
+	defer v.managedMu.Unlock()
+	return v.updateUsersLocked(users)
+}
+
+func (v *AnyTLS) updateUsersLocked(users map[string]string) error {
 	if v.l == nil {
 		return errors.New("AnyTLS listener is not running")
 	}
@@ -158,7 +174,7 @@ func (v *AnyTLS) UpdateManagedUsers(users []C.ManagedUser) error {
 	defer v.managedMu.Unlock()
 
 	if !sameAnyTLSManagedCredentials(v.managedUsers, users) {
-		if err := v.UpdateUsers(updated); err != nil {
+		if err := v.updateUsersLocked(updated); err != nil {
 			return err
 		}
 	}

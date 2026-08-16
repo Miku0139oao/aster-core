@@ -39,6 +39,55 @@ type ManagementSnapshot struct {
 	Users     []UserRecord
 }
 
+// ListenerSummary describes a managed listener without copying its users.
+type ListenerSummary struct {
+	Name             string
+	Protocol         string
+	UserCount        int
+	EnabledUserCount int
+	Revision         int64
+	AppliedRevision  int64
+}
+
+// Summary aggregates the managed listeners for the overview endpoint. It exists
+// so that polling the overview does not clone every user only to count them.
+type Summary struct {
+	Listeners    []ListenerSummary
+	TotalUsers   int
+	EnabledUsers int
+}
+
+func (m *Manager) Summary() (Summary, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.config == nil {
+		return Summary{}, ErrDisabled
+	}
+	summary := Summary{Listeners: make([]ListenerSummary, 0, len(m.config.ManagedListeners))}
+	for _, listenerName := range m.config.ManagedListeners {
+		state := m.store.Listeners[listenerName]
+		if state == nil {
+			continue
+		}
+		listener := ListenerSummary{
+			Name: state.Name, Protocol: state.Protocol, UserCount: len(state.Users),
+			Revision: state.Revision, AppliedRevision: state.AppliedRevision,
+		}
+		for _, user := range state.Users {
+			if user.Enabled {
+				listener.EnabledUserCount++
+			}
+		}
+		summary.TotalUsers += listener.UserCount
+		summary.EnabledUsers += listener.EnabledUserCount
+		summary.Listeners = append(summary.Listeners, listener)
+	}
+	sort.Slice(summary.Listeners, func(i, j int) bool {
+		return summary.Listeners[i].Name < summary.Listeners[j].Name
+	})
+	return summary, nil
+}
+
 type userLocation struct {
 	inbound string
 	index   int
@@ -115,11 +164,15 @@ func (m *Manager) ListUsers(inbound string) ([]User, error) {
 	}
 	m.syncTrafficLocked()
 	users := make([]User, 0)
-	for listenerName := range m.runtime.Load().managed {
+	for _, listenerName := range m.config.ManagedListeners {
 		if inbound != "" && listenerName != inbound {
 			continue
 		}
-		for _, user := range m.store.Listeners[listenerName].Users {
+		state := m.store.Listeners[listenerName]
+		if state == nil {
+			continue
+		}
+		for _, user := range state.Users {
 			users = append(users, *user)
 		}
 	}
@@ -143,11 +196,14 @@ func (m *Manager) ListUserRecords(inbound string) ([]UserRecord, error) {
 	}
 	m.syncTrafficLocked()
 	records := make([]UserRecord, 0)
-	for listenerName := range m.runtime.Load().managed {
+	for _, listenerName := range m.config.ManagedListeners {
 		if inbound != "" && listenerName != inbound {
 			continue
 		}
 		state := m.store.Listeners[listenerName]
+		if state == nil {
+			continue
+		}
 		for _, user := range state.Users {
 			records = append(records, UserRecord{User: *user, Revision: state.Revision, AppliedRevision: state.AppliedRevision})
 		}

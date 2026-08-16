@@ -76,7 +76,7 @@ func getRules(w http.ResponseWriter, r *http.Request) {
 func disableRules(w http.ResponseWriter, r *http.Request) {
 	// key: rule index, value: disabled
 	var payload map[int]bool
-	if err := render.DecodeJSON(r.Body, &payload); err != nil {
+	if err := decodeRequestJSON(w, r, &payload); err != nil {
 		render.Status(r, http.StatusBadRequest)
 		render.JSON(w, r, ErrBadRequest)
 		return

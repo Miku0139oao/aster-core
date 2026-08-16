@@ -149,6 +149,12 @@ func (v *Vless) Config() C.InboundConfig {
 
 // Address implements constant.InboundListener
 func (v *Vless) Address() string {
+	v.managedMu.RLock()
+	defer v.managedMu.RUnlock()
+	return v.addressLocked()
+}
+
+func (v *Vless) addressLocked() string {
 	var addrList []string
 	if v.l != nil {
 		for _, addr := range v.l.AddrList() {
@@ -176,12 +182,16 @@ func (v *Vless) Listen(tunnel C.Tunnel) error {
 	v.l = listener
 	v.managedUsers = users
 	v.managedUsersStaged = false
-	log.Infoln("Vless[%s] proxy listening at: %s", v.Name(), v.Address())
+	log.Infoln("Vless[%s] proxy listening at: %s", v.Name(), v.addressLocked())
 	return nil
 }
 
 // Close implements constant.InboundListener
 func (v *Vless) Close() error {
+	// Guarded by the same mutex as Listen, so that closing cannot be lost to a
+	// listener that is still being started.
+	v.managedMu.Lock()
+	defer v.managedMu.Unlock()
 	l := v.l
 	v.l = nil
 	if l == nil {
@@ -191,6 +201,12 @@ func (v *Vless) Close() error {
 }
 
 func (v *Vless) UpdateUsers(users []LC.VlessUser) error {
+	v.managedMu.Lock()
+	defer v.managedMu.Unlock()
+	return v.updateUsersLocked(users)
+}
+
+func (v *Vless) updateUsersLocked(users []LC.VlessUser) error {
 	if v.l == nil {
 		return errors.New("VLESS listener is not running")
 	}
@@ -219,7 +235,7 @@ func (v *Vless) UpdateManagedUsers(users []C.ManagedUser) error {
 	defer v.managedMu.Unlock()
 
 	if !sameVlessManagedCredentials(v.managedUsers, users) {
-		if err := v.UpdateUsers(vlessManagedUsers(users)); err != nil {
+		if err := v.updateUsersLocked(vlessManagedUsers(users)); err != nil {
 			return err
 		}
 	}

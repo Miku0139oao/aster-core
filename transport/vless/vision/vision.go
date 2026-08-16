@@ -28,16 +28,17 @@ var (
 
 func NewConn(conn net.Conn, tlsConn net.Conn, userUUID uuid.UUID) (*Conn, error) {
 	c := &Conn{
-		ExtendedReader:             N.NewExtendedReader(conn),
-		ExtendedWriter:             N.NewExtendedWriter(conn),
-		Conn:                       conn,
-		userUUID:                   userUUID,
-		packetsToFilter:            8,
-		readProcess:                true,
-		readFilterUUID:             true,
-		writeFilterApplicationData: true,
-		writeOnceUserUUID:          userUUID.Bytes(),
+		ExtendedReader:    N.NewExtendedReader(conn),
+		ExtendedWriter:    N.NewExtendedWriter(conn),
+		Conn:              conn,
+		userUUID:          userUUID,
+		packetsToFilter:   8,
+		writeOnceUserUUID: userUUID.Bytes(),
 	}
+	c.readProcess.Store(true)
+	c.readFilterUUID.Store(true)
+	c.writeFilterApplicationData.Store(true)
+	c.writeHandshake.Store(true)
 	var t reflect.Type
 	var p unsafe.Pointer
 	var upstream any = tlsConn

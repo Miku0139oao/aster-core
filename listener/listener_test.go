@@ -81,11 +81,14 @@ func replaceInboundListenersForTest(t *testing.T, listeners map[string]C.Inbound
 	t.Helper()
 	inboundMux.Lock()
 	previous := inboundListeners
+	previousUnusable := unusableInboundListeners
 	inboundListeners = listeners
+	unusableInboundListeners = map[string]struct{}{}
 	inboundMux.Unlock()
 	t.Cleanup(func() {
 		inboundMux.Lock()
 		inboundListeners = previous
+		unusableInboundListeners = previousUnusable
 		inboundMux.Unlock()
 	})
 }
@@ -187,6 +190,36 @@ func TestPatchInboundListenersKeepsReplacementWhenRollbackCloseFails(t *testing.
 	require.ErrorContains(t, err, "close failed")
 	require.Same(t, replacement, inboundListeners["service"])
 	require.Zero(t, old.listenCall)
+}
+
+func TestPatchInboundListenersRebuildsListenerLeftUnusableByRollback(t *testing.T) {
+	active := make(map[string]*patchTestListener)
+	old := &patchTestListener{name: "service", config: "old", address: "address", active: active}
+	activatePatchTestListener(old)
+	replaceInboundListenersForTest(t, map[string]C.InboundListener{"service": old})
+	stuck := &patchTestListener{
+		name:                   "service",
+		config:                 "new",
+		address:                "address",
+		active:                 active,
+		listenErr:              errors.New("listen failed"),
+		startBeforeListenError: true,
+		closeErr:               errors.New("close failed"),
+	}
+
+	require.Error(t, PatchInboundListeners(map[string]C.InboundListener{"service": stuck}, nil, true))
+	require.Same(t, stuck, inboundListeners["service"])
+
+	// The registered listener is not serving, so an identical config must not be
+	// mistaken for a healthy listener that can be reused: the next patch has to
+	// retry closing it and bind a fresh one.
+	stuck.closeErr = nil
+	replacement := &patchTestListener{name: "service", config: "new", address: "address", active: active}
+	require.NoError(t, PatchInboundListeners(map[string]C.InboundListener{"service": replacement}, nil, true))
+	require.Same(t, replacement, inboundListeners["service"])
+	require.Equal(t, 2, stuck.closeCall)
+	require.Equal(t, 1, replacement.listenCall)
+	require.NotContains(t, unusableInboundListeners, "service")
 }
 
 type patchNetAddr string

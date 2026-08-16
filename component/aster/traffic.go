@@ -36,7 +36,13 @@ func (m *Manager) RecordTraffic(inbound, userID string, upload, download int64) 
 		if download > 0 {
 			addTraffic(&counter.download, download)
 		}
-		m.dirty.Store(true)
+		// Storing unconditionally would bounce this cache line between every core
+		// recording traffic. The load runs after the counter updates above, so a
+		// concurrent Flush that clears the flag is ordered after this load and
+		// therefore still observes those updates.
+		if !m.dirty.Load() {
+			m.dirty.Store(true)
+		}
 		runtime.releaseRecorder()
 		return
 	}

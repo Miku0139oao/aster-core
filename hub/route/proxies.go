@@ -73,7 +73,7 @@ func updateProxy(w http.ResponseWriter, r *http.Request) {
 	req := struct {
 		Name string `json:"name"`
 	}{}
-	if err := render.DecodeJSON(r.Body, &req); err != nil {
+	if err := decodeRequestJSON(w, r, &req); err != nil {
 		render.Status(r, http.StatusBadRequest)
 		render.JSON(w, r, ErrBadRequest)
 		return

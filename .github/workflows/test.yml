@@ -15,8 +15,15 @@ on:
 permissions:
   contents: read
 
+# Superseded pull request runs are worth cancelling; runs on main are not,
+# because each one is the only record for its commit.
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -63,6 +70,7 @@ jobs:
 
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       GOTOOLCHAIN: local
     steps:
@@ -72,6 +80,9 @@ jobs:
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
         with:
           go-version: "1.26"
+          cache-dependency-path: |
+            go.sum
+            test/go.sum
 
       - name: Install pinned golangci-lint
         run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
@@ -79,8 +90,15 @@ jobs:
       - name: Lint
         run: golangci-lint run --timeout=10m
 
+      # The interop suite is a separate module, so the job above never reaches it
+      # and it silently rots.
+      - name: Lint interop test module
+        working-directory: test
+        run: golangci-lint run --timeout=10m
+
   race:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       CGO_ENABLED: 1
       GOTOOLCHAIN: local
@@ -93,12 +111,21 @@ jobs:
         with:
           go-version: "1.26"
 
+      # -count=1 keeps a re-run from being served a cached pass. It matters more
+      # here than elsewhere because races surface intermittently, so re-running
+      # is exactly how one gets caught.
       - name: Targeted race tests
         run: >-
-          go test -race
+          go test -race -count=1
           ./common/net
           ./component/aster
           ./hub/route
+          ./listener
           ./listener/anytls
+          ./listener/shadowsocks
           ./listener/sing_vless
+          ./listener/sing_vmess
+          ./listener/trojan
+          ./transport/snell
+          ./transport/vless
           ./tunnel/statistic
