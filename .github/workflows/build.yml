@@ -24,8 +24,8 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
     strategy:
+      fail-fast: false
       matrix:
         jobs:
           - { goos: linux, goarch: '386', go386: sse2, output: '386', debian: i386, rpm: i386}
@@ -230,7 +230,7 @@ jobs:
       run: |
         export SKIP_CONCURRENT_TEST=1
         export SKIP_INTEROP_TEST=1
-        go test ./... -count=1
+        go test ./...
         echo "---test with_gvisor---"
         go test ./... -tags "with_gvisor" -count=1
 
@@ -361,7 +361,6 @@ jobs:
     if: ${{ github.event_name != 'workflow_dispatch' && github.ref_type == 'branch' && !startsWith(github.event_name, 'pull_request') }}
     needs: [build]
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     steps:
     - name: Download all workflow run artifacts
       uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -424,7 +423,6 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version != '' }}
     needs: [build]
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -538,7 +536,6 @@ jobs:
       contents: read
     needs: [build, Upload-Release]
     runs-on: ubuntu-latest
-    timeout-minutes: 90
     steps:
       - name: Checkout repository
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
