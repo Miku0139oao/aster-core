@@ -34,7 +34,9 @@ type Listener struct {
 	closeErr     error
 }
 
-var _listener *Listener
+// _listener is published by New and read by HandleShadowSocks, which runs on
+// connection-handling goroutines.
+var _listener atomic.Pointer[Listener]
 
 func New(config LC.ShadowsocksServer, lc C.InboundListenConfig, tunnel C.Tunnel, additions ...inbound.Addition) (sl *Listener, err error) {
 	pickCipher, err := core.PickCipher(config.Cipher, nil, config.Password)
@@ -146,7 +148,7 @@ func New(config LC.ShadowsocksServer, lc C.InboundListenConfig, tunnel C.Tunnel,
 		}(created, l)
 	}
 
-	_listener = sl
+	_listener.Store(sl)
 	return sl, nil
 }
 
@@ -205,8 +207,8 @@ func (l *Listener) HandleConn(conn net.Conn, tunnel C.Tunnel, additions ...inbou
 }
 
 func HandleShadowSocks(conn net.Conn, tunnel C.Tunnel, additions ...inbound.Addition) bool {
-	if _listener != nil && _listener.pickCipher != nil {
-		go _listener.HandleConn(conn, tunnel, additions...)
+	if listener := _listener.Load(); listener != nil && listener.pickCipher != nil {
+		go listener.HandleConn(conn, tunnel, additions...)
 		return true
 	}
 	return false
