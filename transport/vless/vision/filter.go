@@ -27,7 +27,11 @@ const (
 	tlsHandshakeTypeServerHello byte = 0x02
 )
 
+// FilterTLS runs on both the read and the write path, so it holds filterMu for
+// the whole sniff rather than assuming a single owning goroutine.
 func (vc *Conn) FilterTLS(buffer []byte) (index int) {
+	vc.filterMu.Lock()
+	defer vc.filterMu.Unlock()
 	if vc.packetsToFilter <= 0 {
 		return 0
 	}
