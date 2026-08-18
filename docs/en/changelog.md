@@ -14,13 +14,13 @@ Aster Core does not have an official Aster `v*` release yet. GitHub's `Prereleas
 - [Get the GitHub `Prerelease-main`](https://github.com/Miku0139oao/aster-core/releases/tag/Prerelease-main)
 - [繁體中文版](/changelog)
 
-For the full feature and compatibility overview, see [Aster vs. Mihomo](/reference/mihomo-differences). This page keeps the dated Aster highlights without reproducing the upstream Mihomo history.
+For the full feature and compatibility overview, see [Aster vs. Mihomo](/en/reference/mihomo-differences). This page keeps the dated Aster highlights without reproducing the upstream Mihomo history.
 
 ## Core and Kernel DIRECT
 
 - **2026-07-29 | Aster foundation:** Created Aster Core from the Mihomo baseline and positioned it as a client-first core, with optional Aster management, user, subscription, and traffic-accounting capabilities.
 - **2026-08-12 | Kernel DIRECT and traffic governance:** Added a Linux/OpenWrt Kernel DIRECT path and traffic governance so safely identified `DIRECT` flows can stay on the kernel forwarding/NAT path. nftables plus flow offload is the recommended backend; the TC eBPF classifier remains disabled by default as an experimental option.
-- **2026-08-17–18 | DIRECT safety boundaries:** Bounded the kernel-direct cache and added loop-safety tests and verification commands. TUN no longer drops hijacked SYNs and can learn `DIRECT` selected by a proxy group. See [OpenWrt and Nikki](/deployment/openwrt) for configuration, risks, and measurements.
+- **2026-08-17–18 | DIRECT safety boundaries:** Bounded the kernel-direct cache and added loop-safety tests and verification commands. TUN no longer drops hijacked SYNs and can learn `DIRECT` selected by a proxy group. See [OpenWrt and Nikki](/en/deployment/openwrt) for configuration, risks, and measurements.
 
 ## Protocols and connections
 
@@ -50,7 +50,7 @@ For the full feature and compatibility overview, see [Aster vs. Mihomo](/referen
 - **2026-08-15 | Statistics and API work:** Batched per-user traffic accounting per connection, removed repeated expensive work from Aster API requests, and stopped cloning all users for overview summaries.
 - **2026-08-15–18 | Long-running stability:** Strengthened idempotent listener close, atomic state, and request-size limits, with real-tracker, race, and transport-lifecycle coverage for the critical paths.
 
-See [Performance and benchmarks](/reference/performance) and [Aster vs. Mihomo](/reference/mihomo-differences) for detailed measurements and compatibility differences.
+See [Performance and benchmarks](/en/reference/performance) and [Aster vs. Mihomo](/en/reference/mihomo-differences) for detailed measurements and compatibility differences.
 
 ## CI, builds, and documentation
 
