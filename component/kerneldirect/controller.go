@@ -435,6 +435,7 @@ func (c *controller) publishLoop() {
 		case req := <-c.publishReqs:
 			c.applyPublish(req)
 		case <-c.stop:
+			c.drainPublishReqs()
 			return
 		}
 	}
@@ -448,6 +449,17 @@ func (c *controller) applyPublish(req publishRequest) {
 		c.sink(req.sets)
 	}
 	close(req.done)
+}
+
+func (c *controller) drainPublishReqs() {
+	for {
+		select {
+		case req := <-c.publishReqs:
+			close(req.done)
+		default:
+			return
+		}
+	}
 }
 
 func (c *controller) publish(sets DecisionSets, generation uint64) <-chan struct{} {

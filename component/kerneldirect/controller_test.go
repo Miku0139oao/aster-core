@@ -586,6 +586,62 @@ func TestControllerPublishLoopSkipsStaleGeneration(t *testing.T) {
 	}
 }
 
+func TestControllerCloseUnblocksQueuedPublish(t *testing.T) {
+	firstStarted := make(chan struct{})
+	blockFirst := make(chan struct{})
+	c := Register(func(string, netip.Addr) bool { return true }, func(DecisionSets) {
+		select {
+		case firstStarted <- struct{}{}:
+			<-blockFirst
+		default:
+		}
+	})
+
+	addr := netip.MustParseAddr("203.0.113.81")
+	go ObserveDNS("first.example", []DNSAnswer{{Addr: addr, TTL: time.Minute}})
+	select {
+	case <-firstStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first sink did not start")
+	}
+
+	queued := make(chan struct{})
+	go func() {
+		Flush()
+		close(queued)
+	}()
+
+	ctrl := c.(*controller)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if len(ctrl.publishReqs) == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Flush did not queue behind the blocked sink")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	closed := make(chan struct{})
+	go func() {
+		_ = c.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close hung behind a queued publish")
+	}
+
+	close(blockFirst)
+	select {
+	case <-queued:
+	case <-time.After(2 * time.Second):
+		t.Fatal("queued Flush deadlocked after Close dropped its publish")
+	}
+}
+
 func TestControllerCloseFromSinkDoesNotDeadlock(t *testing.T) {
 	var c io.Closer
 	c = Register(func(string, netip.Addr) bool { return true }, func(DecisionSets) {
