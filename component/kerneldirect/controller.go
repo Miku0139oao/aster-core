@@ -424,20 +424,30 @@ func (c *controller) changedSetsLocked() (DecisionSets, uint64, bool) {
 }
 
 type publishRequest struct {
-	sets DecisionSets
-	done chan struct{}
+	sets       DecisionSets
+	generation uint64
+	done       chan struct{}
 }
 
 func (c *controller) publishLoop() {
 	for {
 		select {
 		case req := <-c.publishReqs:
-			c.sink(req.sets)
-			close(req.done)
+			c.applyPublish(req)
 		case <-c.stop:
 			return
 		}
 	}
+}
+
+func (c *controller) applyPublish(req publishRequest) {
+	c.mu.Lock()
+	apply := !c.closed && req.generation == c.generation
+	c.mu.Unlock()
+	if apply {
+		c.sink(req.sets)
+	}
+	close(req.done)
 }
 
 func (c *controller) publish(sets DecisionSets, generation uint64) <-chan struct{} {
@@ -452,7 +462,7 @@ func (c *controller) publish(sets DecisionSets, generation uint64) <-chan struct
 	select {
 	case <-c.stop:
 		close(done)
-	case c.publishReqs <- publishRequest{sets: sets, done: done}:
+	case c.publishReqs <- publishRequest{sets: sets, generation: generation, done: done}:
 	}
 	return done
 }

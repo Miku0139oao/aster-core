@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/Miku0139oao/aster-core/component/resolver"
+
+	"go4.org/netipx"
 )
 
 func TestControllerProxyWinsAndFlushes(t *testing.T) {
@@ -537,6 +539,50 @@ func TestControllerSinkCanCallStatuses(t *testing.T) {
 	ObserveDNS("direct.example", []DNSAnswer{{Addr: addr, TTL: time.Minute}})
 	if !called {
 		t.Fatal("sink was not called")
+	}
+}
+
+func TestControllerPublishLoopSkipsStaleGeneration(t *testing.T) {
+	var mu sync.Mutex
+	var lastDirect bool
+	c := Register(func(string, netip.Addr) bool { return true }, func(sets DecisionSets) {
+		addr := netip.MustParseAddr("203.0.113.80")
+		mu.Lock()
+		lastDirect = sets.Direct != nil && sets.Direct.Contains(addr)
+		mu.Unlock()
+	}).(*controller)
+	defer c.Close()
+
+	addr := netip.MustParseAddr("203.0.113.80")
+	ObserveDNS("direct.example", []DNSAnswer{{Addr: addr, TTL: time.Minute}})
+	mu.Lock()
+	if !lastDirect {
+		t.Fatal("initial DIRECT observation was not applied")
+	}
+	mu.Unlock()
+
+	c.mu.Lock()
+	c.generation++
+	staleGeneration := c.generation - 1
+	c.mu.Unlock()
+
+	done := make(chan struct{})
+	c.publishReqs <- publishRequest{
+		sets:       DecisionSets{Direct: &netipx.IPSet{}, Proxy: &netipx.IPSet{}},
+		generation: staleGeneration,
+		done:       done,
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stale publish was not consumed")
+	}
+
+	mu.Lock()
+	applied := lastDirect
+	mu.Unlock()
+	if !applied {
+		t.Fatal("stale empty DecisionSets overwrote the current DIRECT exclude set")
 	}
 }
 

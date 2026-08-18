@@ -179,15 +179,7 @@ func NewHysteria(option HysteriaOption) (*Hysteria, error) {
 	}
 	tlsClientConfig := tlsConfig
 
-	quicConfig := &quic.Config{
-		InitialStreamReceiveWindow:     uint64(option.ReceiveWindowConn),
-		MaxStreamReceiveWindow:         uint64(option.ReceiveWindowConn),
-		InitialConnectionReceiveWindow: uint64(option.ReceiveWindow),
-		MaxConnectionReceiveWindow:     uint64(option.ReceiveWindow),
-		KeepAlivePeriod:                10 * time.Second,
-		DisablePathMTUDiscovery:        option.DisableMTUDiscovery,
-		EnableDatagrams:                true,
-	}
+	quicConfig := hysteriaQUICConfig(option)
 	if option.ObfsProtocol != "" {
 		option.Protocol = option.ObfsProtocol
 	}
@@ -198,14 +190,6 @@ func NewHysteria(option HysteriaOption) (*Hysteria, error) {
 		option.HopInterval = DefaultHopInterval
 	}
 	hopInterval := time.Duration(int64(option.HopInterval)) * time.Second
-	if option.ReceiveWindow == 0 {
-		quicConfig.InitialStreamReceiveWindow = DefaultStreamReceiveWindow / 10
-		quicConfig.MaxStreamReceiveWindow = DefaultStreamReceiveWindow
-	}
-	if option.ReceiveWindow == 0 {
-		quicConfig.InitialConnectionReceiveWindow = DefaultConnectionReceiveWindow / 10
-		quicConfig.MaxConnectionReceiveWindow = DefaultConnectionReceiveWindow
-	}
 	if !quicConfig.DisablePathMTUDiscovery && pmtud_fix.DisablePathMTUDiscovery {
 		log.Infoln("hysteria: Path MTU Discovery is not yet supported on this platform")
 	}
@@ -260,6 +244,27 @@ func NewHysteria(option HysteriaOption) (*Hysteria, error) {
 	outbound.dialer = option.NewDialer(outbound.DialOptions())
 
 	return outbound, nil
+}
+
+func hysteriaQUICConfig(option HysteriaOption) *quic.Config {
+	quicConfig := &quic.Config{
+		InitialStreamReceiveWindow:     uint64(option.ReceiveWindowConn),
+		MaxStreamReceiveWindow:         uint64(option.ReceiveWindowConn),
+		InitialConnectionReceiveWindow: uint64(option.ReceiveWindow),
+		MaxConnectionReceiveWindow:     uint64(option.ReceiveWindow),
+		KeepAlivePeriod:                10 * time.Second,
+		DisablePathMTUDiscovery:        option.DisableMTUDiscovery,
+		EnableDatagrams:                true,
+	}
+	if option.ReceiveWindowConn == 0 {
+		quicConfig.InitialStreamReceiveWindow = DefaultStreamReceiveWindow / 10
+		quicConfig.MaxStreamReceiveWindow = DefaultStreamReceiveWindow
+	}
+	if option.ReceiveWindow == 0 {
+		quicConfig.InitialConnectionReceiveWindow = DefaultConnectionReceiveWindow / 10
+		quicConfig.MaxConnectionReceiveWindow = DefaultConnectionReceiveWindow
+	}
+	return quicConfig
 }
 
 // Close implements C.ProxyAdapter
