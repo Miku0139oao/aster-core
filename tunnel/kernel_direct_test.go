@@ -1,9 +1,11 @@
 package tunnel
 
 import (
+	"context"
 	"net"
 	"net/netip"
 	"testing"
+	"time"
 
 	"github.com/Miku0139oao/aster-core/component/iface"
 	"github.com/Miku0139oao/aster-core/component/kerneldirect"
@@ -263,6 +265,104 @@ func TestObserveFlowSkipsGroupSelectedProxy(t *testing.T) {
 	if current.Direct != nil && current.Direct.Contains(addr) {
 		t.Fatal("group selected PROXY must not be learned as DIRECT")
 	}
+}
+
+type udpListenAdapter struct {
+	benchmarkAdapter
+	pc C.PacketConn
+}
+
+func (a *udpListenAdapter) ListenPacketContext(context.Context, *C.Metadata) (C.PacketConn, error) {
+	return a.pc, nil
+}
+
+type stubUDPPacketConn struct{}
+
+func (stubUDPPacketConn) ReadFrom([]byte) (int, net.Addr, error) { return 0, nil, net.ErrClosed }
+func (stubUDPPacketConn) WriteTo(b []byte, _ net.Addr) (int, error) {
+	return len(b), nil
+}
+func (stubUDPPacketConn) Close() error                     { return nil }
+func (stubUDPPacketConn) LocalAddr() net.Addr              { return &net.UDPAddr{} }
+func (stubUDPPacketConn) SetDeadline(time.Time) error      { return nil }
+func (stubUDPPacketConn) SetReadDeadline(time.Time) error  { return nil }
+func (stubUDPPacketConn) SetWriteDeadline(time.Time) error { return nil }
+func (stubUDPPacketConn) WaitReadFrom() ([]byte, func(), net.Addr, error) {
+	return nil, nil, nil, net.ErrClosed
+}
+func (stubUDPPacketConn) ResolveUDP(context.Context, *C.Metadata) error { return nil }
+func (stubUDPPacketConn) Chains() C.Chain                               { return C.Chain{"DIRECT"} }
+func (stubUDPPacketConn) ProviderChains() C.Chain                       { return nil }
+func (stubUDPPacketConn) AppendToChains(C.ProxyAdapter)                 {}
+func (stubUDPPacketConn) RemoteDestination() string                     { return "" }
+
+type testUDPPacket struct {
+	data  []byte
+	local net.Addr
+}
+
+func (p *testUDPPacket) Data() []byte                            { return p.data }
+func (p *testUDPPacket) WriteBack([]byte, net.Addr) (int, error) { return 0, nil }
+func (p *testUDPPacket) Drop()                                   {}
+func (p *testUDPPacket) LocalAddr() net.Addr                     { return p.local }
+
+func restoreTunnelStatus(status TunnelStatus) {
+	switch status {
+	case Inner:
+		OnInnerLoading()
+	case Running:
+		OnRunning()
+	default:
+		OnSuspend()
+	}
+}
+
+func TestHandleUDPConnObservesDirectDest(t *testing.T) {
+	oldStatus := Status()
+	OnRunning()
+	t.Cleanup(func() { restoreTunnelStatus(oldStatus) })
+
+	direct := &udpListenAdapter{pc: stubUDPPacketConn{}}
+	oldMode := Mode()
+	oldProxies, oldProviders := proxies, providers
+	oldRules, oldSubRules, oldRuleProviders := rules, subRules, ruleProviders
+	t.Cleanup(func() {
+		SetMode(oldMode)
+		UpdateProxies(oldProxies, oldProviders)
+		UpdateRules(oldRules, oldSubRules, oldRuleProviders)
+	})
+	UpdateProxies(map[string]C.Proxy{direct.Name(): direct}, nil)
+	UpdateRules(nil, nil, nil)
+	SetMode(Direct)
+
+	var current kerneldirect.DecisionSets
+	closer := kerneldirect.Register(func(string, netip.Addr) bool { return true }, func(sets kerneldirect.DecisionSets) {
+		current = sets
+	}, kerneldirect.ControllerOptions{MaxEntries: 8})
+	t.Cleanup(func() { _ = closer.Close() })
+
+	addr := netip.MustParseAddr("36.155.199.151")
+	metadata := &C.Metadata{
+		NetWork: C.UDP,
+		Type:    C.TUN,
+		SrcIP:   netip.MustParseAddr("192.168.1.128"),
+		SrcPort: 54321,
+		DstIP:   addr,
+		DstPort: 6651,
+	}
+	handleUDPConn(C.NewPacketAdapter(&testUDPPacket{
+		data:  []byte{1},
+		local: net.UDPAddrFromAddrPort(netip.MustParseAddrPort("192.168.1.128:54321")),
+	}, metadata))
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if current.Direct != nil && current.Direct.Contains(addr) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("UDP DIRECT dest must be learned by ObserveFlow")
 }
 
 func TestKernelDirectObservesAfterDialWhenDstIPMissing(t *testing.T) {

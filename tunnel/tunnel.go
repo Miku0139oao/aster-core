@@ -511,6 +511,7 @@ func handleUDPConn(packet C.PacketAdapter) {
 				log.Warnln("[UDP] Parse metadata failed: %s", err.Error())
 				return nil, nil, err
 			}
+			observeKernelDirectFlow(metadata, proxy)
 
 			dialMetadata := metadata.Pure()
 			ctx, cancel := context.WithTimeout(context.Background(), C.DefaultUDPTimeout)
@@ -523,6 +524,9 @@ func handleUDPConn(packet C.PacketAdapter) {
 			if err != nil {
 				return nil, nil, err
 			}
+			// ListenPacketContext / ResolveUDP may fill DstIP for domain-only
+			// DIRECT UDP. Lobby-issued battle IPs often arrive as UDP first.
+			observeKernelDirectFlow(dialMetadata, proxy)
 			logMetadata(metadata, rule, rawPc)
 
 			pc := statistic.NewUDPTracker(rawPc, statistic.DefaultManager, metadata, rule, 0, 0, true)
