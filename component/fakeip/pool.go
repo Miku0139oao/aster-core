@@ -88,7 +88,18 @@ func (p *Pool) IPNet() netip.Prefix {
 
 // CloneFrom clone cache from old pool
 func (p *Pool) CloneFrom(o *Pool) {
+	if o == nil || p == o {
+		return
+	}
+	// Preserve offset/cycle so a config reload does not restart allocation at
+	// first and evict live fake-ip bindings while free addresses remain.
+	o.mux.Lock()
+	defer o.mux.Unlock()
+	p.mux.Lock()
+	defer p.mux.Unlock()
 	o.store.CloneTo(p.store)
+	p.offset = o.offset
+	p.cycle = o.cycle
 }
 
 func (p *Pool) get(host string) netip.Addr {

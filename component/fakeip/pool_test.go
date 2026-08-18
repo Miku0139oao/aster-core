@@ -212,6 +212,41 @@ func TestPool_Clone(t *testing.T) {
 	assert.True(t, lastExist)
 }
 
+func TestPool_ClonePreservesOffset(t *testing.T) {
+	ipnet := netip.MustParsePrefix("192.168.0.1/24")
+	pool, err := New(Options{
+		IPNet: ipnet,
+		Size:  10,
+	})
+	assert.Nil(t, err)
+
+	first := pool.Lookup("foo.com")
+	second := pool.Lookup("bar.com")
+	assert.Equal(t, first, netip.AddrFrom4([4]byte{192, 168, 0, 4}))
+	assert.Equal(t, second, netip.AddrFrom4([4]byte{192, 168, 0, 5}))
+
+	newPool, err := New(Options{
+		IPNet: ipnet,
+		Size:  10,
+	})
+	assert.Nil(t, err)
+	newPool.CloneFrom(pool)
+
+	host, exist := newPool.LookBack(first)
+	assert.True(t, exist)
+	assert.Equal(t, "foo.com", host)
+
+	third := newPool.Lookup("baz.com")
+	assert.Equal(t, netip.AddrFrom4([4]byte{192, 168, 0, 6}), third)
+
+	host, exist = newPool.LookBack(first)
+	assert.True(t, exist)
+	assert.Equal(t, "foo.com", host)
+	host, exist = newPool.LookBack(second)
+	assert.True(t, exist)
+	assert.Equal(t, "bar.com", host)
+}
+
 func TestPool_Error(t *testing.T) {
 	ipnet := netip.MustParsePrefix("192.168.0.1/31")
 	_, err := New(Options{
