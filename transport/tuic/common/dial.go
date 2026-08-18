@@ -17,6 +17,14 @@ type PacketDialer interface {
 }
 
 func DialQuic(ctx context.Context, address string, opts []dialer.Option, pDialer PacketDialer, tlsConf *tls.Config, conf *quic.Config, early bool) (net.PacketConn, *quic.Conn, error) {
+	return dialQuic(ctx, address, opts, pDialer, tlsConf, conf, early, 0)
+}
+
+func DialQuicWithConnectionIDLength(ctx context.Context, address string, opts []dialer.Option, pDialer PacketDialer, tlsConf *tls.Config, conf *quic.Config, early bool, connectionIDLength int) (net.PacketConn, *quic.Conn, error) {
+	return dialQuic(ctx, address, opts, pDialer, tlsConf, conf, early, connectionIDLength)
+}
+
+func dialQuic(ctx context.Context, address string, opts []dialer.Option, pDialer PacketDialer, tlsConf *tls.Config, conf *quic.Config, early bool, connectionIDLength int) (net.PacketConn, *quic.Conn, error) {
 	d := dialer.NewDialer(
 		dialer.WithOptions(opts...),
 		dialer.WithNetDialer(dialer.NetDialerFunc(func(ctx context.Context, network, address string) (net.Conn, error) {
@@ -29,7 +37,7 @@ func DialQuic(ctx context.Context, address string, opts []dialer.Option, pDialer
 			if err != nil {
 				return nil, err
 			}
-			transport := quic.Transport{Conn: packetConn}
+			transport := newQuicTransport(packetConn, connectionIDLength)
 			transport.SetCreatedConn(true) // auto close conn
 			transport.SetSingleUse(true)   // auto close transport
 
@@ -52,6 +60,10 @@ func DialQuic(ctx context.Context, address string, opts []dialer.Option, pDialer
 	}
 	nc := c.(quicNetConn)
 	return nc.pc, nc.Conn, nil
+}
+
+func newQuicTransport(packetConn net.PacketConn, connectionIDLength int) quic.Transport {
+	return quic.Transport{Conn: packetConn, ConnectionIDLength: connectionIDLength}
 }
 
 type quicNetConn struct {
