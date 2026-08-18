@@ -34,3 +34,7 @@ await cp(
   resolve(docsDirectory, "worker", "index.js"),
   resolve(outputDirectory, "server", "index.js"),
 );
+await cp(
+  resolve(docsDirectory, "worker", "index.js"),
+  resolve(outputDirectory, "client", "_worker.js"),
+);
