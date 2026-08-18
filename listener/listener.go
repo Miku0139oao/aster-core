@@ -216,36 +216,38 @@ func ReCreateRedir(port int, tunnel C.Tunnel) {
 	addr := genAddr(bindAddress, port, allowLan)
 
 	if redirListener != nil {
-		if redirListener.RawAddress() == addr {
-			return
+		if redirListener.RawAddress() != addr {
+			redirListener.Close()
+			redirListener = nil
 		}
-		redirListener.Close()
-		redirListener = nil
 	}
 
 	if redirUDPListener != nil {
-		if redirUDPListener.RawAddress() == addr {
-			return
+		if redirUDPListener.RawAddress() != addr {
+			redirUDPListener.Close()
+			redirUDPListener = nil
 		}
-		redirUDPListener.Close()
-		redirUDPListener = nil
 	}
 
 	if portIsZero(addr) {
 		return
 	}
 
-	redirListener, err = redir.New(addr, tunnel)
-	if err != nil {
-		return
+	if redirListener == nil {
+		redirListener, err = redir.New(addr, tunnel)
+		if err != nil {
+			return
+		}
+		log.Infoln("Redirect proxy listening at: %s", redirListener.Address())
 	}
 
-	redirUDPListener, err = tproxy.NewUDP(addr, tunnel)
-	if err != nil {
-		log.Warnln("Failed to start Redir UDP Listener: %s", err)
+	if redirUDPListener == nil {
+		var udpErr error
+		redirUDPListener, udpErr = tproxy.NewUDP(addr, tunnel)
+		if udpErr != nil {
+			log.Warnln("Failed to start Redir UDP Listener: %s", udpErr)
+		}
 	}
-
-	log.Infoln("Redirect proxy listening at: %s", redirListener.Address())
 }
 
 func ReCreateShadowSocks(shadowSocksConfig string, tunnel C.Tunnel) {
@@ -413,36 +415,38 @@ func ReCreateTProxy(port int, tunnel C.Tunnel) {
 	addr := genAddr(bindAddress, port, allowLan)
 
 	if tproxyListener != nil {
-		if tproxyListener.RawAddress() == addr {
-			return
+		if tproxyListener.RawAddress() != addr {
+			tproxyListener.Close()
+			tproxyListener = nil
 		}
-		tproxyListener.Close()
-		tproxyListener = nil
 	}
 
 	if tproxyUDPListener != nil {
-		if tproxyUDPListener.RawAddress() == addr {
-			return
+		if tproxyUDPListener.RawAddress() != addr {
+			tproxyUDPListener.Close()
+			tproxyUDPListener = nil
 		}
-		tproxyUDPListener.Close()
-		tproxyUDPListener = nil
 	}
 
 	if portIsZero(addr) {
 		return
 	}
 
-	tproxyListener, err = tproxy.New(addr, tunnel)
-	if err != nil {
-		return
+	if tproxyListener == nil {
+		tproxyListener, err = tproxy.New(addr, tunnel)
+		if err != nil {
+			return
+		}
+		log.Infoln("TProxy server listening at: %s", tproxyListener.Address())
 	}
 
-	tproxyUDPListener, err = tproxy.NewUDP(addr, tunnel)
-	if err != nil {
-		log.Warnln("Failed to start TProxy UDP Listener: %s", err)
+	if tproxyUDPListener == nil {
+		var udpErr error
+		tproxyUDPListener, udpErr = tproxy.NewUDP(addr, tunnel)
+		if udpErr != nil {
+			log.Warnln("Failed to start TProxy UDP Listener: %s", udpErr)
+		}
 	}
-
-	log.Infoln("TProxy server listening at: %s", tproxyListener.Address())
 }
 
 func ReCreateMixed(port int, tunnel C.Tunnel) {

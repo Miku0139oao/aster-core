@@ -353,3 +353,86 @@ func TestPatchInboundListenersRestoredSliceListenerCanCloseAndRestart(t *testing
 		require.Equal(t, 1, listener.closeCall)
 	}
 }
+
+type recreateStubTunnel struct{}
+
+func (recreateStubTunnel) HandleTCPConn(net.Conn, *C.Metadata)      {}
+func (recreateStubTunnel) HandleUDPPacket(C.UDPPacket, *C.Metadata) {}
+func (recreateStubTunnel) NatTable() C.NatTable                     { return nil }
+
+func TestReCreateRedirRetriesUDPWithoutReplacingTCP(t *testing.T) {
+	redirMux.Lock()
+	oldTCP, oldUDP := redirListener, redirUDPListener
+	redirListener, redirUDPListener = nil, nil
+	redirMux.Unlock()
+	t.Cleanup(func() {
+		ReCreateRedir(0, recreateStubTunnel{})
+		redirMux.Lock()
+		if redirListener != nil {
+			_ = redirListener.Close()
+		}
+		if redirUDPListener != nil {
+			_ = redirUDPListener.Close()
+		}
+		redirListener, redirUDPListener = oldTCP, oldUDP
+		redirMux.Unlock()
+	})
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := ln.Addr().(*net.TCPAddr).Port
+	require.NoError(t, ln.Close())
+
+	prevAllow, prevBind := allowLan, bindAddress
+	SetAllowLan(false)
+	SetBindAddress("*")
+	t.Cleanup(func() {
+		allowLan, bindAddress = prevAllow, prevBind
+	})
+
+	ReCreateRedir(port, recreateStubTunnel{})
+	require.NotNil(t, redirListener)
+	firstTCP := redirListener
+
+	ReCreateRedir(port, recreateStubTunnel{})
+	require.Same(t, firstTCP, redirListener)
+	require.Equal(t, port, GetPorts().RedirPort)
+}
+
+func TestReCreateTProxyRetriesUDPIndependently(t *testing.T) {
+	tproxyMux.Lock()
+	oldTCP, oldUDP := tproxyListener, tproxyUDPListener
+	tproxyListener, tproxyUDPListener = nil, nil
+	tproxyMux.Unlock()
+	t.Cleanup(func() {
+		ReCreateTProxy(0, recreateStubTunnel{})
+		tproxyMux.Lock()
+		if tproxyListener != nil {
+			_ = tproxyListener.Close()
+		}
+		if tproxyUDPListener != nil {
+			_ = tproxyUDPListener.Close()
+		}
+		tproxyListener, tproxyUDPListener = oldTCP, oldUDP
+		tproxyMux.Unlock()
+	})
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := ln.Addr().(*net.TCPAddr).Port
+	require.NoError(t, ln.Close())
+
+	prevAllow, prevBind := allowLan, bindAddress
+	SetAllowLan(false)
+	SetBindAddress("*")
+	t.Cleanup(func() {
+		allowLan, bindAddress = prevAllow, prevBind
+	})
+
+	ReCreateTProxy(port, recreateStubTunnel{})
+	firstTCP := tproxyListener
+	ReCreateTProxy(port, recreateStubTunnel{})
+	if firstTCP != nil {
+		require.Same(t, firstTCP, tproxyListener)
+	}
+}
