@@ -104,10 +104,13 @@ func New(config LC.ShadowQuicServer, lc C.InboundListenConfig, tunnel C.Tunnel, 
 	if config.CWND == 0 {
 		config.CWND = 32
 	}
-	jlsPacketDialer := func(_ context.Context, network, address string) (net.PacketConn, net.Addr, error) {
+	jlsPacketDialer := func(ctx context.Context, network, address string) (net.PacketConn, net.Addr, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
 		return inner.HandleUdp(tunnel, network, address, config.JLSUpstream.Proxy)
 	}
-	quicVersions, versionNegotiationVersions, getVersionNegotiationProfile, err := shadowquic.ResolveQUICVersionProfile(
+	quicVersions, _, getVersionNegotiationProfile, err := shadowquic.ResolveQUICVersionProfile(
 		config.QUICVersions,
 		config.JLSUpstream.Addr,
 		config.JLSUpstream.QUICVersionProbe,
@@ -117,15 +120,22 @@ func New(config LC.ShadowQuicServer, lc C.InboundListenConfig, tunnel C.Tunnel, 
 	if err != nil {
 		return nil, err
 	}
+	// Newer jls-quic-go forwards unsupported versions to the camouflage
+	// upstream itself, so the local VN profile hook is gone. Apply a probed
+	// profile to Config.Versions so authenticated JLS clients are still
+	// accepted locally.
+	if getVersionNegotiationProfile != nil {
+		if probed, _ := getVersionNegotiationProfile(); len(probed) > 0 {
+			quicVersions = probed
+		}
+	}
 
 	quicConfig := &quic.Config{
 		Versions: quicVersions,
 		JLSConfig: &quic.JLSConfig{
-			UpstreamAddr:                 config.JLSUpstream.Addr,
-			RateLimit:                    config.JLSUpstream.RateLimit,
-			PacketDialer:                 jlsPacketDialer,
-			VersionNegotiationVersions:   versionNegotiationVersions,
-			GetVersionNegotiationProfile: getVersionNegotiationProfile,
+			UpstreamAddr: config.JLSUpstream.Addr,
+			RateLimit:    config.JLSUpstream.RateLimit,
+			PacketDialer: jlsPacketDialer,
 		},
 		MaxIdleTimeout:                 time.Duration(config.MaxIdleTime) * time.Millisecond,
 		MaxIncomingStreams:             ServerMaxIncomingStreams,
