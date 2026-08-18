@@ -274,7 +274,6 @@ jobs:
           toolchain.tar.gz
           vendor.tar.gz
           version.txt
-          checksums.txt
 
   Upload-Prerelease:
     permissions:
@@ -302,7 +301,13 @@ jobs:
       run: |
         test -n "$(find bin -type f -print -quit)"
         cd bin/
-        find . -type f -not -name "checksums.*" -not -name "version.txt" | sort | xargs sha256sum > checksums.txt
+        find . -type f -not -name "checksums.*" -not -name "version.txt" -print0 \
+          | sort -z \
+          | xargs -0 -r sha256sum > checksums.txt
+        test -s checksums.txt
+        # --ignore-missing is required for a single-asset download; here
+        # every listed file is present, so this is a self-check of the list.
+        sha256sum --check --ignore-missing checksums.txt
         cat checksums.txt
       shell: bash
 
@@ -357,6 +362,8 @@ jobs:
           echo "Synchronize ${GITHUB_REF_NAME} at \`${RANGE_END:0:7}\`."
           echo
           echo "[Aster Core 文件](https://astercore.fubukishop.app/) · [OpenWrt 與 Nikki](https://astercore.fubukishop.app/deployment/openwrt) · [與 Mihomo 的差異](https://astercore.fubukishop.app/reference/mihomo-differences)"
+          echo
+          echo "Verify a downloaded asset with \`sha256sum --check --ignore-missing checksums.txt\` (the list covers every file in this release)."
           echo
           cat release.md
         } > release.txt
@@ -464,6 +471,12 @@ jobs:
             echo "Generated notes are too long for range ${RANGE}" >&2
             exit 1
           fi
+          {
+            echo "Verify a downloaded asset with \`sha256sum --check --ignore-missing checksums.txt\` (the list covers every file in this release)."
+            echo
+            cat release.md
+          } > release.md.tmp
+          mv release.md.tmp release.md
   
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
@@ -473,7 +486,12 @@ jobs:
       - name: Calculate checksums
         working-directory: bin
         run: |
-          find . -type f -not -name "checksums.*" -not -name "version.txt" | sort | xargs sha256sum > checksums.txt
+          test -n "$(find . -type f -print -quit)"
+          find . -type f -not -name "checksums.*" -not -name "version.txt" -print0 \
+            | sort -z \
+            | xargs -0 -r sha256sum > checksums.txt
+          test -s checksums.txt
+          sha256sum --check --ignore-missing checksums.txt
   
       - name: Display structure of downloaded files
         run: ls -R
