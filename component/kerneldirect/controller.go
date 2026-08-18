@@ -237,11 +237,22 @@ func (c *controller) observe(host string, answers []DNSAnswer) {
 	}
 }
 
+var (
+	// Keep these aligned with the TC classifier's fail-closed skips so the
+	// nftables learned exclude cannot hijack fake-IP, CGNAT, or this-network.
+	ipv4ThisNetwork     = netip.MustParsePrefix("0.0.0.0/8")
+	ipv4SharedNet       = netip.MustParsePrefix("100.64.0.0/10")
+	ipv4BenchmarkingNet = netip.MustParsePrefix("198.18.0.0/15")
+)
+
 func isUnsafeAddress(addr netip.Addr) bool {
 	if !addr.IsValid() || resolver.IsFakeIP(addr) {
 		return true
 	}
-	return !addr.IsGlobalUnicast() || addr.IsPrivate() || addr.IsLoopback() || addr.IsLinkLocalUnicast()
+	if !addr.IsGlobalUnicast() || addr.IsPrivate() || addr.IsLoopback() || addr.IsLinkLocalUnicast() {
+		return true
+	}
+	return addr.Is4() && (ipv4ThisNetwork.Contains(addr) || ipv4SharedNet.Contains(addr) || ipv4BenchmarkingNet.Contains(addr))
 }
 
 func (c *controller) expireLoop() {

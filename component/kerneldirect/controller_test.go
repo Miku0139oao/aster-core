@@ -210,6 +210,11 @@ func TestObserveFlowSkipsPrivateAndNonGlobalAddresses(t *testing.T) {
 		netip.MustParseAddr("169.254.1.1"),
 		netip.MustParseAddr("224.0.0.1"),
 		netip.MustParseAddr("0.0.0.0"),
+		netip.MustParseAddr("0.0.0.1"),
+		netip.MustParseAddr("100.64.0.1"),
+		netip.MustParseAddr("100.127.255.254"),
+		netip.MustParseAddr("198.18.0.1"),
+		netip.MustParseAddr("198.19.255.255"),
 	} {
 		ObserveFlow("unsafe.example", addr, time.Minute)
 	}
@@ -583,6 +588,25 @@ func TestControllerPublishLoopSkipsStaleGeneration(t *testing.T) {
 	mu.Unlock()
 	if !applied {
 		t.Fatal("stale empty DecisionSets overwrote the current DIRECT exclude set")
+	}
+}
+
+func TestControllerIgnoresSharedAndFakeIPRange(t *testing.T) {
+	c := Register(func(string, netip.Addr) bool { return true }, func(DecisionSets) {})
+	defer c.Close()
+
+	for _, addr := range []netip.Addr{
+		netip.MustParseAddr("100.64.0.1"),
+		netip.MustParseAddr("100.127.255.254"),
+		netip.MustParseAddr("198.18.0.1"),
+		netip.MustParseAddr("198.19.255.255"),
+		netip.MustParseAddr("0.0.0.1"),
+	} {
+		ObserveDNS("unsafe.example", []DNSAnswer{{Addr: addr, TTL: time.Minute}})
+	}
+
+	if status := c.(*controller).status(); status.LearnedAddresses != 0 || status.LearnedDomains != 0 {
+		t.Fatalf("CGNAT, fake-IP range, or this-network destination was learned: %+v", status)
 	}
 }
 
