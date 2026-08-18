@@ -40,9 +40,9 @@ type rcodeClient struct {
 var _ dnsClient = rcodeClient{}
 
 func (r rcodeClient) ExchangeContext(ctx context.Context, m *D.Msg) (*D.Msg, error) {
-	m.Response = true
-	m.Rcode = r.rcode
-	return m, nil
+	msg := new(D.Msg)
+	msg.SetRcode(m, r.rcode)
+	return msg, nil
 }
 
 func (r rcodeClient) Address() string {
