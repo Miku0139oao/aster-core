@@ -293,6 +293,8 @@ jobs:
       run: |
         set -euo pipefail
         TAG="Prerelease-${GITHUB_REF_NAME}"
+        PREV_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" --jq .object.sha 2>/dev/null || true)"
+        echo "PREV_SHA=${PREV_SHA}" >> "$GITHUB_ENV"
         RELEASE_ID="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --jq ".[] | select(.tag_name == \"${TAG}\") | .id")"
         if [ -n "${RELEASE_ID}" ]; then
           gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}"
@@ -306,15 +308,33 @@ jobs:
         echo "BUILDTIME=$(TZ=Asia/Shanghai date)" >> "$GITHUB_ENV"
       shell: bash
 
-    - run: |
-        cat > release.txt << 'EOF'
-        Release created at  ${{ env.BUILDTIME }}
-        Synchronize ${{ github.ref_name }} branch code updates, keeping only the latest version
-        <br>
-        [Mihomo compatibility documentation](https://wiki.metacubex.one/)
-        [二进制文件筛选 / Binary file selector](https://metacubex.github.io/Meta-Docs/startup/#_1)
-        [查看文档 / Docs](https://metacubex.github.io/Meta-Docs/)
-        EOF
+    - name: Checkout for release notes
+      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      with:
+        fetch-depth: 0
+
+    - name: Generate prerelease notes
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set -euo pipefail
+        RANGE_END="${GITHUB_SHA}"
+        if [ -n "${PREV_SHA:-}" ] && [ "${PREV_SHA}" != "${RANGE_END}" ]; then
+          RANGE="${PREV_SHA}...${RANGE_END}"
+        elif PREVERSION="$(git describe --tags --abbrev=0 --match 'v[0-9]*' HEAD^ 2>/dev/null)"; then
+          RANGE="${PREVERSION}...${RANGE_END}"
+        else
+          RANGE="$(git rev-list --max-parents=0 HEAD)...${RANGE_END}"
+        fi
+        bash ./.github/genReleaseNote.sh -v "${RANGE}"
+        {
+          echo "Release created at ${BUILDTIME}"
+          echo "Synchronize ${GITHUB_REF_NAME} at \`${RANGE_END:0:7}\`."
+          echo
+          echo "[Aster Core 文件](https://astercore.fubukishop.app/) · [OpenWrt 與 Nikki](https://astercore.fubukishop.app/deployment/openwrt) · [與 Mihomo 的差異](https://astercore.fubukishop.app/reference/mihomo-differences)"
+          echo
+          cat release.md
+        } > release.txt
 
     - name: Upload Prerelease
       uses: softprops/action-gh-release@c12583777ecdfd3be55c69cf75464299dc01057e # v3
@@ -325,7 +345,7 @@ jobs:
         files: |
           bin/*
         prerelease: true
-        generate_release_notes: true
+        generate_release_notes: false
         body_path: release.txt
         fail_on_unmatched_files: true
 
@@ -443,7 +463,7 @@ jobs:
           gh release edit "${RELEASE_VERSION}" --draft=false --latest
 
   Docker:
-    if: ${{ always() && needs.build.result == 'success' && secrets.DOCKER_HUB_TOKEN != '' && !startsWith(github.event_name, 'pull_request') && (github.event_name != 'workflow_dispatch' || needs.Upload-Release.result == 'success') }}
+    if: ${{ always() && needs.build.result == 'success' && !startsWith(github.event_name, 'pull_request') && (github.event_name != 'workflow_dispatch' || needs.Upload-Release.result == 'success') }}
     permissions:
       contents: read
     needs: [build, Upload-Release]
@@ -501,8 +521,22 @@ jobs:
         run: |
           ls .
           ls bin/
+
+      - name: Check Docker Hub credentials
+        id: docker_auth
+        env:
+          DOCKER_USER: ${{ secrets.DOCKER_HUB_USER }}
+          DOCKER_TOKEN: ${{ secrets.DOCKER_HUB_TOKEN }}
+        run: |
+          if [ -n "${DOCKER_TOKEN}" ] && [ -n "${DOCKER_USER}" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "Docker Hub credentials are not set; skip image push."
+          fi
       
       - name: login to docker REGISTRY
+        if: ${{ steps.docker_auth.outputs.available == 'true' }}
         uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4
         with:
           registry: ${{ env.REGISTRY }}
@@ -512,7 +546,7 @@ jobs:
       # Build and push Docker image with Buildx (don't push on PR)
       # https://github.com/docker/build-push-action
       - name: Build and push Docker image
-        if: ${{ github.event_name != 'workflow_dispatch' }}
+        if: ${{ steps.docker_auth.outputs.available == 'true' && github.event_name != 'workflow_dispatch' }}
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: .
@@ -527,7 +561,7 @@ jobs:
           labels: ${{ steps.meta_alpha.outputs.labels }}
       
       - name: Build and push Docker image
-        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version != '' }}
+        if: ${{ steps.docker_auth.outputs.available == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.version != '' }}
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: .

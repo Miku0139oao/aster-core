@@ -28,7 +28,7 @@ fi
   git log --pretty=format:"* %h %s by @%an" --grep="^fix" -i "$version_range" | sort -f | uniq
   echo
   echo "## Maintenance"
-  git log --pretty=format:"* %h %s by @%an" --grep="^chore\|^docs\|^refactor" -i "$version_range" | sort -f | uniq
+  git log --pretty=format:"* %h %s by @%an" --grep="^chore\|^docs\|^refactor\|^test\|^perf\|^ci" -i "$version_range" | sort -f | uniq
   echo
   echo "**Full Changelog**: https://github.com/Miku0139oao/aster-core/compare/$version_range"
 } > release.md
