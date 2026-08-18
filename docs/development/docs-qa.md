@@ -12,9 +12,9 @@ npm run check:docs
 npm run preview -- --port 4173
 ```
 
-`npm run check:docs` 會檢查 build 產物的內部連結與 anchor、sidebar targets、sitemap、local search index，以及 Worker 對 clean URL 的 fallback。English 首頁、Downloads 和 Changelog 在目前 main 仍是已知缺口，所以會印出 `FAIL (planned)`，但不會讓一般檢查失敗。
+`npm run check:docs` 會檢查 build 產物的內部連結與 anchor、sidebar targets、sitemap、local search index，以及 clean URL fallback（以 `docs/worker/index.js` 模擬 Caddy `try_files` 行為）。English 首頁、Downloads 和 Changelog 已經合併到目前 main；一般檢查與 strict gate 都應通過。
 
-當這三項功能合併後，CI 應改用 strict gate：
+這三項 required-content 檢查已具備，CI 應使用 strict gate：
 
 ```sh
 npm run check:docs:required
@@ -32,9 +32,9 @@ npm run check:docs:required
 | --- | --- | --- |
 | Production build | PASS（setup 後） | 第一次 `npm run build` 因 fresh worktree 尚未安裝 `vitepress` 而失敗；`npm ci` 後相同命令成功，VitePress 完成 client/server、page render、sitemap 與 Sites dist。另有三則 `caddy` syntax highlighting fallback warning，不影響輸出。 |
 | Desktop IA | PASS | 本機 preview、1440×900：首頁主 nav、文件頁完整 sidebar、頁內 outline、上一頁／下一頁均可見；`/guide/getting-started` clean URL 可直接載入；browser console 無 warning/error。 |
-| English locale | **FAIL** | 只有 `lang: "zh-TW"`；`docs/.vitepress/config.mts` 沒有 `locales.en`，且缺少 `docs/en/index.md` 與 built `/en/`。 |
-| Downloads | **FAIL** | 缺少 `docs/downloads.md`（或 `docs/downloads/index.md`）與 built `/downloads`；目前只能由教學連到外部 GitHub Releases。 |
-| Changelog | **FAIL** | 缺少 `docs/changelog.md`（或 `docs/changelog/index.md`）與 built `/changelog`。 |
+| English locale | PASS | `docs/en/index.md`、`docs/.vitepress/config.mts` 的 `locales.en` 與 built `/en/` 均存在。 |
+| Downloads | PASS | `docs/downloads.md` 與 built `/downloads` 均存在，頁面提供 rolling release asset 與 checksum 來源。 |
+| Changelog | PASS | `docs/changelog.md` 與 built `/changelog` 均存在，並連到 baseline compare 與 `Prerelease-main`。 |
 | Local search | PASS | `docs/.vitepress/config.mts` 使用 local provider；build 產生 search index。UI 查詢 `kernel-direct` 能顯示結果，Enter 可開啟 `/deployment/openwrt#kernel-direct-設定原理`。 |
 | Built-link crawl | PASS | 爬過所有非 404 HTML 的 `href`／`src`，並核對本機檔案與 HTML anchor；無 404 或 missing anchor。Sidebar 所有設定 link 皆有 build target。 |
 | Sitemap | PASS | `docs/.vitepress/dist/sitemap.xml` 包含所有 sidebar route，也涵蓋全部 build page route。 |
@@ -54,4 +54,4 @@ npm run check:docs:required
 
 ## 結果判定
 
-Broken internal link、missing sidebar target、sitemap 漏頁、search index 遺失或 Worker clean URL regression 都是立即阻擋上線的 FAIL。三個 planned checks 只在 current main 使用 report-only 模式；相關頁面合併後，strict gate 必須成為必要檢查，不可再降級。
+Broken internal link、missing sidebar target、sitemap 漏頁、search index 遺失、clean URL fallback regression 或 required-content 缺頁，都是立即阻擋上線的 FAIL。三個 required-content checks 已不再是 report-only；CI 不應降級為只執行一般檢查。

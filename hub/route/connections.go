@@ -16,7 +16,6 @@ import (
 func connectionRouter() http.Handler {
 	r := chi.NewRouter()
 	r.Get("/", getConnections)
-	r.Delete("/", closeAllConnections)
 	r.Delete("/{id}", closeConnection)
 	return r
 }
@@ -75,13 +74,5 @@ func closeConnection(w http.ResponseWriter, r *http.Request) {
 	if c := statistic.DefaultManager.Get(id); c != nil {
 		_ = c.Close()
 	}
-	render.NoContent(w, r)
-}
-
-func closeAllConnections(w http.ResponseWriter, r *http.Request) {
-	statistic.DefaultManager.Range(func(c statistic.Tracker) bool {
-		_ = c.Close()
-		return true
-	})
 	render.NoContent(w, r)
 }
