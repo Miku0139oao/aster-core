@@ -117,9 +117,9 @@ func (c realityConnWrapper) CloseWrite() error {
 }
 
 func (c realityConnWrapper) ReaderReplaceable() bool {
-	return true
+	return false
 }
 
 func (c realityConnWrapper) WriterReplaceable() bool {
-	return true
+	return false
 }
