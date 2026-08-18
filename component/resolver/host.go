@@ -29,20 +29,29 @@ func NewHosts(hosts *trie.DomainTrie[HostValue]) Hosts {
 	}
 }
 
+const hostAliasHopLimit = 16
+
 // Return the search result and whether to match the parameter `isDomain`
 func (h *Hosts) Search(domain string, isDomain bool) (*HostValue, bool) {
 	if value := h.DomainTrie.Search(domain); value != nil {
 		hostValue := value.Data()
-		for {
+		seen := map[string]struct{}{domain: {}}
+		for hops := 0; hops < hostAliasHopLimit; hops++ {
 			if isDomain && hostValue.IsDomain {
 				return &hostValue, true
-			} else {
-				if node := h.DomainTrie.Search(hostValue.Domain); node != nil {
-					hostValue = node.Data()
-				} else {
-					break
-				}
 			}
+			if !hostValue.IsDomain || hostValue.Domain == "" {
+				break
+			}
+			if _, dup := seen[hostValue.Domain]; dup {
+				break
+			}
+			seen[hostValue.Domain] = struct{}{}
+			node := h.DomainTrie.Search(hostValue.Domain)
+			if node == nil {
+				break
+			}
+			hostValue = node.Data()
 		}
 		if isDomain == hostValue.IsDomain {
 			return &hostValue, true
