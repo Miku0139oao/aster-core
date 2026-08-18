@@ -129,7 +129,7 @@ aster-core.service
 aster-core@.service
 ```
 
-Package and systemd details: [Linux packages and systemd](/deployment/linux). Building a production unit from a raw binary: [Linux VPS deployment](/tutorials/linux-production). That tutorial still shows a `vX.Y.Z` placeholder; until an official `v*` exists, substitute the `alpha-main-<sha>` asset name from `Prerelease-main`.
+Package and systemd details: [Linux packages and systemd](/en/deployment/linux). Building a production unit from a raw binary: [Linux VPS deployment](/en/tutorials/linux-production). That tutorial still shows a `vX.Y.Z` placeholder; until an official `v*` exists, substitute the `alpha-main-<sha>` asset name from `Prerelease-main`.
 
 ## Windows
 
@@ -210,7 +210,7 @@ readlink -f /usr/bin/mihomo
 
 `readlink` should resolve to `/usr/libexec/aster-core`. `-v` may still print `Mihomo Meta`; Nikki’s LuCI backend parses that compatibility string.
 
-Full integration, Kernel DIRECT, and switching from an older Mihomo package: [OpenWrt and Nikki](/deployment/openwrt).
+Full integration, Kernel DIRECT, and switching from an older Mihomo package: [OpenWrt and Nikki](/en/deployment/openwrt).
 
 ## Docker
 
@@ -258,9 +258,9 @@ Windows:
 
 Next:
 
-- Minimal start: [Getting started](/guide/getting-started)
-- Node setup through `curl` verification: [First proxy](/tutorials/first-proxy)
-- Field reference: [Configuration](/reference/configuration)
+- Minimal start: [Getting started](/en/guide/getting-started)
+- Node setup through `curl` verification: [First proxy](/en/tutorials/first-proxy)
+- Field reference: [Configuration](/en/reference/configuration)
 
 ## Build from source
 
@@ -274,4 +274,4 @@ CGO_ENABLED=0 go build -tags with_gvisor -trimpath -o aster-core .
 ./aster-core -v
 ```
 
-More targets: [Build and test](/development/build-test). A plain `go build` does not inject the release version and is not a substitute for a published asset.
+More targets: [Build and test](/en/development/build-test). A plain `go build` does not inject the release version and is not a substitute for a published asset.
