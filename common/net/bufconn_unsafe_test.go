@@ -78,6 +78,21 @@ func TestBufferedConnGrow(t *testing.T) {
 }
 
 func TestBufferedConnAppendData(t *testing.T) {
+	t.Run("invalidates unread state", func(t *testing.T) {
+		conn := NewBufferedConn(&testReaderConn{Reader: bytes.NewReader([]byte("underlying"))})
+		_, err := conn.Peek(1)
+		require.NoError(t, err)
+		read, err := conn.ReadByte()
+		require.NoError(t, err)
+		require.Equal(t, byte('u'), read)
+		require.True(t, conn.AppendData([]byte("appended")))
+		require.ErrorIs(t, conn.UnreadByte(), bufio.ErrInvalidUnreadByte)
+
+		read, err = conn.ReadByte()
+		require.NoError(t, err)
+		require.Equal(t, byte('n'), read)
+	})
+
 	t.Run("prepends to unread underlying data", func(t *testing.T) {
 		conn := NewBufferedConn(&testReaderConn{Reader: bytes.NewReader([]byte("underlying"))})
 		require.True(t, conn.AppendData([]byte("appended")))

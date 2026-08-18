@@ -41,6 +41,10 @@ func (c *BufferedConn) Grow(size int) {
 }
 
 func (c *BufferedConn) AppendData(buf []byte) (ok bool) {
+	if len(buf) == 0 {
+		return true
+	}
+
 	b := (*bufioReader)(unsafe.Pointer(c.r))
 	needed := b.w - b.r + len(buf)
 	if needed > len(b.buf) {
