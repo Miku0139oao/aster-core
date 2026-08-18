@@ -17,15 +17,15 @@ type Allocator interface {
 
 // defaultAllocator for incoming frames, optimized to prevent overwriting after zeroing
 type defaultAllocator struct {
-	buffers [11]sync.Pool
+	buffers [12]sync.Pool
 }
 
-// NewAllocator initiates a []byte allocator for frames less than 65536 bytes,
+// NewAllocator initiates a []byte allocator for frames up to 128 KiB,
 // the waste(memory fragmentation) of space allocation is guaranteed to be
 // no more than 50%.
 func NewAllocator() Allocator {
 	return &defaultAllocator{
-		buffers: [...]sync.Pool{ // 64B -> 64K
+		buffers: [...]sync.Pool{ // 64B -> 128K
 			{New: func() any { return new([1 << 6]byte) }},
 			{New: func() any { return new([1 << 7]byte) }},
 			{New: func() any { return new([1 << 8]byte) }},
@@ -37,6 +37,7 @@ func NewAllocator() Allocator {
 			{New: func() any { return new([1 << 14]byte) }},
 			{New: func() any { return new([1 << 15]byte) }},
 			{New: func() any { return new([1 << 16]byte) }},
+			{New: func() any { return new([1 << 17]byte) }},
 		},
 	}
 }
@@ -48,7 +49,7 @@ func (alloc *defaultAllocator) Get(size int) []byte {
 		panic("alloc.Get: len out of range")
 	case size == 0:
 		return nil
-	case size > 65536:
+	case size > 1<<17:
 		return make([]byte, size)
 	default:
 		var index uint16
@@ -84,6 +85,8 @@ func (alloc *defaultAllocator) Get(size int) []byte {
 			return buffer.(*[1 << 15]byte)[:size]
 		case 10:
 			return buffer.(*[1 << 16]byte)[:size]
+		case 11:
+			return buffer.(*[1 << 17]byte)[:size]
 		default:
 			panic("invalid pool index")
 		}
@@ -93,12 +96,15 @@ func (alloc *defaultAllocator) Get(size int) []byte {
 // Put returns a []byte to pool for future use,
 // which the cap must be exactly 2^n
 func (alloc *defaultAllocator) Put(buf []byte) error {
-	if cap(buf) == 0 || cap(buf) > 65536 {
+	if cap(buf) == 0 || cap(buf) > 1<<17 {
 		return nil
 	}
 
 	bits := msb(cap(buf))
 	if cap(buf) != 1<<bits {
+		if cap(buf) > 1<<16 {
+			return nil
+		}
 		return errors.New("allocator Put() incorrect buffer size")
 	}
 	if cap(buf) < 1<<6 {
@@ -132,6 +138,8 @@ func (alloc *defaultAllocator) Put(buf []byte) error {
 		alloc.buffers[bits].Put((*[1 << 15]byte)(buf))
 	case 10:
 		alloc.buffers[bits].Put((*[1 << 16]byte)(buf))
+	case 11:
+		alloc.buffers[bits].Put((*[1 << 17]byte)(buf))
 	default:
 		panic("invalid pool index")
 	}
