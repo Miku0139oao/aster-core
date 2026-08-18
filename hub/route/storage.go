@@ -32,20 +32,20 @@ func getStorage(w http.ResponseWriter, r *http.Request) {
 
 func setStorage(w http.ResponseWriter, r *http.Request) {
 	key := getEscapeParam(r, "key")
-	data, err := io.ReadAll(r.Body)
+	data, err := io.ReadAll(io.LimitReader(r.Body, requestBodyLimit+1))
 	if err != nil {
 		render.Status(r, http.StatusBadRequest)
 		render.JSON(w, r, newError(err.Error()))
 		return
 	}
+	if len(data) > requestBodyLimit {
+		render.Status(r, http.StatusRequestEntityTooLarge)
+		render.JSON(w, r, newError("payload exceeds 1MB limit"))
+		return
+	}
 	if !json.Valid(data) {
 		render.Status(r, http.StatusBadRequest)
 		render.JSON(w, r, ErrBadRequest)
-		return
-	}
-	if len(data) > 1024*1024 {
-		render.Status(r, http.StatusRequestEntityTooLarge)
-		render.JSON(w, r, newError("payload exceeds 1MB limit"))
 		return
 	}
 	cachefile.Cache().SetStorage(key, data)
