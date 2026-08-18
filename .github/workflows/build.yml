@@ -328,16 +328,25 @@ jobs:
       run: |
         set -euo pipefail
         RANGE_END="${GITHUB_SHA}"
-        # List everything since the last numbered v* tag (v1.19.29 is the
-        # Aster baseline). The previous Prerelease-* tag only covers a
-        # handful of CI commits and hid the real changelog when the last
-        # body was GitHub auto-PR notes plus Mihomo wiki links.
-        if PREVERSION="$(git describe --tags --abbrev=0 --match 'v[0-9]*' "${RANGE_END}^" 2>/dev/null)"; then
-          RANGE="${PREVERSION}...${RANGE_END}"
+        git fetch --tags --force origin || true
+        # Aster forked at mihomo v1.19.29 (e26714a1). Never fall back to
+        # the repo root: git describe without tags did that once and
+        # dumped 1800+ upstream commits into Prerelease-main.
+        ASTER_BASELINE="e26714a1"
+        if git rev-parse --verify --quiet "refs/tags/v1.19.29^{commit}" >/dev/null; then
+          RANGE="v1.19.29..${RANGE_END}"
+        elif git cat-file -e "${ASTER_BASELINE}^{commit}" 2>/dev/null; then
+          RANGE="${ASTER_BASELINE}..${RANGE_END}"
         else
-          RANGE="$(git rev-list --max-parents=0 "${RANGE_END}")...${RANGE_END}"
+          echo "Aster baseline tag/commit missing; using last 80 commits" >&2
+          RANGE="${RANGE_END}~80..${RANGE_END}"
         fi
+        echo "Release notes range: ${RANGE}"
         bash ./.github/genReleaseNote.sh -v "${RANGE}"
+        if [ "$(wc -l < release.md)" -gt 250 ]; then
+          echo "Generated notes are too long for range ${RANGE}" >&2
+          exit 1
+        fi
         {
           echo "Release created at ${BUILDTIME}"
           echo "Synchronize ${GITHUB_REF_NAME} at \`${RANGE_END:0:7}\`."
