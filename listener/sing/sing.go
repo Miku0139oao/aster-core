@@ -234,10 +234,8 @@ func (h *ListenerHandler) NewPacket(ctx context.Context, key netip.AddrPort, buf
 }
 
 func (h *ListenerHandler) handlePacket(ctx context.Context, cPacket *packet, source M.Socksaddr, destination M.Socksaddr) {
-	cMetadata := &C.Metadata{
-		NetWork: C.UDP,
-		Type:    h.Type,
-	}
+	cMetadata := acquirePacketMetadata(h.Type)
+	cPacket.metadata = cMetadata
 	if source.IsIP() && source.Fqdn == "" {
 		cMetadata.RawSrcAddr = source.Unwrap().UDPAddr()
 	}
@@ -270,11 +268,26 @@ func ShouldIgnorePacketError(err error) bool {
 }
 
 type packet struct {
-	writer *network.NetPacketWriter
-	mutex  *sync.Mutex
-	rAddr  net.Addr
-	lAddr  net.Addr
-	buff   *buf.Buffer
+	writer   *network.NetPacketWriter
+	mutex    *sync.Mutex
+	rAddr    net.Addr
+	lAddr    net.Addr
+	buff     *buf.Buffer
+	metadata *C.Metadata
+}
+
+var packetMetadataPool = sync.Pool{New: func() any { return new(C.Metadata) }}
+
+func acquirePacketMetadata(inboundType C.Type) *C.Metadata {
+	metadata := packetMetadataPool.Get().(*C.Metadata)
+	metadata.NetWork = C.UDP
+	metadata.Type = inboundType
+	return metadata
+}
+
+func releasePacketMetadata(metadata *C.Metadata) {
+	*metadata = C.Metadata{}
+	packetMetadataPool.Put(metadata)
 }
 
 func (c *packet) Data() []byte {
@@ -306,6 +319,10 @@ func (c *packet) LocalAddr() net.Addr {
 
 func (c *packet) Drop() {
 	c.buff.Release()
+	if c.metadata != nil {
+		releasePacketMetadata(c.metadata)
+		c.metadata = nil
+	}
 }
 
 func (c *packet) InAddr() net.Addr {

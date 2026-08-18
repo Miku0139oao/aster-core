@@ -3,6 +3,7 @@ package log
 import (
 	"fmt"
 	"os"
+	"sync/atomic"
 
 	"github.com/Miku0139oao/aster-core/common/observable"
 
@@ -12,10 +13,11 @@ import (
 var (
 	logCh  = make(chan Event)
 	source = observable.NewObservable[Event](logCh)
-	level  = INFO
+	level  atomic.Int32
 )
 
 func init() {
+	level.Store(int32(INFO))
 	log.SetOutput(os.Stdout)
 	log.SetLevel(log.DebugLevel)
 	log.SetFormatter(&log.TextFormatter{
@@ -35,27 +37,19 @@ func (e *Event) Type() string {
 }
 
 func Infoln(format string, v ...any) {
-	event := newLog(INFO, format, v...)
-	logCh <- event
-	print(event)
+	emit(INFO, format, v...)
 }
 
 func Warnln(format string, v ...any) {
-	event := newLog(WARNING, format, v...)
-	logCh <- event
-	print(event)
+	emit(WARNING, format, v...)
 }
 
 func Errorln(format string, v ...any) {
-	event := newLog(ERROR, format, v...)
-	logCh <- event
-	print(event)
+	emit(ERROR, format, v...)
 }
 
 func Debugln(format string, v ...any) {
-	event := newLog(DEBUG, format, v...)
-	logCh <- event
-	print(event)
+	emit(DEBUG, format, v...)
 }
 
 func Fatalln(format string, v ...any) {
@@ -72,15 +66,31 @@ func UnSubscribe(sub observable.Subscription[Event]) {
 }
 
 func Level() LogLevel {
-	return level
+	return LogLevel(level.Load())
 }
 
 func SetLevel(newLevel LogLevel) {
-	level = newLevel
+	level.Store(int32(newLevel))
+}
+
+// Enabled reports whether a log call at logLevel has an active destination.
+// Controller log subscribers receive all levels and apply their own filter,
+// so their presence also enables event creation.
+func Enabled(logLevel LogLevel) bool {
+	return logLevel >= Level() || source.HasSubscribers()
+}
+
+func emit(logLevel LogLevel, format string, v ...any) {
+	if !Enabled(logLevel) {
+		return
+	}
+	event := newLog(logLevel, format, v...)
+	logCh <- event
+	print(event)
 }
 
 func print(data Event) {
-	if data.LogLevel < level {
+	if data.LogLevel < Level() {
 		return
 	}
 

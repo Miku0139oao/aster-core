@@ -165,6 +165,32 @@ ip rule
 ip route show table all
 ```
 
+## Kernel DIRECT 把所有節點與 DIRECT 一起打掛
+
+OpenWrt 上 `auto-redirect` 會把 Aster 自己的 SYN 再導回來。若 core 在 `handleTCPConn` 把本機來源的 REDIR／TUN SYN 直接丟掉，DIRECT 和未綁定介面的節點會同時 timeout。正確行為是讓封包走完規則，由 `DIRECT.CheckConn`、kernel-direct exclude set 與 30 秒零位元組 TCP reaper 處理迴圈。
+
+```sh
+/usr/bin/mihomo -v
+curl -sS -H "Authorization: Bearer $SECRET" \
+  http://127.0.0.1:9090/proxies/DIRECT/delay?timeout=8000\&url=http://www.gstatic.com/generate_204
+```
+
+`-v` 應為不含 inbound-drop 實驗的發行；delay 應回數字而不是空或 timeout。
+
+## Dual-WAN 延遲測試全部失敗
+
+`tun.auto-detect-interface: true` 在 ECMP／macvlan／mwan3 上常讓 `FindInterfaceName` 回 `<invalid>`，socket bind 失敗。設成 `false`，並確認 Nikki `mixin.uc` 在 `tun_kernel_direct` 時沒有再寫回 `true`。
+
+```sh
+yq -M '.tun["auto-detect-interface"]' /etc/nikki/run/config.yaml
+```
+
+## 連線數與記憶體暴漲（大量零位元組 TCP）
+
+Aster 的 DIRECT SYN 被 auto-redirect 再抓回來時，會留下沒有 payload 的 TCP tracker。30 秒 reaper 會關這些 TCP；UDP（含 Wi‑Fi 通話 `500`／`4500`）不會動。不要用 `DELETE /connections` 當清理手段。
+
+先看 `GET /connections` 的 `upload`／`download` 是否為 0，以及來源是否為路由器自己的 WAN IP。接著確認 dest 有沒有進 `inet4_route_exclude_address_set`，以及 `GET /api/aster/kernel-direct/status` 的 `learned_sets`。
+
 ## Iptables 與 TUN 衝突
 
 自動 iptables management 與 TUN 不能同時啟用。決定由誰負責透明攔截：

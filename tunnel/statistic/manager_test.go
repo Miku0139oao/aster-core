@@ -3,7 +3,10 @@ package statistic
 import (
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/Miku0139oao/aster-core/common/atomic"
+	"github.com/Miku0139oao/aster-core/common/utils"
 	C "github.com/Miku0139oao/aster-core/constant"
 
 	"github.com/stretchr/testify/require"
@@ -26,15 +29,195 @@ type trackerManagerTest struct {
 func (t *trackerManagerTest) ID() string         { return t.id }
 func (t *trackerManagerTest) Info() *TrackerInfo { return t.info }
 
+type reapTracker struct {
+	trackerManagerTest
+	manager    *Manager
+	closeOnce  sync.Once
+	closeCount int
+	closed     bool
+}
+
+func (t *reapTracker) Close() error {
+	t.closeOnce.Do(func() {
+		t.closed = true
+		t.closeCount++
+		if t.manager != nil {
+			t.manager.Leave(t)
+		}
+	})
+	return nil
+}
+
+func newReapTracker(manager *Manager, id string, info *TrackerInfo) *reapTracker {
+	return &reapTracker{
+		trackerManagerTest: trackerManagerTest{id: id, info: info},
+		manager:            manager,
+	}
+}
+
+func TestManagerReapsIdleZeroByteTCP(t *testing.T) {
+	manager := &Manager{}
+	stale := newReapTracker(manager, "stale", &TrackerInfo{
+		UUID:          utils.NewUUIDV4(),
+		Start:         time.Now().Add(-time.Minute),
+		UploadTotal:   atomic.NewInt64(0),
+		DownloadTotal: atomic.NewInt64(0),
+		Metadata:      &C.Metadata{NetWork: C.TCP, DstPort: 6651},
+	})
+	live := newReapTracker(manager, "live", &TrackerInfo{
+		UUID:          utils.NewUUIDV4(),
+		Start:         time.Now().Add(-time.Minute),
+		UploadTotal:   atomic.NewInt64(12),
+		DownloadTotal: atomic.NewInt64(0),
+		Metadata:      &C.Metadata{NetWork: C.TCP, DstPort: 6651},
+	})
+	ike := newReapTracker(manager, "ike", &TrackerInfo{
+		UUID:          utils.NewUUIDV4(),
+		Start:         time.Now().Add(-time.Minute),
+		UploadTotal:   atomic.NewInt64(0),
+		DownloadTotal: atomic.NewInt64(0),
+		Metadata:      &C.Metadata{NetWork: C.UDP, DstPort: 500},
+	})
+	manager.Join(stale)
+	manager.Join(live)
+	manager.Join(ike)
+	if got := manager.reapIdleZeroByteTCP(time.Now()); got != 1 {
+		t.Fatalf("reaped %d, want 1", got)
+	}
+	if !stale.closed || stale.closeCount != 1 {
+		t.Fatalf("zero-byte TCP tracker should close exactly once, closed=%v count=%d", stale.closed, stale.closeCount)
+	}
+	if live.closed || ike.closed {
+		t.Fatal("active TCP and UDP/IKE trackers must stay")
+	}
+	require.Equal(t, 2, manager.ConnectionCount())
+}
+
+func TestManagerReapSkipsYoungZeroByteTCP(t *testing.T) {
+	manager := &Manager{}
+	young := newReapTracker(manager, "young", &TrackerInfo{
+		UUID:          utils.NewUUIDV4(),
+		Start:         time.Now().Add(-10 * time.Second),
+		UploadTotal:   atomic.NewInt64(0),
+		DownloadTotal: atomic.NewInt64(0),
+		Metadata:      &C.Metadata{NetWork: C.TCP, DstPort: 6651},
+	})
+	manager.Join(young)
+	require.Zero(t, manager.reapIdleZeroByteTCP(time.Now()))
+	require.False(t, young.closed)
+	require.Equal(t, 1, manager.ConnectionCount())
+}
+
+func TestManagerReapSkipsTCPPorts500And4500(t *testing.T) {
+	manager := &Manager{}
+	start := time.Now().Add(-time.Minute)
+	ike500 := newReapTracker(manager, "ike500", &TrackerInfo{
+		UUID:          utils.NewUUIDV4(),
+		Start:         start,
+		UploadTotal:   atomic.NewInt64(0),
+		DownloadTotal: atomic.NewInt64(0),
+		Metadata:      &C.Metadata{NetWork: C.TCP, DstPort: 500},
+	})
+	ike4500 := newReapTracker(manager, "ike4500", &TrackerInfo{
+		UUID:          utils.NewUUIDV4(),
+		Start:         start,
+		UploadTotal:   atomic.NewInt64(0),
+		DownloadTotal: atomic.NewInt64(0),
+		Metadata:      &C.Metadata{NetWork: C.TCP, DstPort: 4500},
+	})
+	manager.Join(ike500)
+	manager.Join(ike4500)
+	require.Zero(t, manager.reapIdleZeroByteTCP(time.Now()))
+	require.False(t, ike500.closed)
+	require.False(t, ike4500.closed)
+	require.Equal(t, 2, manager.ConnectionCount())
+}
+
+func TestManagerReapCloseIsIdempotent(t *testing.T) {
+	manager := &Manager{}
+	stale := newReapTracker(manager, "stale", &TrackerInfo{
+		UUID:          utils.NewUUIDV4(),
+		Start:         time.Now().Add(-time.Minute),
+		UploadTotal:   atomic.NewInt64(0),
+		DownloadTotal: atomic.NewInt64(0),
+		Metadata:      &C.Metadata{NetWork: C.TCP, DstPort: 6651},
+	})
+	manager.Join(stale)
+
+	manager.safeReapClose(stale)
+	manager.safeReapClose(stale)
+	require.True(t, stale.closed)
+	require.Equal(t, 1, stale.closeCount)
+	require.Zero(t, manager.ConnectionCount())
+
+	// Simulate handleSocket defer Close after the reaper already closed.
+	require.NoError(t, stale.Close())
+	require.Equal(t, 1, stale.closeCount)
+}
+
+func TestManagerReapCloseConcurrentWithHandleSocket(t *testing.T) {
+	manager := &Manager{}
+	stale := newReapTracker(manager, "stale", &TrackerInfo{
+		UUID:          utils.NewUUIDV4(),
+		Start:         time.Now().Add(-time.Minute),
+		UploadTotal:   atomic.NewInt64(0),
+		DownloadTotal: atomic.NewInt64(0),
+		Metadata:      &C.Metadata{NetWork: C.TCP, DstPort: 6651},
+	})
+	manager.Join(stale)
+
+	done := make(chan struct{})
+	go func() {
+		manager.safeReapClose(stale)
+		close(done)
+	}()
+	require.NoError(t, stale.Close())
+	<-done
+
+	require.True(t, stale.closed)
+	require.Equal(t, 1, stale.closeCount)
+	require.Zero(t, manager.ConnectionCount())
+}
+
+func TestTrackerEligibleForZeroByteReap(t *testing.T) {
+	now := time.Now()
+	staleStart := now.Add(-time.Minute)
+
+	require.True(t, trackerEligibleForZeroByteReap(&TrackerInfo{
+		Start:         staleStart,
+		UploadTotal:   atomic.NewInt64(0),
+		DownloadTotal: atomic.NewInt64(0),
+		Metadata:      &C.Metadata{NetWork: C.TCP, DstPort: 6651},
+	}, now))
+	require.False(t, trackerEligibleForZeroByteReap(&TrackerInfo{
+		Start:         now.Add(-10 * time.Second),
+		UploadTotal:   atomic.NewInt64(0),
+		DownloadTotal: atomic.NewInt64(0),
+		Metadata:      &C.Metadata{NetWork: C.TCP, DstPort: 6651},
+	}, now))
+	require.False(t, trackerEligibleForZeroByteReap(&TrackerInfo{
+		Start:         staleStart,
+		UploadTotal:   atomic.NewInt64(0),
+		DownloadTotal: atomic.NewInt64(0),
+		Metadata:      &C.Metadata{NetWork: C.UDP, DstPort: 500},
+	}, now))
+	require.False(t, trackerEligibleForZeroByteReap(&TrackerInfo{
+		Start:         staleStart,
+		UploadTotal:   atomic.NewInt64(0),
+		DownloadTotal: atomic.NewInt64(0),
+		Metadata:      &C.Metadata{NetWork: C.TCP, DstPort: 4500},
+	}, now))
+}
+
 func TestManagerTracksConnectionCountsByPrincipal(t *testing.T) {
 	manager := &Manager{}
 	first := &trackerManagerTest{
 		id:   "first",
-		info: &TrackerInfo{Metadata: &C.Metadata{InName: "vless-in", InUser: "user-id"}},
+		info: &TrackerInfo{UUID: utils.NewUUIDV4(), Metadata: &C.Metadata{InName: "vless-in", InUser: "user-id"}},
 	}
 	second := &trackerManagerTest{
 		id:   "second",
-		info: &TrackerInfo{Metadata: &C.Metadata{InName: "vless-in", InUser: "user-id"}},
+		info: &TrackerInfo{UUID: utils.NewUUIDV4(), Metadata: &C.Metadata{InName: "vless-in", InUser: "user-id"}},
 	}
 
 	manager.Join(first)

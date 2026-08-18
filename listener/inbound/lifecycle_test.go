@@ -35,3 +35,18 @@ func TestTunAddressIsEmptyWhenStopped(t *testing.T) {
 	require.NoError(t, tun.Close())
 	require.Empty(t, tun.Address())
 }
+
+func TestNewTunKernelDirectMaxEntriesContract(t *testing.T) {
+	tun, err := NewTun(&TunOption{BaseOption: BaseOption{NameStr: "tun", Listen: "127.0.0.1", Port: "0"}})
+	require.NoError(t, err)
+	require.Equal(t, uint32(4096), tun.tun.KernelDirectMaxEntries)
+	config, ok := tun.Config().(*TunOption)
+	require.True(t, ok)
+	require.Equal(t, uint32(4096), config.KernelDirectMaxEntries)
+
+	_, err = NewTun(&TunOption{
+		BaseOption:             BaseOption{NameStr: "tun", Listen: "127.0.0.1", Port: "0"},
+		KernelDirectMaxEntries: 65537,
+	})
+	require.Error(t, err)
+}

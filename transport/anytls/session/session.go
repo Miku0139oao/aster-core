@@ -12,7 +12,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Miku0139oao/aster-core/common/buf"
 	"github.com/Miku0139oao/aster-core/common/pool"
 	"github.com/Miku0139oao/aster-core/constant"
 	"github.com/Miku0139oao/aster-core/log"
@@ -383,13 +382,13 @@ func (s *Session) writeDataFrame(sid uint32, data []byte) (int, error) {
 		return 0, nil
 	}
 	if dataLen <= maxFrameDataLen {
-		buffer := buf.NewSize(dataLen + headerOverHeadSize)
-		buffer.WriteByte(cmdPSH)
-		binary.BigEndian.PutUint32(buffer.Extend(4), sid)
-		binary.BigEndian.PutUint16(buffer.Extend(2), uint16(dataLen))
-		buffer.Write(data)
-		_, err := s.writeConn(buffer.Bytes())
-		buffer.Release()
+		buffer := pool.Get(dataLen + headerOverHeadSize)
+		buffer[0] = cmdPSH
+		binary.BigEndian.PutUint32(buffer[1:5], sid)
+		binary.BigEndian.PutUint16(buffer[5:7], uint16(dataLen))
+		copy(buffer[headerOverHeadSize:], data)
+		_, err := s.writeConn(buffer)
+		_ = pool.Put(buffer)
 		if err != nil {
 			return 0, err
 		}
@@ -397,22 +396,23 @@ func (s *Session) writeDataFrame(sid uint32, data []byte) (int, error) {
 	}
 
 	frameCount := (dataLen + maxFrameDataLen - 1) / maxFrameDataLen
-	buffer := buf.NewSize(dataLen + frameCount*headerOverHeadSize)
-	defer buffer.Release()
+	buffer := pool.Get(dataLen + frameCount*headerOverHeadSize)
+	defer pool.Put(buffer)
 
-	for written := 0; written < dataLen; {
+	for written, offset := 0, 0; written < dataLen; {
 		chunk := dataLen - written
 		if chunk > maxFrameDataLen {
 			chunk = maxFrameDataLen
 		}
-		buffer.WriteByte(cmdPSH)
-		binary.BigEndian.PutUint32(buffer.Extend(4), sid)
-		binary.BigEndian.PutUint16(buffer.Extend(2), uint16(chunk))
-		buffer.Write(data[written : written+chunk])
+		buffer[offset] = cmdPSH
+		binary.BigEndian.PutUint32(buffer[offset+1:offset+5], sid)
+		binary.BigEndian.PutUint16(buffer[offset+5:offset+7], uint16(chunk))
+		copy(buffer[offset+headerOverHeadSize:offset+headerOverHeadSize+chunk], data[written:written+chunk])
 		written += chunk
+		offset += headerOverHeadSize + chunk
 	}
 
-	if _, err := s.writeConn(buffer.Bytes()); err != nil {
+	if _, err := s.writeConn(buffer); err != nil {
 		return 0, err
 	}
 	return dataLen, nil
@@ -421,16 +421,16 @@ func (s *Session) writeDataFrame(sid uint32, data []byte) (int, error) {
 func (s *Session) writeControlFrame(frame frame) (int, error) {
 	dataLen := len(frame.data)
 
-	buffer := buf.NewSize(dataLen + headerOverHeadSize)
-	buffer.WriteByte(frame.cmd)
-	binary.BigEndian.PutUint32(buffer.Extend(4), frame.sid)
-	binary.BigEndian.PutUint16(buffer.Extend(2), uint16(dataLen))
-	buffer.Write(frame.data)
+	buffer := pool.Get(dataLen + headerOverHeadSize)
+	buffer[0] = frame.cmd
+	binary.BigEndian.PutUint32(buffer[1:5], frame.sid)
+	binary.BigEndian.PutUint16(buffer[5:7], uint16(dataLen))
+	copy(buffer[headerOverHeadSize:], frame.data)
 
 	s.conn.SetWriteDeadline(time.Now().Add(time.Second * 5))
 
-	_, err := s.writeConn(buffer.Bytes())
-	buffer.Release()
+	_, err := s.writeConn(buffer)
+	_ = pool.Put(buffer)
 	if err != nil {
 		s.Close()
 		return 0, err

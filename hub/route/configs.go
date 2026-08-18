@@ -1,11 +1,13 @@
 package route
 
 import (
+	"fmt"
 	"net/netip"
 	"path/filepath"
 
 	"github.com/Miku0139oao/aster-core/adapter/inbound"
 	"github.com/Miku0139oao/aster-core/component/dialer"
+	"github.com/Miku0139oao/aster-core/component/kerneldirect"
 	"github.com/Miku0139oao/aster-core/component/process"
 	"github.com/Miku0139oao/aster-core/component/resolver"
 	"github.com/Miku0139oao/aster-core/component/updater"
@@ -60,7 +62,7 @@ type configSchema struct {
 }
 
 type tunSchema struct {
-	Enable              bool        `yaml:"enable" json:"enable"`
+	Enable              *bool       `yaml:"enable" json:"enable,omitempty"`
 	Device              *string     `yaml:"device" json:"device"`
 	Stack               *C.TUNStack `yaml:"stack" json:"stack"`
 	DNSHijack           *[]string   `yaml:"dns-hijack" json:"dns-hijack"`
@@ -75,6 +77,19 @@ type tunSchema struct {
 	IPRoute2TableIndex                    *int            `yaml:"iproute2-table-index" json:"iproute2-table-index,omitempty"`
 	IPRoute2RuleIndex                     *int            `yaml:"iproute2-rule-index" json:"iproute2-rule-index,omitempty"`
 	AutoRedirect                          *bool           `yaml:"auto-redirect" json:"auto-redirect,omitempty"`
+	KernelDirect                          *bool           `yaml:"kernel-direct" json:"kernel-direct,omitempty"`
+	KernelDirectMaxEntries                *uint32         `yaml:"kernel-direct-max-entries" json:"kernel-direct-max-entries,omitempty"`
+	KernelDirectEBPF                      *bool           `yaml:"kernel-direct-ebpf" json:"kernel-direct-ebpf,omitempty"`
+	KernelDirectEBPFRequired              *bool           `yaml:"kernel-direct-ebpf-required" json:"kernel-direct-ebpf-required,omitempty"`
+	KernelDirectEBPFInterfaces            *[]string       `yaml:"kernel-direct-ebpf-interfaces" json:"kernel-direct-ebpf-interfaces,omitempty"`
+	KernelDirectEBPFMark                  *uint32         `yaml:"kernel-direct-ebpf-mark" json:"kernel-direct-ebpf-mark,omitempty"`
+	KernelDirectEBPFMaxEntries            *uint32         `yaml:"kernel-direct-ebpf-max-entries" json:"kernel-direct-ebpf-max-entries,omitempty"`
+	KernelDirectEBPFProxy                 *bool           `yaml:"kernel-direct-ebpf-proxy" json:"kernel-direct-ebpf-proxy,omitempty"`
+	KernelDirectEBPFProxyRedirect         *bool           `yaml:"kernel-direct-ebpf-proxy-redirect" json:"kernel-direct-ebpf-proxy-redirect,omitempty"`
+	KernelDirectEBPFProxyMark             *uint32         `yaml:"kernel-direct-ebpf-proxy-mark" json:"kernel-direct-ebpf-proxy-mark,omitempty"`
+	KernelDirectEBPFFlowEntries           *uint32         `yaml:"kernel-direct-ebpf-flow-entries" json:"kernel-direct-ebpf-flow-entries,omitempty"`
+	KernelDirectEBPFDirectPrefixes        *[]netip.Prefix `yaml:"kernel-direct-ebpf-direct-prefixes" json:"kernel-direct-ebpf-direct-prefixes,omitempty"`
+	KernelDirectEBPFProxyPrefixes         *[]netip.Prefix `yaml:"kernel-direct-ebpf-proxy-prefixes" json:"kernel-direct-ebpf-proxy-prefixes,omitempty"`
 	AutoRedirectInputMark                 *uint32         `yaml:"auto-redirect-input-mark" json:"auto-redirect-input-mark,omitempty"`
 	AutoRedirectOutputMark                *uint32         `yaml:"auto-redirect-output-mark" json:"auto-redirect-output-mark,omitempty"`
 	AutoRedirectIPRoute2FallbackRuleIndex *int            `yaml:"auto-redirect-iproute2-fallback-rule-index" json:"auto-redirect-iproute2-fallback-rule-index,omitempty"`
@@ -111,7 +126,7 @@ type tunSchema struct {
 }
 
 type tuicServerSchema struct {
-	Enable                bool               `yaml:"enable" json:"enable"`
+	Enable                *bool              `yaml:"enable" json:"enable,omitempty"`
 	Listen                *string            `yaml:"listen" json:"listen"`
 	Token                 *[]string          `yaml:"token" json:"token"`
 	Users                 *map[string]string `yaml:"users" json:"users,omitempty"`
@@ -140,7 +155,9 @@ func pointerOrDefault[T any](p *T, def T) T {
 
 func pointerOrDefaultTun(p *tunSchema, def LC.Tun) LC.Tun {
 	if p != nil {
-		def.Enable = p.Enable
+		if p.Enable != nil {
+			def.Enable = *p.Enable
+		}
 		if p.Device != nil {
 			def.Device = *p.Device
 		}
@@ -179,6 +196,47 @@ func pointerOrDefaultTun(p *tunSchema, def LC.Tun) LC.Tun {
 		}
 		if p.AutoRedirect != nil {
 			def.AutoRedirect = *p.AutoRedirect
+		}
+		if p.KernelDirect != nil {
+			def.KernelDirect = *p.KernelDirect
+		}
+		if p.KernelDirectMaxEntries != nil {
+			if normalized, err := kerneldirect.NormalizeMaxEntries(*p.KernelDirectMaxEntries); err == nil {
+				def.KernelDirectMaxEntries = normalized
+			}
+		}
+		if p.KernelDirectEBPF != nil {
+			def.KernelDirectEBPF = *p.KernelDirectEBPF
+		}
+		if p.KernelDirectEBPFRequired != nil {
+			def.KernelDirectEBPFRequired = *p.KernelDirectEBPFRequired
+		}
+		if p.KernelDirectEBPFInterfaces != nil {
+			def.KernelDirectEBPFInterfaces = *p.KernelDirectEBPFInterfaces
+		}
+		if p.KernelDirectEBPFMark != nil {
+			def.KernelDirectEBPFMark = *p.KernelDirectEBPFMark
+		}
+		if p.KernelDirectEBPFMaxEntries != nil {
+			def.KernelDirectEBPFMaxEntries = *p.KernelDirectEBPFMaxEntries
+		}
+		if p.KernelDirectEBPFProxy != nil {
+			def.KernelDirectEBPFProxy = *p.KernelDirectEBPFProxy
+		}
+		if p.KernelDirectEBPFProxyRedirect != nil {
+			def.KernelDirectEBPFProxyRedirect = *p.KernelDirectEBPFProxyRedirect
+		}
+		if p.KernelDirectEBPFProxyMark != nil {
+			def.KernelDirectEBPFProxyMark = *p.KernelDirectEBPFProxyMark
+		}
+		if p.KernelDirectEBPFFlowEntries != nil {
+			def.KernelDirectEBPFFlowEntries = *p.KernelDirectEBPFFlowEntries
+		}
+		if p.KernelDirectEBPFDirectPrefixes != nil {
+			def.KernelDirectEBPFDirectPrefixes = *p.KernelDirectEBPFDirectPrefixes
+		}
+		if p.KernelDirectEBPFProxyPrefixes != nil {
+			def.KernelDirectEBPFProxyPrefixes = *p.KernelDirectEBPFProxyPrefixes
 		}
 		if p.AutoRedirectInputMark != nil {
 			def.AutoRedirectInputMark = *p.AutoRedirectInputMark
@@ -276,7 +334,9 @@ func pointerOrDefaultTun(p *tunSchema, def LC.Tun) LC.Tun {
 
 func pointerOrDefaultTuicServer(p *tuicServerSchema, def LC.TuicServer) LC.TuicServer {
 	if p != nil {
-		def.Enable = p.Enable
+		if p.Enable != nil {
+			def.Enable = *p.Enable
+		}
 		if p.Listen != nil {
 			def.Listen = *p.Listen
 		}
@@ -322,6 +382,12 @@ func patchConfigs(w http.ResponseWriter, r *http.Request) {
 	if err := decodeRequestJSON(w, r, &general); err != nil {
 		render.Status(r, http.StatusBadRequest)
 		render.JSON(w, r, ErrBadRequest)
+		return
+	}
+
+	if general.Tun != nil && general.Tun.KernelDirectMaxEntries != nil && *general.Tun.KernelDirectMaxEntries > kerneldirect.MaximumMaxEntries {
+		render.Status(r, http.StatusBadRequest)
+		render.JSON(w, r, newError(fmt.Sprintf("tun kernel-direct-max-entries exceeds maximum %d", kerneldirect.MaximumMaxEntries)))
 		return
 	}
 

@@ -75,6 +75,8 @@ export default defineConfig({
         ],
       },
       { text: "與 Mihomo 的差異", link: "/reference/mihomo-differences" },
+      { text: "OpenWrt Kernel DIRECT", link: "/deployment/openwrt" },
+      { text: "效能基準", link: "/reference/performance" },
       { text: "AnyTLS + REALITY", link: "/reference/anytls-reality" },
       { text: "設定參考", link: "/reference/configuration" },
       { text: "服務端管理", link: "/aster/overview" },
@@ -103,10 +105,13 @@ export default defineConfig({
       {
         text: "參考",
         items: [
+          { text: "OpenWrt Kernel DIRECT", link: "/deployment/openwrt" },
           { text: "Aster 跟 Mihomo 有什麼不同", link: "/reference/mihomo-differences" },
+          { text: "效能優化與基準", link: "/reference/performance" },
           { text: "AnyTLS + REALITY", link: "/reference/anytls-reality" },
           { text: "命令列與環境變數", link: "/reference/cli" },
           { text: "設定總覽", link: "/reference/configuration" },
+          { text: "流量治理與報表", link: "/reference/traffic-control" },
           { text: "本機接收連線", link: "/reference/inbounds" },
           { text: "遠端節點與分組", link: "/reference/outbounds" },
           { text: "規則與 DNS", link: "/reference/routing-dns" },

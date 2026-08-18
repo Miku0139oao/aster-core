@@ -10,11 +10,14 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	stdatomic "sync/atomic"
 	"time"
 
 	"github.com/Miku0139oao/aster-core/common/atomic"
 	N "github.com/Miku0139oao/aster-core/common/net"
 	"github.com/Miku0139oao/aster-core/common/utils"
+	"github.com/Miku0139oao/aster-core/component/iface"
+	"github.com/Miku0139oao/aster-core/component/kerneldirect"
 	"github.com/Miku0139oao/aster-core/component/loopback"
 	"github.com/Miku0139oao/aster-core/component/nat"
 	"github.com/Miku0139oao/aster-core/component/process"
@@ -68,7 +71,30 @@ var (
 	sniffingEnable    = false
 
 	ruleUpdateCallback = utils.NewCallback[P.RuleProvider]()
+	routingState       stdatomic.Pointer[routingSnapshot]
 )
+
+type routingSnapshot struct {
+	proxies  map[string]C.Proxy
+	rules    []C.Rule
+	subRules map[string][]C.Rule
+	mode     TunnelMode
+}
+
+func init() {
+	publishRoutingState()
+}
+
+// publishRoutingState must be called while configMux is held, except during
+// package initialization before concurrent access is possible.
+func publishRoutingState() {
+	routingState.Store(&routingSnapshot{
+		proxies:  proxies,
+		rules:    rules,
+		subRules: subRules,
+		mode:     mode,
+	})
+}
 
 type tunnel struct{}
 
@@ -104,13 +130,13 @@ func (t tunnel) HandleUDPPacket(packet C.UDPPacket, metadata *C.Metadata) {
 	packetAdapter := C.NewPacketAdapter(packet, metadata)
 	key := packetAdapter.Key()
 
-	hash := utils.MapHash(key)
+	hash := utils.MapHashComparable(key)
 	queueNo := uint(hash) % uint(len(udpQueues))
 
 	select {
 	case udpQueues[queueNo] <- packetAdapter:
 	default:
-		packet.Drop()
+		packetAdapter.Drop()
 	}
 }
 
@@ -210,7 +236,9 @@ func UpdateRules(newRules []C.Rule, newSubRule map[string][]C.Rule, rp map[strin
 	rules = newRules
 	ruleProviders = rp
 	subRules = newSubRule
+	publishRoutingState()
 	configMux.Unlock()
+	kerneldirect.Flush()
 }
 
 // Proxies return all proxies
@@ -233,7 +261,9 @@ func UpdateProxies(newProxies map[string]C.Proxy, newProviders map[string]P.Prox
 	configMux.Lock()
 	proxies = newProxies
 	providers = newProviders
+	publishRoutingState()
 	configMux.Unlock()
+	kerneldirect.Flush()
 }
 
 func UpdateListeners(newListeners map[string]C.InboundListener) {
@@ -251,12 +281,16 @@ func UpdateSniffer(dispatcher *sniffer.Dispatcher) {
 
 // Mode return current mode
 func Mode() TunnelMode {
-	return mode
+	return routingState.Load().mode
 }
 
 // SetMode change the mode of tunnel
 func SetMode(m TunnelMode) {
+	configMux.Lock()
 	mode = m
+	publishRoutingState()
+	configMux.Unlock()
+	kerneldirect.Flush()
 }
 
 func FindProcessMode() process.FindProcessMode {
@@ -316,10 +350,23 @@ func preHandleMetadata(metadata *C.Metadata) error {
 	return nil
 }
 
+// preCheckMetadata performs the only failing part of preHandleMetadata without
+// cloning and mutating the complete per-packet metadata object.
+func preCheckMetadata(metadata *C.Metadata) error {
+	if !needLookupIP(metadata) {
+		return nil
+	}
+	if _, exist := resolver.FindHostByIP(metadata.DstIP); !exist && resolver.IsFakeIP(metadata.DstIP) {
+		return fmt.Errorf("fake DNS record %s missing", metadata.DstIP)
+	}
+	return nil
+}
+
 func resolveMetadata(metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, err error) {
+	state := routingState.Load()
 	if metadata.SpecialProxy != "" {
 		var exist bool
-		proxy, exist = proxies[metadata.SpecialProxy]
+		proxy, exist = state.proxies[metadata.SpecialProxy]
 		if !exist {
 			err = fmt.Errorf("proxy %s not found", metadata.SpecialProxy)
 		}
@@ -379,7 +426,7 @@ func resolveMetadata(metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, err erro
 			}
 		},
 		CheckPassRule: func(adapterName string) bool {
-			adapter, ok := proxies[adapterName]
+			adapter, ok := state.proxies[adapterName]
 			if !ok {
 				return false
 			}
@@ -400,14 +447,14 @@ func resolveMetadata(metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, err erro
 		helper.FindProcess = nil
 	}
 
-	switch mode {
+	switch state.mode {
 	case Direct:
-		proxy = proxies["DIRECT"]
+		proxy = state.proxies["DIRECT"]
 	case Global:
-		proxy = proxies["GLOBAL"]
+		proxy = state.proxies["GLOBAL"]
 	// Rule
 	default:
-		proxy, rule, err = match(metadata, helper)
+		proxy, rule, err = matchWithState(metadata, helper, state)
 	}
 	return
 }
@@ -433,7 +480,7 @@ func handleUDPConn(packet C.PacketAdapter) {
 	}
 	fixMetadata(metadata) // fix some metadata not set via metadata.SetRemoteAddr or metadata.SetRemoteAddress
 
-	if err := preHandleMetadata(metadata.Clone()); err != nil { // precheck without modify metadata
+	if err := preCheckMetadata(metadata); err != nil {
 		packet.Drop()
 		log.Debugln("[Metadata PreHandle] error: %s", err)
 		return
@@ -482,7 +529,7 @@ func handleUDPConn(packet C.PacketAdapter) {
 
 			sender.AddMapping(originMetadata, dialMetadata)
 			oAddrPort := dialMetadata.AddrPort()
-			writeBackProxy := nat.NewWriteBackProxy(packet)
+			writeBackProxy := nat.NewWriteBackProxy(packet.WriteBackTarget())
 
 			go handleUDPToLocal(writeBackProxy, pc, sender, key, oAddrPort)
 			return pc, writeBackProxy, nil
@@ -517,6 +564,11 @@ func handleTCPConn(connCtx C.ConnContext) {
 		return
 	}
 	fixMetadata(metadata) // fix some metadata not set via metadata.SetRemoteAddr or metadata.SetRemoteAddress
+
+	// Do not drop REDIR/TUN SYNs here. auto-redirect has already stolen the
+	// only copy of the packet; returning would blackhole DIRECT and any
+	// unmarked proxy dial (konjac-ai, mo2, etc.). Loop prevention belongs
+	// on DIRECT.CheckConn + ObserveFlow + the zero-byte reaper.
 
 	preHandleFailed := false
 	if err := preHandleMetadata(metadata); err != nil {
@@ -558,6 +610,7 @@ func handleTCPConn(connCtx C.ConnContext) {
 		log.Warnln("[Metadata] parse failed: %s", err.Error())
 		return
 	}
+	observeKernelDirectFlow(metadata, proxy)
 
 	dialMetadata := metadata
 	if len(metadata.Host) > 0 {
@@ -612,6 +665,9 @@ func handleTCPConn(connCtx C.ConnContext) {
 	if err != nil {
 		return
 	}
+	// resolveMetadata may not have a dest IP yet (domain-only match).
+	// After a successful DIRECT dial the peer address is known.
+	observeKernelDirectFlowAfterDial(metadata, proxy, remoteConn)
 	logMetadata(metadata, rule, remoteConn)
 
 	remoteConn = statistic.NewTCPTracker(remoteConn, statistic.DefaultManager, metadata, rule, int64(peekLen), 0, true)
@@ -635,6 +691,9 @@ func logMetadataErr(metadata *C.Metadata, rule C.Rule, proxy C.ProxyAdapter, err
 }
 
 func logMetadata(metadata *C.Metadata, rule C.Rule, remoteConn C.Connection) {
+	if !log.Enabled(log.INFO) {
+		return
+	}
 	switch {
 	case metadata.SpecialProxy != "":
 		log.Infoln("[%s] %s --> %s using %s", strings.ToUpper(metadata.NetWork.String()), metadata.SourceDetail(), metadata.RemoteAddress(), remoteConn.Chains().String())
@@ -644,9 +703,9 @@ func logMetadata(metadata *C.Metadata, rule C.Rule, remoteConn C.Connection) {
 		} else {
 			log.Infoln("[%s] %s --> %s match %s using %s", strings.ToUpper(metadata.NetWork.String()), metadata.SourceDetail(), metadata.RemoteAddress(), rule.RuleType().String(), remoteConn.Chains().String())
 		}
-	case mode == Global:
+	case Mode() == Global:
 		log.Infoln("[%s] %s --> %s using GLOBAL", strings.ToUpper(metadata.NetWork.String()), metadata.SourceDetail(), metadata.RemoteAddress())
-	case mode == Direct:
+	case Mode() == Direct:
 		log.Infoln("[%s] %s --> %s using DIRECT", strings.ToUpper(metadata.NetWork.String()), metadata.SourceDetail(), metadata.RemoteAddress())
 	default:
 		log.Infoln("[%s] %s --> %s doesn't match any rule using %s", strings.ToUpper(metadata.NetWork.String()), metadata.SourceDetail(), metadata.RemoteAddress(), remoteConn.Chains().String())
@@ -654,17 +713,18 @@ func logMetadata(metadata *C.Metadata, rule C.Rule, remoteConn C.Connection) {
 }
 
 func match(metadata *C.Metadata, helper C.RuleMatchHelper) (C.Proxy, C.Rule, error) {
-	configMux.RLock()
-	defer configMux.RUnlock()
+	return matchWithState(metadata, helper, routingState.Load())
+}
 
+func matchWithState(metadata *C.Metadata, helper C.RuleMatchHelper, state *routingSnapshot) (C.Proxy, C.Rule, error) {
 	var rematchChain []string
 	for {
 		var rematchProxy C.Proxy
 		var rematchRule C.Rule
 	GetRules:
-		for _, rule := range getRules(metadata) {
+		for _, rule := range getRules(metadata, state) {
 			if matched, ada := rule.Match(metadata, helper); matched {
-				adapter, ok := proxies[ada]
+				adapter, ok := state.proxies[ada]
 				if !ok {
 					continue
 				}
@@ -708,18 +768,121 @@ func match(metadata *C.Metadata, helper C.RuleMatchHelper) (C.Proxy, C.Rule, err
 			log.Debugln("[Rule] rematch proxy %s update metadata to rematch-name=%q sub-rule=%q", rematchProxy.Name(), metadata.InName, metadata.SpecialRules)
 			continue
 		}
-		return proxies["DIRECT"], nil, nil
+		return state.proxies["DIRECT"], nil, nil
 	}
 }
 
-func getRules(metadata *C.Metadata) []C.Rule {
-	if sr, ok := subRules[metadata.SpecialRules]; ok {
+func getRules(metadata *C.Metadata, state *routingSnapshot) []C.Rule {
+	if sr, ok := state.subRules[metadata.SpecialRules]; ok {
 		log.Debugln("[Rule] use %s rules", metadata.SpecialRules)
 		return sr
 	} else {
 		log.Debugln("[Rule] use default rules")
-		return rules
+		return state.rules
 	}
+}
+
+func observeKernelDirectFlow(metadata *C.Metadata, proxy C.ProxyAdapter) {
+	if metadata == nil || !kernelDirectProxyIsDirect(metadata, proxy) {
+		return
+	}
+	addr := metadata.DstIP.Unmap()
+	if !addr.IsValid() || resolver.IsFakeIP(addr) {
+		return
+	}
+	host := metadata.Host
+	if host == "" {
+		host = addr.String()
+	}
+	kerneldirect.ObserveFlow(host, addr, 10*time.Minute)
+}
+
+// kernelDirectProxyIsDirect reports whether the selected outbound is DIRECT
+// after unwrapping groups (漏網之魚, 節點選擇, URLTest, etc.). Learning only
+// C.Direct adapters left MATCH/group→DIRECT dests in TUN, so Aster's own
+// SYN was auto-redirected again and leaked zero-byte connections.
+func kernelDirectProxyIsDirect(metadata *C.Metadata, proxy C.ProxyAdapter) bool {
+	if proxy == nil {
+		return false
+	}
+	for i := 0; i < 16; i++ {
+		switch proxy.Type() {
+		case C.Direct, C.Compatible:
+			return true
+		}
+		next := proxy.Unwrap(metadata, false)
+		if next == nil {
+			return false
+		}
+		nextAdapter := next.Adapter()
+		if nextAdapter == nil || nextAdapter == proxy {
+			return false
+		}
+		proxy = nextAdapter
+	}
+	return false
+}
+
+func observeKernelDirectFlowAfterDial(metadata *C.Metadata, proxy C.ProxyAdapter, remote net.Conn) {
+	if metadata == nil || !kernelDirectProxyIsDirect(metadata, proxy) {
+		return
+	}
+	if !metadata.DstIP.IsValid() || resolver.IsFakeIP(metadata.DstIP) {
+		if addr := destIPFromConn(remote); addr.IsValid() && !resolver.IsFakeIP(addr) {
+			metadata.DstIP = addr
+		}
+	}
+	observeKernelDirectFlow(metadata, proxy)
+}
+
+func destIPFromConn(conn net.Conn) netip.Addr {
+	if conn == nil {
+		return netip.Addr{}
+	}
+	remote := conn.RemoteAddr()
+	if remote == nil {
+		return netip.Addr{}
+	}
+	var parsed C.Metadata
+	if err := parsed.SetRemoteAddr(remote); err != nil {
+		return netip.Addr{}
+	}
+	return parsed.DstIP.Unmap()
+}
+
+// isHijackedLocalTCP reports a transparent-inbound TCP SYN whose source is a
+// local interface (or loopback) and whose dest is a public address. That is
+// Aster's own DIRECT dial being re-captured by auto-redirect. LAN clients
+// (192.168.1.0/24 etc.) and all UDP — including ePDG 500/4500 — return false.
+func isHijackedLocalTCP(metadata *C.Metadata) bool {
+	if metadata == nil || metadata.NetWork != C.TCP {
+		return false
+	}
+	switch metadata.Type {
+	case C.REDIR, C.TPROXY, C.TUN:
+	default:
+		return false
+	}
+	src := metadata.SourceAddrPort().Addr()
+	if !src.IsValid() {
+		return false
+	}
+	dst := metadata.DstIP.Unmap()
+	if !dst.IsValid() || !dst.IsGlobalUnicast() || dst.IsPrivate() || dst.IsLoopback() {
+		return false
+	}
+	src = src.Unmap()
+	isLocalIP, err := iface.IsLocalIp(src)
+	if err != nil {
+		if !src.IsLoopback() {
+			return false
+		}
+	} else if !isLocalIP && !src.IsLoopback() {
+		return false
+	}
+	// Only drop the DIRECT self-hijack. Proxy node IPs must still go out;
+	// rejecting every public dest here breaks VLESS (konjac-ai, mo2, etc.).
+	return Tunnel.ClassifyKernelDirect(*metadata, metadata.Host, dst)
 }
 
 func shouldStopRetry(err error) bool {

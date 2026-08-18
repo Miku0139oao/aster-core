@@ -4,6 +4,7 @@ import (
 	"encoding"
 	"net/netip"
 
+	"github.com/Miku0139oao/aster-core/component/kerneldirect"
 	C "github.com/Miku0139oao/aster-core/constant"
 	LC "github.com/Miku0139oao/aster-core/listener/config"
 	"github.com/Miku0139oao/aster-core/listener/sing_tun"
@@ -26,6 +27,19 @@ type TunOption struct {
 	IPRoute2TableIndex                    int            `inbound:"iproute2-table-index,omitempty"`
 	IPRoute2RuleIndex                     int            `inbound:"iproute2-rule-index,omitempty"`
 	AutoRedirect                          bool           `inbound:"auto-redirect,omitempty"`
+	KernelDirect                          bool           `inbound:"kernel-direct,omitempty"`
+	KernelDirectMaxEntries                uint32         `inbound:"kernel-direct-max-entries,omitempty"`
+	KernelDirectEBPF                      bool           `inbound:"kernel-direct-ebpf,omitempty"`
+	KernelDirectEBPFRequired              bool           `inbound:"kernel-direct-ebpf-required,omitempty"`
+	KernelDirectEBPFInterfaces            []string       `inbound:"kernel-direct-ebpf-interfaces,omitempty"`
+	KernelDirectEBPFMark                  uint32         `inbound:"kernel-direct-ebpf-mark,omitempty"`
+	KernelDirectEBPFMaxEntries            uint32         `inbound:"kernel-direct-ebpf-max-entries,omitempty"`
+	KernelDirectEBPFProxy                 bool           `inbound:"kernel-direct-ebpf-proxy,omitempty"`
+	KernelDirectEBPFProxyRedirect         bool           `inbound:"kernel-direct-ebpf-proxy-redirect,omitempty"`
+	KernelDirectEBPFProxyMark             uint32         `inbound:"kernel-direct-ebpf-proxy-mark,omitempty"`
+	KernelDirectEBPFFlowEntries           uint32         `inbound:"kernel-direct-ebpf-flow-entries,omitempty"`
+	KernelDirectEBPFDirectPrefixes        []netip.Prefix `inbound:"kernel-direct-ebpf-direct-prefixes,omitempty"`
+	KernelDirectEBPFProxyPrefixes         []netip.Prefix `inbound:"kernel-direct-ebpf-proxy-prefixes,omitempty"`
 	AutoRedirectInputMark                 uint32         `inbound:"auto-redirect-input-mark,omitempty"`
 	AutoRedirectOutputMark                uint32         `inbound:"auto-redirect-output-mark,omitempty"`
 	AutoRedirectIPRoute2FallbackRuleIndex int            `inbound:"auto-redirect-iproute2-fallback-rule-index,omitempty"`
@@ -84,6 +98,11 @@ type Tun struct {
 }
 
 func NewTun(options *TunOption) (*Tun, error) {
+	maxEntries, err := kerneldirect.NormalizeMaxEntries(options.KernelDirectMaxEntries)
+	if err != nil {
+		return nil, err
+	}
+	options.KernelDirectMaxEntries = maxEntries
 	base, err := NewBase(&options.BaseOption)
 	if err != nil {
 		return nil, err
@@ -106,6 +125,19 @@ func NewTun(options *TunOption) (*Tun, error) {
 			IPRoute2TableIndex:                    options.IPRoute2TableIndex,
 			IPRoute2RuleIndex:                     options.IPRoute2RuleIndex,
 			AutoRedirect:                          options.AutoRedirect,
+			KernelDirect:                          options.KernelDirect,
+			KernelDirectMaxEntries:                maxEntries,
+			KernelDirectEBPF:                      options.KernelDirectEBPF,
+			KernelDirectEBPFRequired:              options.KernelDirectEBPFRequired,
+			KernelDirectEBPFInterfaces:            options.KernelDirectEBPFInterfaces,
+			KernelDirectEBPFMark:                  options.KernelDirectEBPFMark,
+			KernelDirectEBPFMaxEntries:            options.KernelDirectEBPFMaxEntries,
+			KernelDirectEBPFProxy:                 options.KernelDirectEBPFProxy,
+			KernelDirectEBPFProxyRedirect:         options.KernelDirectEBPFProxyRedirect,
+			KernelDirectEBPFProxyMark:             options.KernelDirectEBPFProxyMark,
+			KernelDirectEBPFFlowEntries:           options.KernelDirectEBPFFlowEntries,
+			KernelDirectEBPFDirectPrefixes:        options.KernelDirectEBPFDirectPrefixes,
+			KernelDirectEBPFProxyPrefixes:         options.KernelDirectEBPFProxyPrefixes,
 			AutoRedirectInputMark:                 options.AutoRedirectInputMark,
 			AutoRedirectOutputMark:                options.AutoRedirectOutputMark,
 			AutoRedirectIPRoute2FallbackRuleIndex: options.AutoRedirectIPRoute2FallbackRuleIndex,

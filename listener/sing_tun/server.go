@@ -16,6 +16,7 @@ import (
 	"github.com/Miku0139oao/aster-core/adapter/inbound"
 	"github.com/Miku0139oao/aster-core/component/dialer"
 	"github.com/Miku0139oao/aster-core/component/iface"
+	"github.com/Miku0139oao/aster-core/component/kerneldirect"
 	"github.com/Miku0139oao/aster-core/component/resolver"
 	C "github.com/Miku0139oao/aster-core/constant"
 	P "github.com/Miku0139oao/aster-core/constant/provider"
@@ -59,6 +60,8 @@ type Listener struct {
 	cDialerInterfaceFinder dialer.InterfaceFinder
 
 	ruleUpdateCallbackCloser io.Closer
+	kernelDirectCloser       io.Closer
+	kernelDirectFastPath     kerneldirect.FastPath
 	ruleUpdateMutex          sync.Mutex
 	routeAddressMap          map[string]*netipx.IPSet
 	routeExcludeAddressMap   map[string]*netipx.IPSet
@@ -77,6 +80,12 @@ type ListenerHandler struct {
 }
 
 var emptyAddressSet = []*netipx.IPSet{{}}
+
+const kernelDirectRuleSetName = "__aster_kernel_direct__"
+
+type kernelDirectClassifier interface {
+	ClassifyKernelDirect(baseMetadata C.Metadata, host string, addr netip.Addr) bool
+}
 
 func CalculateInterfaceName(name string) (tunName string) {
 	if runtime.GOOS == "darwin" {
@@ -143,6 +152,27 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 	}
 	ctx := context.TODO()
 	rpTunnel := tunnel.(P.Tunnel)
+	var directClassifier kernelDirectClassifier
+	kernelDirectMetadata := C.Metadata{Type: C.TUN}
+	inbound.ApplyAdditions(&kernelDirectMetadata, additions...)
+	if options.KernelDirect {
+		if !supportRedirect || !options.AutoRoute || !options.AutoRedirect {
+			return nil, E.New("kernel-direct requires Linux auto-route and auto-redirect")
+		}
+		var ok bool
+		directClassifier, ok = tunnel.(kernelDirectClassifier)
+		if !ok {
+			return nil, E.New("kernel-direct classifier is unavailable")
+		}
+		if disabled, parseErr := strconv.ParseBool(os.Getenv("DISABLE_NFTABLES")); parseErr == nil && disabled {
+			return nil, E.New("kernel-direct requires nftables")
+		}
+		maxEntries, normalizeErr := kerneldirect.NormalizeMaxEntries(options.KernelDirectMaxEntries)
+		if normalizeErr != nil {
+			return nil, normalizeErr
+		}
+		options.KernelDirectMaxEntries = maxEntries
+	}
 	if options.GSOMaxSize == 0 {
 		options.GSOMaxSize = 65536
 	}
@@ -225,6 +255,20 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 	outputMark := options.AutoRedirectOutputMark
 	if outputMark == 0 {
 		outputMark = tun.DefaultAutoRedirectOutputMark
+	}
+	kernelDirectMark := options.KernelDirectEBPFMark
+	if kernelDirectMark == 0 {
+		kernelDirectMark = kerneldirect.DefaultEBPFMark
+	}
+	kernelProxyMark := options.KernelDirectEBPFProxyMark
+	if kernelProxyMark == 0 {
+		kernelProxyMark = kerneldirect.DefaultEBPFProxyMark
+	}
+	if options.KernelDirectEBPF && (kernelDirectMark&inputMark != 0 || kernelDirectMark&outputMark != 0) {
+		return nil, E.New("kernel-direct eBPF mark overlaps auto-redirect marks")
+	}
+	if options.KernelDirectEBPFProxy && (kernelProxyMark&kernelDirectMark != 0 || kernelProxyMark&inputMark != 0 || kernelProxyMark&outputMark != 0) {
+		return nil, E.New("kernel-direct eBPF proxy mark overlaps DIRECT or auto-redirect marks")
 	}
 	includeUID := uidToRange(options.IncludeUID)
 	if len(options.IncludeUIDRange) > 0 {
@@ -424,6 +468,10 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 	if options.AutoRedirect {
 		l.routeAddressMap = make(map[string]*netipx.IPSet)
 		l.routeExcludeAddressMap = make(map[string]*netipx.IPSet)
+		if options.KernelDirect {
+			l.routeExcludeAddressMap[kernelDirectRuleSetName] = &netipx.IPSet{}
+			l.routeExcludeAddressSet = maps.Values(l.routeExcludeAddressMap)
+		}
 
 		if !options.AutoRoute {
 			return nil, E.New("`auto-route` is required by `auto-redirect`")
@@ -447,6 +495,9 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 		}
 
 		var markMode bool
+		if options.KernelDirect {
+			markMode = true
+		}
 		for _, routeAddressSet := range options.RouteAddressSet {
 			rp, loaded := rpTunnel.RuleProviders()[routeAddressSet]
 			if !loaded {
@@ -533,6 +584,42 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 			l.autoRedirect.UpdateRouteAddressSet()
 			l.ruleUpdateCallbackCloser = rpTunnel.RuleUpdateCallback().Register(l.ruleUpdateCallback)
 		}
+		if options.KernelDirect {
+			if options.KernelDirectEBPF {
+				log.Warnln("[TUN] experimental TC eBPF classifier enabled; verify OpenWrt flow-offload throughput with a same-server A/B test")
+				proxyRedirectInterface := ""
+				if options.KernelDirectEBPFProxyRedirect {
+					proxyRedirectInterface = tunName
+				}
+				l.kernelDirectFastPath, err = kerneldirect.NewFastPath(kerneldirect.FastPathOptions{
+					Interfaces:             options.KernelDirectEBPFInterfaces,
+					ProxyRedirectInterface: proxyRedirectInterface,
+					Mark:                   kernelDirectMark,
+					ProxyMark:              kernelProxyMark,
+					InputMark:              inputMark,
+					MaxEntries:             options.KernelDirectEBPFMaxEntries,
+					FlowEntries:            options.KernelDirectEBPFFlowEntries,
+					ProxySteering:          options.KernelDirectEBPFProxy,
+					DirectPrefixes:         options.KernelDirectEBPFDirectPrefixes,
+					ProxyPrefixes:          options.KernelDirectEBPFProxyPrefixes,
+					TableName:              "mihomo",
+				})
+				if err != nil {
+					if options.KernelDirectEBPFRequired {
+						err = E.Cause(err, "initialize required TC eBPF kernel-direct")
+						return
+					}
+					log.Warnln("[TUN] TC eBPF kernel-direct unavailable, using nftables fallback: %v", err)
+					err = nil
+				} else {
+					status := l.kernelDirectFastPath.Status()
+					log.Infoln("[TUN] TC eBPF LPM/LRU fast path attached to %s with DIRECT mark %#x, PROXY mark %#x", strings.Join(status.Interfaces, ","), status.Mark, status.ProxyMark)
+				}
+			}
+			l.kernelDirectCloser = kerneldirect.Register(func(host string, addr netip.Addr) bool {
+				return directClassifier.ClassifyKernelDirect(kernelDirectMetadata, host, addr)
+			}, l.updateKernelDirectSet, kerneldirect.ControllerOptions{MaxEntries: options.KernelDirectMaxEntries})
+		}
 	}
 
 	if !l.options.AutoDetectInterface {
@@ -548,6 +635,9 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 }
 
 func (l *Listener) ruleUpdateCallback(ruleProvider P.RuleProvider) {
+	if l.options.KernelDirect {
+		kerneldirect.Flush()
+	}
 	name := ruleProvider.Name()
 	if slices.Contains(l.options.RouteAddressSet, name) {
 		l.updateRule(ruleProvider, false, true)
@@ -557,6 +647,29 @@ func (l *Listener) ruleUpdateCallback(ruleProvider P.RuleProvider) {
 		l.updateRule(ruleProvider, true, true)
 		return
 	}
+}
+
+func (l *Listener) updateKernelDirectSet(sets kerneldirect.DecisionSets) {
+	l.ruleUpdateMutex.Lock()
+	defer l.ruleUpdateMutex.Unlock()
+	if l.closed || l.autoRedirect == nil {
+		return
+	}
+	if l.kernelDirectFastPath != nil {
+		if err := l.kernelDirectFastPath.Replace(sets); err != nil {
+			// Replace detaches TC before returning an error. Close the failed
+			// backend so subsequent updates use only the authoritative nftables
+			// fallback and cannot retain an untracked DIRECT key.
+			log.Errorln("[TUN] disable TC eBPF kernel-direct after map update failure: %v", err)
+			if closeErr := l.kernelDirectFastPath.Close(); closeErr != nil {
+				log.Errorln("[TUN] close failed TC eBPF kernel-direct: %v", closeErr)
+			}
+			l.kernelDirectFastPath = nil
+		}
+	}
+	l.routeExcludeAddressMap[kernelDirectRuleSetName] = sets.Direct
+	l.routeExcludeAddressSet = maps.Values(l.routeExcludeAddressMap)
+	l.autoRedirect.UpdateRouteAddressSet()
 }
 
 type toIpCidr interface {
@@ -667,7 +780,9 @@ func parseRange[T constraints.Integer](uidRanges []ranges.Range[T], rangeList []
 }
 
 func (l *Listener) Close() error {
+	l.ruleUpdateMutex.Lock()
 	l.closed = true
+	l.ruleUpdateMutex.Unlock()
 	resolver.RemoveSystemDnsBlacklist(l.dnsServerIp...)
 	if l.autoRedirectOutputMark != 0 {
 		dialer.DefaultRoutingMark.CompareAndSwap(l.autoRedirectOutputMark, 0)
@@ -677,6 +792,8 @@ func (l *Listener) Close() error {
 	}
 	return common.Close(
 		l.ruleUpdateCallbackCloser,
+		l.kernelDirectCloser,
+		l.kernelDirectFastPath,
 		l.tunStack,
 		l.tunIf,
 		l.autoRedirect,

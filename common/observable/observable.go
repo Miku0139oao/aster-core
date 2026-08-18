@@ -3,14 +3,16 @@ package observable
 import (
 	"errors"
 	"sync"
+	"sync/atomic"
 )
 
 type Observable[T any] struct {
-	iterable Iterable[T]
-	listener map[Subscription[T]]*Subscriber[T]
-	mux      sync.Mutex
-	done     bool
-	stopCh   chan struct{}
+	iterable    Iterable[T]
+	listener    map[Subscription[T]]*Subscriber[T]
+	mux         sync.Mutex
+	subscribers atomic.Int64
+	done        bool
+	stopCh      chan struct{}
 }
 
 func (o *Observable[T]) process() {
@@ -32,6 +34,8 @@ func (o *Observable[T]) close() {
 	for _, sub := range o.listener {
 		sub.Close()
 	}
+	o.listener = nil
+	o.subscribers.Store(0)
 	close(o.stopCh)
 }
 
@@ -43,6 +47,7 @@ func (o *Observable[T]) Subscribe() (Subscription[T], error) {
 	}
 	subscriber := newSubscriber[T]()
 	o.listener[subscriber.Out()] = subscriber
+	o.subscribers.Add(1)
 	return subscriber.Out(), nil
 }
 
@@ -54,7 +59,15 @@ func (o *Observable[T]) UnSubscribe(sub Subscription[T]) {
 		return
 	}
 	delete(o.listener, sub)
+	o.subscribers.Add(-1)
 	subscriber.Close()
+}
+
+// HasSubscribers reports whether emitting an item can reach at least one
+// subscriber. It is safe to call from hot paths without taking the listener
+// mutex.
+func (o *Observable[T]) HasSubscribers() bool {
+	return o.subscribers.Load() > 0
 }
 
 func NewObservable[T any](iter Iterable[T]) *Observable[T] {

@@ -25,6 +25,19 @@ type Tun struct {
 	IPRoute2TableIndex                    int            `yaml:"iproute2-table-index" json:"iproute2-table-index,omitempty"`
 	IPRoute2RuleIndex                     int            `yaml:"iproute2-rule-index" json:"iproute2-rule-index,omitempty"`
 	AutoRedirect                          bool           `yaml:"auto-redirect" json:"auto-redirect,omitempty"`
+	KernelDirect                          bool           `yaml:"kernel-direct" json:"kernel-direct,omitempty"`
+	KernelDirectMaxEntries                uint32         `yaml:"kernel-direct-max-entries" json:"kernel-direct-max-entries,omitempty"`
+	KernelDirectEBPF                      bool           `yaml:"kernel-direct-ebpf" json:"kernel-direct-ebpf,omitempty"`
+	KernelDirectEBPFRequired              bool           `yaml:"kernel-direct-ebpf-required" json:"kernel-direct-ebpf-required,omitempty"`
+	KernelDirectEBPFInterfaces            []string       `yaml:"kernel-direct-ebpf-interfaces" json:"kernel-direct-ebpf-interfaces,omitempty"`
+	KernelDirectEBPFMark                  uint32         `yaml:"kernel-direct-ebpf-mark" json:"kernel-direct-ebpf-mark,omitempty"`
+	KernelDirectEBPFMaxEntries            uint32         `yaml:"kernel-direct-ebpf-max-entries" json:"kernel-direct-ebpf-max-entries,omitempty"`
+	KernelDirectEBPFProxy                 bool           `yaml:"kernel-direct-ebpf-proxy" json:"kernel-direct-ebpf-proxy,omitempty"`
+	KernelDirectEBPFProxyRedirect         bool           `yaml:"kernel-direct-ebpf-proxy-redirect" json:"kernel-direct-ebpf-proxy-redirect,omitempty"`
+	KernelDirectEBPFProxyMark             uint32         `yaml:"kernel-direct-ebpf-proxy-mark" json:"kernel-direct-ebpf-proxy-mark,omitempty"`
+	KernelDirectEBPFFlowEntries           uint32         `yaml:"kernel-direct-ebpf-flow-entries" json:"kernel-direct-ebpf-flow-entries,omitempty"`
+	KernelDirectEBPFDirectPrefixes        []netip.Prefix `yaml:"kernel-direct-ebpf-direct-prefixes" json:"kernel-direct-ebpf-direct-prefixes,omitempty"`
+	KernelDirectEBPFProxyPrefixes         []netip.Prefix `yaml:"kernel-direct-ebpf-proxy-prefixes" json:"kernel-direct-ebpf-proxy-prefixes,omitempty"`
 	AutoRedirectInputMark                 uint32         `yaml:"auto-redirect-input-mark" json:"auto-redirect-input-mark,omitempty"`
 	AutoRedirectOutputMark                uint32         `yaml:"auto-redirect-output-mark" json:"auto-redirect-output-mark,omitempty"`
 	AutoRedirectIPRoute2FallbackRuleIndex int            `yaml:"auto-redirect-iproute2-fallback-rule-index" json:"auto-redirect-iproute2-fallback-rule-index,omitempty"`
@@ -74,6 +87,9 @@ func (t *Tun) Sort() {
 	slices.Sort(t.RouteAddressSet)
 	slices.SortFunc(t.RouteExcludeAddress, netipx.ComparePrefix)
 	slices.Sort(t.RouteExcludeAddressSet)
+	slices.Sort(t.KernelDirectEBPFInterfaces)
+	slices.SortFunc(t.KernelDirectEBPFDirectPrefixes, netipx.ComparePrefix)
+	slices.SortFunc(t.KernelDirectEBPFProxyPrefixes, netipx.ComparePrefix)
 	slices.Sort(t.IncludeInterface)
 	slices.Sort(t.ExcludeInterface)
 	slices.Sort(t.IncludeUID)
@@ -134,6 +150,45 @@ func (t *Tun) Equal(other Tun) bool {
 		return false
 	}
 	if t.AutoRedirect != other.AutoRedirect {
+		return false
+	}
+	if t.KernelDirect != other.KernelDirect {
+		return false
+	}
+	if t.KernelDirectMaxEntries != other.KernelDirectMaxEntries {
+		return false
+	}
+	if t.KernelDirectEBPF != other.KernelDirectEBPF {
+		return false
+	}
+	if t.KernelDirectEBPFRequired != other.KernelDirectEBPFRequired {
+		return false
+	}
+	if !slices.Equal(t.KernelDirectEBPFInterfaces, other.KernelDirectEBPFInterfaces) {
+		return false
+	}
+	if t.KernelDirectEBPFMark != other.KernelDirectEBPFMark {
+		return false
+	}
+	if t.KernelDirectEBPFMaxEntries != other.KernelDirectEBPFMaxEntries {
+		return false
+	}
+	if t.KernelDirectEBPFProxy != other.KernelDirectEBPFProxy {
+		return false
+	}
+	if t.KernelDirectEBPFProxyRedirect != other.KernelDirectEBPFProxyRedirect {
+		return false
+	}
+	if t.KernelDirectEBPFProxyMark != other.KernelDirectEBPFProxyMark {
+		return false
+	}
+	if t.KernelDirectEBPFFlowEntries != other.KernelDirectEBPFFlowEntries {
+		return false
+	}
+	if !slices.Equal(t.KernelDirectEBPFDirectPrefixes, other.KernelDirectEBPFDirectPrefixes) {
+		return false
+	}
+	if !slices.Equal(t.KernelDirectEBPFProxyPrefixes, other.KernelDirectEBPFProxyPrefixes) {
 		return false
 	}
 	if t.AutoRedirectInputMark != other.AutoRedirectInputMark {

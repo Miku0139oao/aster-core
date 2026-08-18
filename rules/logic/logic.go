@@ -176,6 +176,30 @@ func (logic *Logic) RuleType() C.RuleType {
 	return logic.ruleType
 }
 
+// KernelDirectMatchSafe permits destination-only boolean expressions in the
+// kernel DIRECT classifier. Sub-rules and context-dependent expressions stay
+// on the normal userspace path.
+func (logic *Logic) KernelDirectMatchSafe() bool {
+	if logic.ruleType == C.SubRules {
+		return false
+	}
+	for _, rule := range logic.rules {
+		if safeRule, ok := rule.(interface{ KernelDirectMatchSafe() bool }); ok {
+			if !safeRule.KernelDirectMatchSafe() {
+				return false
+			}
+			continue
+		}
+		switch rule.RuleType() {
+		case C.Domain, C.DomainSuffix, C.DomainKeyword, C.DomainRegex, C.DomainWildcard,
+			C.GEOSITE, C.GEOIP, C.IPASN, C.IPCIDR, C.IPSuffix:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func matchSubRules(metadata *C.Metadata, name string, subRules map[string][]C.Rule, helper C.RuleMatchHelper) (bool, string) {
 	for _, rule := range subRules[name] {
 		if m, a := rule.Match(metadata, helper); m {

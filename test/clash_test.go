@@ -38,7 +38,7 @@ const (
 	ImageTrojanGo        = "p4gefau1t/trojan-go:latest"
 	ImageSnell           = "ghcr.io/icpz/snell-server:latest"
 	ImageXray            = "teddysun/xray:latest"
-	ImageHysteria        = "tobyxdd/hysteria:latest"
+	ImageHysteria        = "tobyxdd/hysteria:v1.3.5"
 )
 
 var (

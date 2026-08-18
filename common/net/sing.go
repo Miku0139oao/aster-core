@@ -1,10 +1,13 @@
 package net
 
 import (
+	"errors"
 	"io"
 	"net"
+	"syscall"
 
 	"github.com/Miku0139oao/aster-core/common/net/deadline"
+	"github.com/Miku0139oao/aster-core/common/pool"
 
 	"github.com/metacubex/sing/common"
 	"github.com/metacubex/sing/common/bufio"
@@ -74,6 +77,60 @@ func closeWrite(writer io.Closer) error {
 	return writer.Close()
 }
 
+// copyConn keeps the feature-aware sing copy path for protocol-specific and
+// zero-copy-capable connections. Once both sides unwrap to ordinary streams,
+// a reusable byte slice avoids allocating a buf.Buffer wrapper for every read.
+func copyConn(destination io.Writer, source io.Reader) (n int64, err error) {
+	originDestination, originSource := destination, source
+	source, readCounters := network.UnwrapCountReader(source, nil)
+	destination, writeCounters := network.UnwrapCountWriter(destination, nil)
+
+	_, sourceExtended := source.(network.ExtendedReader)
+	_, destinationExtended := destination.(network.ExtendedWriter)
+	_, sourceCached := source.(network.CachedReader)
+	_, sourceReplaceable := source.(network.ReaderPossiblyReplaceable)
+	_, destinationReplaceable := destination.(network.WriterPossiblyReplaceable)
+	_, sourceSyscall := source.(syscall.Conn)
+	_, destinationSyscall := destination.(syscall.Conn)
+	if sourceExtended || destinationExtended || sourceCached || sourceReplaceable || destinationReplaceable || (sourceSyscall && destinationSyscall) {
+		return bufio.Copy(originDestination, originSource)
+	}
+
+	buffer := pool.Get(pool.RelayBufferSize)
+	defer func() { _ = pool.Put(buffer) }()
+	firstWrite := true
+	for {
+		readN, readErr := source.Read(buffer)
+		if readN > 0 {
+			writeN, writeErr := destination.Write(buffer[:readN])
+			if writeN != readN && writeErr == nil {
+				writeErr = io.ErrShortWrite
+			}
+			if writeErr != nil {
+				if firstWrite {
+					writeErr = network.ReportHandshakeFailure(originSource, writeErr)
+				}
+				return n, writeErr
+			}
+			transferred := int64(readN)
+			n += transferred
+			for _, counter := range readCounters {
+				counter(transferred)
+			}
+			for _, counter := range writeCounters {
+				counter(transferred)
+			}
+			firstWrite = false
+		}
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				return n, nil
+			}
+			return n, readErr
+		}
+	}
+}
+
 // Relay copies between left and right bidirectionally.
 // like [bufio.CopyConn] but remove unneeded [context.Context] handle and the cost of [task.Group]
 func Relay(leftConn, rightConn net.Conn) {
@@ -84,7 +141,7 @@ func Relay(leftConn, rightConn net.Conn) {
 
 	ch := make(chan struct{})
 	go func() {
-		_, err := bufio.Copy(leftConn, rightConn)
+		_, err := copyConn(leftConn, rightConn)
 		if err == nil {
 			_ = closeWrite(leftConn)
 		} else {
@@ -93,7 +150,7 @@ func Relay(leftConn, rightConn net.Conn) {
 		close(ch)
 	}()
 
-	_, err := bufio.Copy(rightConn, leftConn)
+	_, err := copyConn(rightConn, leftConn)
 	if err == nil {
 		_ = closeWrite(rightConn)
 	} else {

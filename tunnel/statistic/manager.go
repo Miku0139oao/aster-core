@@ -9,6 +9,9 @@ import (
 	"github.com/Miku0139oao/aster-core/common/atomic"
 	"github.com/Miku0139oao/aster-core/common/xsync"
 	"github.com/Miku0139oao/aster-core/component/memory"
+	C "github.com/Miku0139oao/aster-core/constant"
+
+	"github.com/gofrs/uuid/v5"
 )
 
 var DefaultManager *Manager
@@ -27,8 +30,18 @@ func init() {
 	go DefaultManager.handle()
 }
 
+// idleZeroByteTCP is how long a TCP tracker may sit with no payload before Aster
+// closes it. UDP (including ePDG 500/4500) is never reaped.
+//
+// Trackers are registered only after outbound DialContext succeeds, so the dial
+// window (C.DefaultTCPTimeout, 5s) ends before Start is recorded. Keeping this
+// at 30s avoids reaping slow-but-live post-dial handshakes that have not yet
+// moved payload bytes through the tracker.
+var idleZeroByteTCP = 30 * time.Second
+
 type Manager struct {
-	connections   xsync.Map[string, Tracker]
+	connections   xsync.Map[uuid.UUID, Tracker]
+	reapOnce      xsync.Map[uuid.UUID, *sync.Once]
 	uploadTemp    atomic.Int64
 	downloadTemp  atomic.Int64
 	uploadBlip    atomic.Int64
@@ -56,17 +69,22 @@ type trafficObserverHolder struct {
 }
 
 func (m *Manager) Join(c Tracker) {
-	if _, loaded := m.connections.LoadOrStore(c.ID(), c); loaded {
+	if _, loaded := m.connections.LoadOrStore(c.Info().UUID, c); loaded {
 		return
 	}
 	m.updatePrincipalConnections(c, 1)
 }
 
 func (m *Manager) Leave(c Tracker) {
-	stored, loaded := m.connections.LoadAndDelete(c.ID())
+	info := c.Info()
+	if info == nil {
+		return
+	}
+	stored, loaded := m.connections.LoadAndDelete(info.UUID)
 	if !loaded {
 		return
 	}
+	m.reapOnce.Delete(info.UUID)
 	m.updatePrincipalConnections(stored, -1)
 }
 
@@ -113,14 +131,18 @@ func (m *Manager) ActiveConnections(principal Principal) int {
 }
 
 func (m *Manager) Get(id string) (c Tracker) {
-	if value, ok := m.connections.Load(id); ok {
+	parsedID, err := uuid.FromString(id)
+	if err != nil {
+		return nil
+	}
+	if value, ok := m.connections.Load(parsedID); ok {
 		c = value
 	}
 	return
 }
 
 func (m *Manager) Range(f func(c Tracker) bool) {
-	m.connections.Range(func(key string, value Tracker) bool {
+	m.connections.Range(func(key uuid.UUID, value Tracker) bool {
 		return f(value)
 	})
 }
@@ -209,10 +231,52 @@ func (m *Manager) ResetStatistic() {
 func (m *Manager) handle() {
 	ticker := time.NewTicker(time.Second)
 
-	for range ticker.C {
+	for now := range ticker.C {
 		m.uploadBlip.Store(m.uploadTemp.Swap(0))
 		m.downloadBlip.Store(m.downloadTemp.Swap(0))
+		m.reapIdleZeroByteTCP(now)
 	}
+}
+
+func (m *Manager) reapIdleZeroByteTCP(now time.Time) int {
+	var stale []Tracker
+	m.Range(func(c Tracker) bool {
+		if trackerEligibleForZeroByteReap(c.Info(), now) {
+			stale = append(stale, c)
+		}
+		return true
+	})
+	for _, c := range stale {
+		m.safeReapClose(c)
+	}
+	return len(stale)
+}
+
+func (m *Manager) safeReapClose(c Tracker) {
+	info := c.Info()
+	if info == nil {
+		return
+	}
+	once, _ := m.reapOnce.LoadOrStore(info.UUID, &sync.Once{})
+	once.Do(func() {
+		_ = c.Close()
+	})
+}
+
+func trackerEligibleForZeroByteReap(info *TrackerInfo, now time.Time) bool {
+	if info == nil || info.Metadata == nil {
+		return false
+	}
+	if info.Metadata.NetWork != C.TCP {
+		return false
+	}
+	if info.Metadata.DstPort == 500 || info.Metadata.DstPort == 4500 {
+		return false
+	}
+	if info.UploadTotal.Load() != 0 || info.DownloadTotal.Load() != 0 {
+		return false
+	}
+	return !now.Before(info.Start.Add(idleZeroByteTCP))
 }
 
 type Snapshot struct {

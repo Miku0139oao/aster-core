@@ -1,8 +1,8 @@
 package utils
 
 import (
+	"bufio"
 	"crypto/md5"
-	"crypto/rand"
 	"crypto/sha1"
 
 	"github.com/gofrs/uuid/v5"
@@ -24,7 +24,11 @@ func NewUUIDV3(ns uuid.UUID, name string) (u uuid.UUID) {
 //
 // Version 4 UUIDs contain 122 bits of random data.
 func NewUUIDV4() (u uuid.UUID) {
-	rand.Read(u[:])
+	reader := cryptoRandomReaders.Get().(*bufio.Reader)
+	for i := range u {
+		u[i], _ = reader.ReadByte()
+	}
+	cryptoRandomReaders.Put(reader)
 	u.SetVersion(uuid.V4)
 	u.SetVariant(uuid.VariantRFC9562)
 	return u

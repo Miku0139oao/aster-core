@@ -64,3 +64,17 @@ func TestUUIDMap(t *testing.T) {
 		})
 	}
 }
+
+func TestNewUUIDV4(t *testing.T) {
+	seen := make(map[uuid.UUID]struct{}, 1024)
+	for i := 0; i < 1024; i++ {
+		generated := NewUUIDV4()
+		if generated.Version() != uuid.V4 || generated.Variant() != uuid.VariantRFC9562 {
+			t.Fatalf("invalid UUID v4 bits: %s", generated)
+		}
+		if _, exists := seen[generated]; exists {
+			t.Fatalf("duplicate UUID v4: %s", generated)
+		}
+		seen[generated] = struct{}{}
+	}
+}
