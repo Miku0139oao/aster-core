@@ -24,17 +24,24 @@ git_log() {
   git log --no-merges --pretty=format:"* %h %s by @%an" "$@"
 }
 
+# Classify by the subject prefix only. git log --grep searches the body,
+# so a docs commit that mentioned "accuracy fixes" was listed under BUG & Fix.
+subject_grep() {
+  pattern=$1
+  git_log "$version_range" | grep -iE "^\* [0-9a-f]+ ${pattern}(\(|:)" || true
+}
+
 {
   echo "## What's Changed"
-  git_log --grep="^feat" -i "$version_range"
+  subject_grep "feat"
   echo
   echo
   echo "## BUG & Fix"
-  git_log --grep="^fix" -i "$version_range"
+  subject_grep "fix"
   echo
   echo
   echo "## Maintenance"
-  git_log --grep="^chore\|^docs\|^refactor\|^test\|^perf\|^ci" -i "$version_range"
+  subject_grep "chore|docs|refactor|test|perf|ci"
   echo
   echo
   other="$(git_log "$version_range" | grep -ivE '^\* [0-9a-f]+ (feat|fix|chore|docs|refactor|test|perf|ci)(\(|:)' || true)"
