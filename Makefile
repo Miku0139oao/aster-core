@@ -12,7 +12,7 @@ VERSION=$(shell git rev-parse --short HEAD)
 endif
 
 BUILDTIME=$(shell date -u)
-release_asset=$(if $(filter android-arm64,$1),$(NAME)-android-arm64-v8,$(if $(filter linux-loong64,$1),$(NAME)-linux-loong64-abi2,$(NAME)-$1))
+release_asset=$(if $(filter android-arm64,$1),$(NAME)-android-arm64-v8,$(NAME)-$1)
 GOBUILD=CGO_ENABLED=0 go build -tags with_gvisor -trimpath -ldflags '-X "github.com/Miku0139oao/aster-core/constant.Version=$(VERSION)" \
 		-X "github.com/Miku0139oao/aster-core/constant.BuildTime=$(BUILDTIME)" \
 		-X "github.com/Miku0139oao/aster-core/constant.ReleaseAsset=$(if $(filter docker,$@),,$(call release_asset,$@))" \
