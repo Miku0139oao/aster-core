@@ -75,6 +75,9 @@ func NewOpenVPN(option OpenVPNOption) (*OpenVPN, error) {
 	if option.HandshakeTimeout < 0 {
 		return nil, errors.New("openvpn handshake timeout must be non-negative")
 	}
+	if option.Port <= 0 || option.Port > 65535 {
+		return nil, errors.New("openvpn port must be between 1 and 65535")
+	}
 	cfg := &ovpn.ClientConfig{
 		RemoteHost:     option.Server,
 		RemotePort:     uint16(option.Port),
