@@ -63,6 +63,13 @@ export default defineConfig({
     nav: [
       { text: "首頁", link: "/" },
       {
+        text: "更新紀錄",
+        items: [
+          { text: "繁體中文", link: "/changelog" },
+          { text: "English", link: "/en/changelog" },
+        ],
+      },
+      {
         text: "實戰教學",
         items: [
           { text: "教學總覽", link: "/tutorials/" },
@@ -82,6 +89,13 @@ export default defineConfig({
       { text: "服務端管理", link: "/aster/overview" },
     ],
     sidebar: [
+      {
+        text: "更新紀錄 / Changelog",
+        items: [
+          { text: "更新紀錄", link: "/changelog" },
+          { text: "Changelog (English)", link: "/en/changelog" },
+        ],
+      },
       {
         text: "開始使用",
         items: [
