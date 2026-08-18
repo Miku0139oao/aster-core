@@ -6,7 +6,9 @@
     "prepare:assets": "node scripts/prepare-assets.mjs",
     "dev": "npm run prepare:assets && vitepress dev . --host 0.0.0.0",
     "build": "npm run prepare:assets && vitepress build . && node scripts/prepare-sites-dist.mjs",
-    "preview": "vitepress preview . --host 0.0.0.0"
+    "preview": "vitepress preview . --host 0.0.0.0",
+    "check:docs": "node scripts/check-docs.mjs",
+    "check:docs:required": "node scripts/check-docs.mjs --require-planned"
   },
   "devDependencies": {
     "vitepress": "1.6.4"
