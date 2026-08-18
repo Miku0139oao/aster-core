@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/Miku0139oao/aster-core/common/pool"
-	"github.com/Miku0139oao/aster-core/constant"
 	"github.com/Miku0139oao/aster-core/log"
 	"github.com/Miku0139oao/aster-core/transport/anytls/padding"
 	"github.com/Miku0139oao/aster-core/transport/anytls/util"
@@ -42,22 +41,24 @@ type Session struct {
 	peerVersion byte
 
 	// client
-	isClient    bool
-	sendPadding bool
-	buffering   bool
-	buffer      []byte
-	pktCounter  atomic.Uint32
+	isClient       bool
+	sendPadding    bool
+	buffering      bool
+	buffer         []byte
+	pktCounter     atomic.Uint32
+	clientMetadata string
 
 	// server
 	onNewStream func(stream *Stream)
 }
 
-func NewClientSession(conn net.Conn, _padding *atomic.Pointer[padding.PaddingFactory]) *Session {
+func NewClientSession(conn net.Conn, _padding *atomic.Pointer[padding.PaddingFactory], clientMetadata string) *Session {
 	s := &Session{
-		conn:        conn,
-		isClient:    true,
-		sendPadding: true,
-		padding:     _padding,
+		conn:           conn,
+		isClient:       true,
+		sendPadding:    true,
+		padding:        _padding,
+		clientMetadata: clientMetadata,
 	}
 	s.die = make(chan struct{})
 	s.streams = make(map[uint32]*Stream)
@@ -83,7 +84,7 @@ func (s *Session) Run() {
 
 	settings := util.StringMap{
 		"v":           "2",
-		"client":      "mihomo/" + constant.Version,
+		"client":      s.clientMetadata,
 		"padding-md5": s.padding.Load().Md5,
 	}
 	f := newFrame(cmdSettings, 0)
