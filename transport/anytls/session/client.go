@@ -88,24 +88,7 @@ func (c *Client) CreateStream(ctx context.Context) (net.Conn, error) {
 	}
 
 	stream.dieHook = func() {
-		// If Session is not closed, put this Stream to pool
-		if !session.IsClosed() {
-			if c.disableReuse {
-				session.Close()
-				return
-			}
-
-			select {
-			case <-c.die.Done():
-				// Now client has been closed
-				session.Close()
-			default:
-				c.idleSessionLock.Lock()
-				session.idleSince = time.Now()
-				c.idleSession.Insert(math.MaxUint64-session.seq, session)
-				c.idleSessionLock.Unlock()
-			}
-		}
+		c.recycleSession(session)
 	}
 
 	return stream, nil
@@ -113,13 +96,43 @@ func (c *Client) CreateStream(ctx context.Context) (net.Conn, error) {
 
 func (c *Client) getIdleSession() (idle *Session) {
 	c.idleSessionLock.Lock()
-	if !c.idleSession.IsEmpty() {
+	for !c.idleSession.IsEmpty() {
 		it := c.idleSession.Iterate()
 		idle = it.Value()
 		c.idleSession.Remove(it.Key())
+		if !idle.IsClosed() {
+			break
+		}
+		idle = nil
 	}
 	c.idleSessionLock.Unlock()
 	return
+}
+
+func (c *Client) recycleSession(session *Session) {
+	if c.disableReuse {
+		if !session.IsClosed() {
+			_ = session.Close()
+		}
+		return
+	}
+
+	closeSession := false
+	c.idleSessionLock.Lock()
+	select {
+	case <-c.die.Done():
+		closeSession = !session.IsClosed()
+	default:
+		if !session.IsClosed() {
+			session.idleSince = time.Now()
+			c.idleSession.Insert(math.MaxUint64-session.seq, session)
+		}
+	}
+	c.idleSessionLock.Unlock()
+
+	if closeSession {
+		_ = session.Close()
+	}
 }
 
 func (c *Client) createSession(ctx context.Context) (*Session, error) {
