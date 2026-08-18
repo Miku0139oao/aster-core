@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	C "github.com/Miku0139oao/aster-core/constant"
 	"github.com/Miku0139oao/aster-core/listener/redir"
@@ -22,6 +23,7 @@ type Redir struct {
 	*Base
 	config *RedirOption
 	l      []*redir.Listener
+	mu     sync.Mutex
 }
 
 func NewRedir(options *RedirOption) (*Redir, error) {
@@ -42,6 +44,12 @@ func (r *Redir) Config() C.InboundConfig {
 
 // Address implements constant.InboundListener
 func (r *Redir) Address() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.addressLocked()
+}
+
+func (r *Redir) addressLocked() string {
 	var addrList []string
 	for _, l := range r.l {
 		addrList = append(addrList, l.Address())
@@ -51,6 +59,8 @@ func (r *Redir) Address() string {
 
 // Listen implements constant.InboundListener
 func (r *Redir) Listen(tunnel C.Tunnel) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	listeners := make([]*redir.Listener, 0, len(strings.Split(r.RawAddress(), ",")))
 	for _, addr := range strings.Split(r.RawAddress(), ",") {
 		l, err := redir.New(addr, tunnel, r.Additions()...)
@@ -60,12 +70,14 @@ func (r *Redir) Listen(tunnel C.Tunnel) error {
 		listeners = append(listeners, l)
 	}
 	r.l = listeners
-	log.Infoln("Redir[%s] proxy listening at: %s", r.Name(), r.Address())
+	log.Infoln("Redir[%s] proxy listening at: %s", r.Name(), r.addressLocked())
 	return nil
 }
 
 // Close implements constant.InboundListener
 func (r *Redir) Close() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	listeners := r.l
 	r.l = nil
 	return closeRedirListeners(listeners)

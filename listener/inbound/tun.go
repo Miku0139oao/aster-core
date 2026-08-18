@@ -3,6 +3,7 @@ package inbound
 import (
 	"encoding"
 	"net/netip"
+	"sync"
 
 	"github.com/Miku0139oao/aster-core/component/kerneldirect"
 	C "github.com/Miku0139oao/aster-core/constant"
@@ -95,6 +96,7 @@ type Tun struct {
 	config *TunOption
 	l      *sing_tun.Listener
 	tun    LC.Tun
+	mu     sync.Mutex
 }
 
 func NewTun(options *TunOption) (*Tun, error) {
@@ -186,6 +188,12 @@ func (t *Tun) Config() C.InboundConfig {
 
 // Address implements constant.InboundListener
 func (t *Tun) Address() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.addressLocked()
+}
+
+func (t *Tun) addressLocked() string {
 	if t.l == nil {
 		return ""
 	}
@@ -194,17 +202,21 @@ func (t *Tun) Address() string {
 
 // Listen implements constant.InboundListener
 func (t *Tun) Listen(tunnel C.Tunnel) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	var err error
 	t.l, err = sing_tun.New(t.tun, tunnel, t.Additions()...)
 	if err != nil {
 		return err
 	}
-	log.Infoln("Tun[%s] proxy listening at: %s", t.Name(), t.Address())
+	log.Infoln("Tun[%s] proxy listening at: %s", t.Name(), t.addressLocked())
 	return nil
 }
 
 // Close implements constant.InboundListener
 func (t *Tun) Close() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	l := t.l
 	t.l = nil
 	if l == nil {

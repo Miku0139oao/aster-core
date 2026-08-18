@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	C "github.com/Miku0139oao/aster-core/constant"
 	LC "github.com/Miku0139oao/aster-core/listener/config"
@@ -34,6 +35,7 @@ type Mixed struct {
 	l      []*mixed.Listener
 	lUDP   []*socks.UDPListener
 	udp    bool
+	mu     sync.Mutex
 }
 
 func NewMixed(options *MixedOption) (*Mixed, error) {
@@ -55,6 +57,12 @@ func (m *Mixed) Config() C.InboundConfig {
 
 // Address implements constant.InboundListener
 func (m *Mixed) Address() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.addressLocked()
+}
+
+func (m *Mixed) addressLocked() string {
 	var addrList []string
 	for _, l := range m.l {
 		addrList = append(addrList, l.Address())
@@ -64,6 +72,8 @@ func (m *Mixed) Address() string {
 
 // Listen implements constant.InboundListener
 func (m *Mixed) Listen(tunnel C.Tunnel) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	lc := m.ListenConfig()
 	listeners := make([]*mixed.Listener, 0, len(strings.Split(m.RawAddress(), ",")))
 	udpListeners := make([]*socks.UDPListener, 0, len(strings.Split(m.RawAddress(), ",")))
@@ -94,12 +104,14 @@ func (m *Mixed) Listen(tunnel C.Tunnel) error {
 	}
 	m.l = listeners
 	m.lUDP = udpListeners
-	log.Infoln("Mixed(http+socks)[%s] proxy listening at: %s", m.Name(), m.Address())
+	log.Infoln("Mixed(http+socks)[%s] proxy listening at: %s", m.Name(), m.addressLocked())
 	return nil
 }
 
 // Close implements constant.InboundListener
 func (m *Mixed) Close() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	listeners, udpListeners := m.l, m.lUDP
 	m.l, m.lUDP = nil, nil
 	return closeMixedListeners(listeners, udpListeners)

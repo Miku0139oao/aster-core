@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	C "github.com/Miku0139oao/aster-core/constant"
 	"github.com/Miku0139oao/aster-core/listener/tproxy"
@@ -25,6 +26,7 @@ type TProxy struct {
 	lUDP   []*tproxy.UDPListener
 	lTCP   []*tproxy.Listener
 	udp    bool
+	mu     sync.Mutex
 }
 
 func NewTProxy(options *TProxyOption) (*TProxy, error) {
@@ -46,6 +48,12 @@ func (t *TProxy) Config() C.InboundConfig {
 
 // Address implements constant.InboundListener
 func (t *TProxy) Address() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.addressLocked()
+}
+
+func (t *TProxy) addressLocked() string {
 	var addrList []string
 	for _, l := range t.lTCP {
 		addrList = append(addrList, l.Address())
@@ -55,6 +63,8 @@ func (t *TProxy) Address() string {
 
 // Listen implements constant.InboundListener
 func (t *TProxy) Listen(tunnel C.Tunnel) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	tcpListeners := make([]*tproxy.Listener, 0, len(strings.Split(t.RawAddress(), ",")))
 	udpListeners := make([]*tproxy.UDPListener, 0, len(strings.Split(t.RawAddress(), ",")))
 	for _, addr := range strings.Split(t.RawAddress(), ",") {
@@ -73,12 +83,14 @@ func (t *TProxy) Listen(tunnel C.Tunnel) error {
 	}
 	t.lTCP = tcpListeners
 	t.lUDP = udpListeners
-	log.Infoln("TProxy[%s] proxy listening at: %s", t.Name(), t.Address())
+	log.Infoln("TProxy[%s] proxy listening at: %s", t.Name(), t.addressLocked())
 	return nil
 }
 
 // Close implements constant.InboundListener
 func (t *TProxy) Close() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	tcpListeners, udpListeners := t.lTCP, t.lUDP
 	t.lTCP, t.lUDP = nil, nil
 	return closeTProxyListeners(tcpListeners, udpListeners)

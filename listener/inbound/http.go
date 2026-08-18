@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	C "github.com/Miku0139oao/aster-core/constant"
 	LC "github.com/Miku0139oao/aster-core/listener/config"
@@ -30,6 +31,7 @@ type HTTP struct {
 	*Base
 	config *HTTPOption
 	l      []*http.Listener
+	mu     sync.Mutex
 }
 
 func NewHTTP(options *HTTPOption) (*HTTP, error) {
@@ -50,6 +52,12 @@ func (h *HTTP) Config() C.InboundConfig {
 
 // Address implements constant.InboundListener
 func (h *HTTP) Address() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.addressLocked()
+}
+
+func (h *HTTP) addressLocked() string {
 	var addrList []string
 	for _, l := range h.l {
 		addrList = append(addrList, l.Address())
@@ -59,6 +67,8 @@ func (h *HTTP) Address() string {
 
 // Listen implements constant.InboundListener
 func (h *HTTP) Listen(tunnel C.Tunnel) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	lc := h.ListenConfig()
 	listeners := make([]*http.Listener, 0, len(strings.Split(h.RawAddress(), ",")))
 	for _, addr := range strings.Split(h.RawAddress(), ",") {
@@ -84,12 +94,14 @@ func (h *HTTP) Listen(tunnel C.Tunnel) error {
 		listeners = append(listeners, l)
 	}
 	h.l = listeners
-	log.Infoln("HTTP[%s] proxy listening at: %s", h.Name(), h.Address())
+	log.Infoln("HTTP[%s] proxy listening at: %s", h.Name(), h.addressLocked())
 	return nil
 }
 
 // Close implements constant.InboundListener
 func (h *HTTP) Close() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	listeners := h.l
 	h.l = nil
 	return closeHTTPListeners(listeners)

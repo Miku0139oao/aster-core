@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	C "github.com/Miku0139oao/aster-core/constant"
 	LC "github.com/Miku0139oao/aster-core/listener/config"
@@ -33,6 +34,7 @@ type Socks struct {
 	udp    bool
 	stl    []*socks.Listener
 	sul    []*socks.UDPListener
+	mu     sync.Mutex
 }
 
 func NewSocks(options *SocksOption) (*Socks, error) {
@@ -54,6 +56,8 @@ func (s *Socks) Config() C.InboundConfig {
 
 // Close implements constant.InboundListener
 func (s *Socks) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	tcpListeners, udpListeners := s.stl, s.sul
 	s.stl, s.sul = nil, nil
 	return closeSocksListeners(tcpListeners, udpListeners)
@@ -81,6 +85,12 @@ func closeSocksListeners(tcpListeners []*socks.Listener, udpListeners []*socks.U
 
 // Address implements constant.InboundListener
 func (s *Socks) Address() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.addressLocked()
+}
+
+func (s *Socks) addressLocked() string {
 	var addrList []string
 	for _, l := range s.stl {
 		addrList = append(addrList, l.Address())
@@ -90,6 +100,8 @@ func (s *Socks) Address() string {
 
 // Listen implements constant.InboundListener
 func (s *Socks) Listen(tunnel C.Tunnel) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	lc := s.ListenConfig()
 	tcpListeners := make([]*socks.Listener, 0, len(strings.Split(s.RawAddress(), ",")))
 	udpListeners := make([]*socks.UDPListener, 0, len(strings.Split(s.RawAddress(), ",")))
@@ -121,7 +133,7 @@ func (s *Socks) Listen(tunnel C.Tunnel) error {
 	s.stl = tcpListeners
 	s.sul = udpListeners
 
-	log.Infoln("SOCKS[%s] proxy listening at: %s", s.Name(), s.Address())
+	log.Infoln("SOCKS[%s] proxy listening at: %s", s.Name(), s.addressLocked())
 	return nil
 }
 

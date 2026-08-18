@@ -50,3 +50,35 @@ func TestNewTunKernelDirectMaxEntriesContract(t *testing.T) {
 	})
 	require.Error(t, err)
 }
+
+func TestInboundHandleCloseAfterListenIsIdempotent(t *testing.T) {
+	httpIn, err := NewHTTP(&HTTPOption{BaseOption: BaseOption{NameStr: "http", Listen: "127.0.0.1", Port: "0"}})
+	require.NoError(t, err)
+	require.NoError(t, httpIn.Listen(nil))
+	require.NotEmpty(t, httpIn.Address())
+	require.NoError(t, httpIn.Close())
+	require.Nil(t, httpIn.l)
+	require.Empty(t, httpIn.Address())
+	require.NoError(t, httpIn.Close())
+
+	socksIn, err := NewSocks(&SocksOption{BaseOption: BaseOption{NameStr: "socks", Listen: "127.0.0.1", Port: "0"}})
+	require.NoError(t, err)
+	require.NoError(t, socksIn.Listen(nil))
+	require.NotEmpty(t, socksIn.Address())
+	require.NoError(t, socksIn.Close())
+	require.Empty(t, socksIn.Address())
+	require.NoError(t, socksIn.Close())
+}
+
+func TestInboundAddressAndCloseDoNotRace(t *testing.T) {
+	httpIn, err := NewHTTP(&HTTPOption{BaseOption: BaseOption{NameStr: "http", Listen: "127.0.0.1", Port: "0"}})
+	require.NoError(t, err)
+	require.NoError(t, httpIn.Listen(nil))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = httpIn.Address()
+	}()
+	require.NoError(t, httpIn.Close())
+	<-done
+}
