@@ -102,7 +102,7 @@ func asterAdminMiddleware(secure bool) func(http.Handler) http.Handler {
 				return
 			}
 			bearer, token, found := strings.Cut(request.Header.Get("Authorization"), " ")
-			if !found || bearer != "Bearer" || !asterManager.Default.Authenticate(token) {
+			if !found || !strings.EqualFold(bearer, "Bearer") || !asterManager.Default.Authenticate(token) {
 				writer.Header().Set("WWW-Authenticate", "Bearer")
 				writeAsterError(writer, request, http.StatusUnauthorized, "invalid Aster API token")
 				return

@@ -105,6 +105,12 @@ func TestAsterRoutesUseIndependentAuthentication(t *testing.T) {
 			require.Equal(t, test.status, response.Code)
 		})
 	}
+
+	request := httptest.NewRequest("GET", "http://controller.example/api/admin/overview", nil)
+	request.Header.Set("Authorization", "bearer 0123456789abcdef0123456789abcdef")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	require.Equal(t, 200, response.Code)
 }
 
 func TestAsterOverviewAdvertisesUnsupportedCapabilities(t *testing.T) {

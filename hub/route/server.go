@@ -445,7 +445,7 @@ func authentication(secret string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		fn := func(w http.ResponseWriter, r *http.Request) {
 			// Browser websocket not support custom header
-			if r.Header.Get("Upgrade") == "websocket" && r.URL.Query().Get("token") != "" {
+			if isWebSocketRequest(r) && r.URL.Query().Get("token") != "" {
 				token := r.URL.Query().Get("token")
 				if !safeEqual(token, secret) {
 					render.Status(r, http.StatusUnauthorized)
@@ -459,7 +459,7 @@ func authentication(secret string) func(http.Handler) http.Handler {
 			header := r.Header.Get("Authorization")
 			bearer, token, found := strings.Cut(header, " ")
 
-			hasInvalidHeader := bearer != "Bearer"
+			hasInvalidHeader := !strings.EqualFold(bearer, "Bearer")
 			hasInvalidSecret := !found || !safeEqual(token, secret)
 			if hasInvalidHeader || hasInvalidSecret {
 				render.Status(r, http.StatusUnauthorized)
@@ -472,18 +472,32 @@ func authentication(secret string) func(http.Handler) http.Handler {
 	}
 }
 
+func writeStreamingResponse(w http.ResponseWriter, data []byte) error {
+	if _, err := w.Write(data); err != nil {
+		return err
+	}
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+	return nil
+}
+
 func hello(w http.ResponseWriter, r *http.Request) {
 	render.JSON(w, r, render.M{"hello": "mihomo"})
 }
 
 func traffic(w http.ResponseWriter, r *http.Request) {
 	var wsConn net.Conn
-	if r.Header.Get("Upgrade") == "websocket" {
+	if isWebSocketRequest(r) {
 		var err error
 		wsConn, _, err = wsUpgrade(r, w)
 		if err != nil {
+			if wsConn != nil {
+				_ = wsConn.Close()
+			}
 			return
 		}
+		defer wsConn.Close()
 	}
 
 	if wsConn == nil {
@@ -496,40 +510,48 @@ func traffic(w http.ResponseWriter, r *http.Request) {
 	t := statistic.DefaultManager
 	buf := &bytes.Buffer{}
 	var err error
-	for range tick.C {
-		buf.Reset()
-		up, down := t.Now()
-		upTotal, downTotal := t.Total()
-		if err := json.NewEncoder(buf).Encode(Traffic{
-			Up:        up,
-			Down:      down,
-			UpTotal:   upTotal,
-			DownTotal: downTotal,
-		}); err != nil {
-			break
-		}
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-tick.C:
+			buf.Reset()
+			up, down := t.Now()
+			upTotal, downTotal := t.Total()
+			if err := json.NewEncoder(buf).Encode(Traffic{
+				Up:        up,
+				Down:      down,
+				UpTotal:   upTotal,
+				DownTotal: downTotal,
+			}); err != nil {
+				return
+			}
 
-		if wsConn == nil {
-			_, err = w.Write(buf.Bytes())
-			w.(http.Flusher).Flush()
-		} else {
-			err = wsWriteServerText(wsConn, buf.Bytes())
-		}
+			if wsConn == nil {
+				err = writeStreamingResponse(w, buf.Bytes())
+			} else {
+				err = wsWriteServerText(wsConn, buf.Bytes())
+			}
 
-		if err != nil {
-			break
+			if err != nil {
+				return
+			}
 		}
 	}
 }
 
 func memory(w http.ResponseWriter, r *http.Request) {
 	var wsConn net.Conn
-	if r.Header.Get("Upgrade") == "websocket" {
+	if isWebSocketRequest(r) {
 		var err error
 		wsConn, _, err = wsUpgrade(r, w)
 		if err != nil {
+			if wsConn != nil {
+				_ = wsConn.Close()
+			}
 			return
 		}
+		defer wsConn.Close()
 	}
 
 	if wsConn == nil {
@@ -543,31 +565,35 @@ func memory(w http.ResponseWriter, r *http.Request) {
 	buf := &bytes.Buffer{}
 	var err error
 	first := true
-	for range tick.C {
-		buf.Reset()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-tick.C:
+			buf.Reset()
 
-		inuse := t.Memory()
-		// make chat.js begin with zero
-		// this is shit var,but we need output 0 for first time
-		if first {
-			inuse = 0
-			first = false
-		}
-		if err := json.NewEncoder(buf).Encode(Memory{
-			Inuse:   inuse,
-			OSLimit: 0,
-		}); err != nil {
-			break
-		}
-		if wsConn == nil {
-			_, err = w.Write(buf.Bytes())
-			w.(http.Flusher).Flush()
-		} else {
-			err = wsWriteServerText(wsConn, buf.Bytes())
-		}
+			inuse := t.Memory()
+			// make chat.js begin with zero
+			// this is shit var,but we need output 0 for first time
+			if first {
+				inuse = 0
+				first = false
+			}
+			if err := json.NewEncoder(buf).Encode(Memory{
+				Inuse:   inuse,
+				OSLimit: 0,
+			}); err != nil {
+				return
+			}
+			if wsConn == nil {
+				err = writeStreamingResponse(w, buf.Bytes())
+			} else {
+				err = wsWriteServerText(wsConn, buf.Bytes())
+			}
 
-		if err != nil {
-			break
+			if err != nil {
+				return
+			}
 		}
 	}
 }
@@ -607,12 +633,16 @@ func getLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var wsConn net.Conn
-	if r.Header.Get("Upgrade") == "websocket" {
+	if isWebSocketRequest(r) {
 		var err error
 		wsConn, _, err = wsUpgrade(r, w)
 		if err != nil {
+			if wsConn != nil {
+				_ = wsConn.Close()
+			}
 			return
 		}
+		defer wsConn.Close()
 	}
 
 	if wsConn == nil {
@@ -635,44 +665,51 @@ func getLogs(w http.ResponseWriter, r *http.Request) {
 		close(ch)
 	}()
 
-	for logM := range ch {
-		if logM.LogLevel < level {
-			continue
-		}
-		buf.Reset()
-
-		if !isStructured {
-			if err := json.NewEncoder(buf).Encode(Log{
-				Type:    logM.Type(),
-				Payload: logM.Payload,
-			}); err != nil {
-				break
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case logM, ok := <-ch:
+			if !ok {
+				return
 			}
-		} else {
-			newLevel := logM.Type()
-			if newLevel == "warning" {
-				newLevel = "warn"
+			if logM.LogLevel < level {
+				continue
 			}
-			if err := json.NewEncoder(buf).Encode(LogStructured{
-				Time:    time.Now().Format(time.TimeOnly),
-				Level:   newLevel,
-				Message: logM.Payload,
-				Fields:  []LogStructuredField{},
-			}); err != nil {
-				break
+			buf.Reset()
+
+			if !isStructured {
+				if err := json.NewEncoder(buf).Encode(Log{
+					Type:    logM.Type(),
+					Payload: logM.Payload,
+				}); err != nil {
+					return
+				}
+			} else {
+				newLevel := logM.Type()
+				if newLevel == "warning" {
+					newLevel = "warn"
+				}
+				if err := json.NewEncoder(buf).Encode(LogStructured{
+					Time:    time.Now().Format(time.TimeOnly),
+					Level:   newLevel,
+					Message: logM.Payload,
+					Fields:  []LogStructuredField{},
+				}); err != nil {
+					return
+				}
 			}
-		}
 
-		var err error
-		if wsConn == nil {
-			_, err = w.Write(buf.Bytes())
-			w.(http.Flusher).Flush()
-		} else {
-			err = wsWriteServerText(wsConn, buf.Bytes())
-		}
+			var err error
+			if wsConn == nil {
+				err = writeStreamingResponse(w, buf.Bytes())
+			} else {
+				err = wsWriteServerText(wsConn, buf.Bytes())
+			}
 
-		if err != nil {
-			break
+			if err != nil {
+				return
+			}
 		}
 	}
 }
