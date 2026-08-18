@@ -24,6 +24,9 @@ hero:
     - theme: alt
       text: 設定參考
       link: /reference/configuration
+    - theme: alt
+      text: 更新紀錄
+      link: /changelog
 
 features:
   - icon: ↗
@@ -95,6 +98,7 @@ Aster Core 是 [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo) 的衍生
 - 已有 AnyTLS + REALITY 節點：[AnyTLS + REALITY 設定](/tutorials/anytls-reality)
 - 設定分流與 DNS：[路由與 DNS](/tutorials/routing-dns)
 - 從 Mihomo 遷移：[Aster 與 Mihomo 的差異](/reference/mihomo-differences)
+- 想查看 Aster 最近變更：[更新紀錄](/changelog)（[English](/en/changelog)）
 - 想了解核心開銷：[效能優化與基準](/reference/performance)
 - 遇到連線問題：[故障排查](/tutorials/troubleshooting)
 
