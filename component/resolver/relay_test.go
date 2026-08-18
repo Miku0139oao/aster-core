@@ -33,6 +33,7 @@ func TestRelayDnsPacketCopiesCompressedReplyIntoTarget(t *testing.T) {
 
 	request := new(D.Msg)
 	request.SetQuestion("example.com.", D.TypeA)
+	request.SetEdns0(4096, false)
 	payload, err := request.Pack()
 	require.NoError(t, err)
 
