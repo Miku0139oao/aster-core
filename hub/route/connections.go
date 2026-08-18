@@ -3,6 +3,7 @@ package route
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"strconv"
 	"time"
 
@@ -21,34 +22,32 @@ func connectionRouter() http.Handler {
 }
 
 func getConnections(w http.ResponseWriter, r *http.Request) {
-	if !(r.Header.Get("Upgrade") == "websocket") {
-		snapshot := statistic.DefaultManager.Snapshot()
+	if !isWebSocketRequest(r) {
+		snapshot := normalizedConnectionSnapshot(statistic.DefaultManager.Snapshot())
 		render.JSON(w, r, snapshot)
+		return
+	}
+
+	interval, err := connectionInterval(r)
+	if err != nil {
+		render.Status(r, http.StatusBadRequest)
+		render.JSON(w, r, newError(err.Error()))
 		return
 	}
 
 	conn, _, err := wsUpgrade(r, w)
 	if err != nil {
+		if conn != nil {
+			_ = conn.Close()
+		}
 		return
 	}
-
-	intervalStr := r.URL.Query().Get("interval")
-	interval := 1000
-	if intervalStr != "" {
-		t, err := strconv.Atoi(intervalStr)
-		if err != nil {
-			render.Status(r, http.StatusBadRequest)
-			render.JSON(w, r, ErrBadRequest)
-			return
-		}
-
-		interval = t
-	}
+	defer conn.Close()
 
 	buf := &bytes.Buffer{}
 	sendSnapshot := func() error {
 		buf.Reset()
-		snapshot := statistic.DefaultManager.Snapshot()
+		snapshot := normalizedConnectionSnapshot(statistic.DefaultManager.Snapshot())
 		if err := json.NewEncoder(buf).Encode(snapshot); err != nil {
 			return err
 		}
@@ -60,13 +59,42 @@ func getConnections(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tick := time.NewTicker(time.Millisecond * time.Duration(interval))
+	tick := time.NewTicker(interval)
 	defer tick.Stop()
-	for range tick.C {
-		if err := sendSnapshot(); err != nil {
-			break
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-tick.C:
+			if err := sendSnapshot(); err != nil {
+				return
+			}
 		}
 	}
+}
+
+const maxConnectionIntervalMilliseconds int64 = (1<<63 - 1) / int64(time.Millisecond)
+
+func connectionInterval(r *http.Request) (time.Duration, error) {
+	interval := int64(1000)
+	if value := r.URL.Query().Get("interval"); value != "" {
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			return 0, errors.New("interval must be a positive integer in milliseconds")
+		}
+		interval = parsed
+	}
+	if interval <= 0 || interval > maxConnectionIntervalMilliseconds {
+		return 0, errors.New("interval must be a positive integer in milliseconds")
+	}
+	return time.Duration(interval) * time.Millisecond, nil
+}
+
+func normalizedConnectionSnapshot(snapshot *statistic.Snapshot) *statistic.Snapshot {
+	if snapshot.Connections == nil {
+		snapshot.Connections = make([]*statistic.TrackerInfo, 0)
+	}
+	return snapshot
 }
 
 func closeConnection(w http.ResponseWriter, r *http.Request) {

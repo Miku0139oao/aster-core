@@ -28,6 +28,10 @@ func decodeRequestJSON(w http.ResponseWriter, r *http.Request, value any) error 
 	return render.DecodeJSON(r.Body, value)
 }
 
+func isWebSocketRequest(r *http.Request) bool {
+	return strings.EqualFold(strings.TrimSpace(r.Header.Get("Upgrade")), "websocket")
+}
+
 // When name is composed of a partial escape string, Golang does not unescape it
 func getEscapeParam(r *http.Request, paramName string) string {
 	param := chi.URLParam(r, paramName)
@@ -69,7 +73,7 @@ func wsUpgrade(r *http.Request, w http.ResponseWriter) (conn net.Conn, rw *bufio
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(body))
 		return nil, nil, err
-	} else if u := r.Header.Get("Upgrade"); u != "websocket" && !strings.EqualFold(u, "websocket") {
+	} else if u := strings.TrimSpace(r.Header.Get("Upgrade")); !strings.EqualFold(u, "websocket") {
 		err = errors.New("handshake error: bad Upgrade header")
 		body := err.Error()
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
