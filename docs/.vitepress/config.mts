@@ -62,6 +62,7 @@ export default defineConfig({
     darkModeSwitchTitle: "切換至深色模式",
     nav: [
       { text: "首頁", link: "/" },
+      { text: "下載", link: "/downloads" },
       {
         text: "實戰教學",
         items: [
@@ -86,6 +87,7 @@ export default defineConfig({
         text: "開始使用",
         items: [
           { text: "專案介紹", link: "/guide/introduction" },
+          { text: "下載", link: "/downloads" },
           { text: "快速開始", link: "/guide/getting-started" },
           { text: "設定概念", link: "/guide/configuration" },
         ],
@@ -128,6 +130,7 @@ export default defineConfig({
       {
         text: "部署",
         items: [
+          { text: "下載", link: "/downloads" },
           { text: "Docker", link: "/deployment/docker" },
           { text: "Linux 與 systemd", link: "/deployment/linux" },
           { text: "OpenWrt 與 Nikki", link: "/deployment/openwrt" },

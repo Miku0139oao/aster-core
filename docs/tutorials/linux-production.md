@@ -54,6 +54,10 @@ lscpu
 
 Release workflow 中不帶版本尾碼的 `amd64` 目前是 GOAMD64 v3，不是通用 x86-64。舊名稱 `amd64-compatible` 預計移除；新部署優先使用明確的 `amd64-v1`。
 
+::: warning 目前沒有官方 v* tag
+Aster 尚未發布編號 `v*` 發行。請到[下載](/downloads)使用 [`Prerelease-main`](https://github.com/Miku0139oao/aster-core/releases/tag/Prerelease-main)。該 tag 的資產名是 `aster-core-linux-amd64-v1-alpha-main-<sha>.gz`，不是 `…-vX.Y.Z.gz`。下面的 `vX.Y.Z` 只是未來穩定版的佔位。
+:::
+
 ## 2. 下載並驗證 release
 
 以下三個值都必須換成 Release 頁面實際存在的 tag 與 asset。檔名格式來自 repository 的 release workflow：

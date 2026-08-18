@@ -10,7 +10,7 @@
 
 ### [第一個代理設定](/tutorials/first-proxy)
 
-從下載 Aster Core 開始，建立本機 HTTP／SOCKS5 代理，加入一個 AnyTLS + REALITY 節點，最後用 `curl` 確認連線。
+從[下載](/downloads) Aster Core 開始，建立本機 HTTP／SOCKS5 代理，加入一個 AnyTLS + REALITY 節點，最後用 `curl` 確認連線。
 
 ### [路由與 DNS](/tutorials/routing-dns)
 

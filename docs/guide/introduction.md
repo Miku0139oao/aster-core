@@ -29,4 +29,4 @@ Aster 在 Mihomo 基線上加入 AnyTLS + REALITY 客戶端及分享連結支援
 
 Aster 內建 VLESS 與 AnyTLS 入站，也能即時管理使用者和訂閱。這些功能適合測試、全 Aster 環境，或需要 Aster 管理介面的部署；一般節點服務端仍可使用 Xray、sing-box 或 SideraCore。
 
-接下來可從[快速開始](/guide/getting-started)或[第一個代理設定](/tutorials/first-proxy)建立設定。
+接下來可從[下載](/downloads)取得執行檔，再依[快速開始](/guide/getting-started)或[第一個代理設定](/tutorials/first-proxy)建立設定。
