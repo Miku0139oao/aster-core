@@ -214,13 +214,7 @@ Full integration, Kernel DIRECT, and switching from an older Mihomo package: [Op
 
 ## Docker
 
-Image:
-
-```text
-docker.io/miku0139oao/aster-core
-```
-
-See [Docker](/deployment/docker). The image binary comes from the same release build as GitHub, not a separate unofficial package.
+CI is intended to publish `docker.io/miku0139oao/aster-core`, but Docker Hub credentials are not configured, so that image is not public yet. Build `aster-core:local` from [Docker](/en/deployment/docker).
 
 ## Verify checksums
 

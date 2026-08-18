@@ -128,7 +128,7 @@ Xray 或 sing-box 的 JSON 欄位不能直接貼入這份 YAML，請使用服務
 
 ## 文件站
 
-繁體中文文件位於 [astercore.fubukishop.app](https://astercore.fubukishop.app/)，原始檔保留在 [`docs/`](docs/index.md)。入門操作見[實戰教學](https://astercore.fubukishop.app/tutorials/)，專案差異見[Aster 與 Mihomo](https://astercore.fubukishop.app/reference/mihomo-differences)。
+繁體中文文件位於 [astercore.fubukishop.app](https://astercore.fubukishop.app/)，英文在 [/en/](https://astercore.fubukishop.app/en/)。二進位檔見[下載](https://astercore.fubukishop.app/downloads)，Aster 變更見[更新紀錄](https://astercore.fubukishop.app/changelog)。原始檔保留在 [`docs/`](docs/index.md)。入門操作見[實戰教學](https://astercore.fubukishop.app/tutorials/)，專案差異見[Aster 與 Mihomo](https://astercore.fubukishop.app/reference/mihomo-differences)。
 
 ```sh
 cd docs

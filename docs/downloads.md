@@ -214,13 +214,7 @@ readlink -f /usr/bin/mihomo
 
 ## Docker
 
-映像：
-
-```text
-docker.io/miku0139oao/aster-core
-```
-
-說明見 [Docker](/deployment/docker)。映像內的 binary 與 GitHub Release 走同一套建置，不是另一份非官方打包。
+CI 預定發布 `docker.io/miku0139oao/aster-core`，但目前沒有 Docker Hub credentials，映像尚未公開。請依 [Docker](/deployment/docker) 在本機建 `aster-core:local`。
 
 ## 驗證 checksum
 

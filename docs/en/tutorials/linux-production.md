@@ -59,9 +59,10 @@ In the release workflow, an `amd64` asset with no version suffix is currently GO
 Replace all three values with a tag and asset that actually exist on the Release page. The filename format comes from the repository release workflow:
 
 ```sh
-ASTER_RELEASE_TAG='vX.Y.Z'
+ASTER_RELEASE_TAG='Prerelease-main'
+ASTER_BUILD_ID='alpha-main-SHA7'
 ASTER_ASSET_FLAVOR='amd64-v1'
-ASTER_ASSET_NAME="aster-core-linux-${ASTER_ASSET_FLAVOR}-${ASTER_RELEASE_TAG}.gz"
+ASTER_ASSET_NAME="aster-core-linux-${ASTER_ASSET_FLAVOR}-${ASTER_BUILD_ID}.gz"
 ASTER_DOWNLOAD_DIR="$(mktemp -d)"
 ```
 
@@ -417,7 +418,7 @@ Read the release notes first, download the new asset, and redo checksum verifica
 Install the new binary into a new version directory, but do not switch `current` yet:
 
 ```sh
-ASTER_NEW_RELEASE='vX.Y.Z'
+ASTER_NEW_RELEASE='alpha-main-SHA7'
 sudo install -d -o root -g root -m 0755 \
   "/opt/aster-core/releases/${ASTER_NEW_RELEASE}"
 sudo install -o root -g root -m 0755 \
@@ -492,7 +493,7 @@ Never hand-edit `aster-state.json` `version` to bypass compatibility checks, and
 If you use the Debian package from Releases, download and verify the same way. Only change the asset name to a `.deb` that actually exists on the Release page:
 
 ```sh
-ASTER_DEB_NAME='aster-core-linux-amd64-v1-vX.Y.Z.deb'
+ASTER_DEB_NAME="aster-core-linux-amd64-v1-${ASTER_BUILD_ID}.deb"
 sudo apt install "./${ASTER_DEB_NAME}"
 ```
 

@@ -128,7 +128,7 @@ The full configuration surface is documented in [docs/config.yaml](docs/config.y
 
 ## Documentation site
 
-Searchable documentation is published at [astercore.fubukishop.app](https://astercore.fubukishop.app/). Traditional Chinese is the default locale; English lives at [/en/](https://astercore.fubukishop.app/en/). Source pages are kept under [`docs/`](docs/index.md). Start with the [step-by-step tutorials](https://astercore.fubukishop.app/en/tutorials/) or read the [plain-language Aster and Mihomo comparison](https://astercore.fubukishop.app/en/reference/mihomo-differences).
+Searchable documentation is published at [astercore.fubukishop.app](https://astercore.fubukishop.app/). Traditional Chinese is the default locale; English lives at [/en/](https://astercore.fubukishop.app/en/). Binaries are on [Downloads](https://astercore.fubukishop.app/downloads) ([English](https://astercore.fubukishop.app/en/downloads)). Aster-era changes are on [Changelog](https://astercore.fubukishop.app/changelog) ([English](https://astercore.fubukishop.app/en/changelog)). Source pages are kept under [`docs/`](docs/index.md). Start with the [step-by-step tutorials](https://astercore.fubukishop.app/en/tutorials/) or read the [plain-language Aster and Mihomo comparison](https://astercore.fubukishop.app/en/reference/mihomo-differences).
 
 ```sh
 cd docs

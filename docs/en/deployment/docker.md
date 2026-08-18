@@ -1,12 +1,16 @@
 # Docker
 
-## Official image
+Binaries, packages, and image sources are listed on [Downloads](/en/downloads). Public builds currently come from [`Prerelease-main`](https://github.com/Miku0139oao/aster-core/releases/tag/Prerelease-main); no official numbered `v*` release exists yet.
 
-The image is published to:
+## Image publish status
+
+CI is intended to publish to:
 
 ```text
 docker.io/miku0139oao/aster-core
 ```
+
+The Build workflow currently has no Docker Hub credentials, so the latest `main` run skipped the push. `main` and `latest` on that repository cannot be pulled anonymously. Until that is published, build `aster-core:local` from this repository as described below. The examples use that local tag.
 
 It includes:
 
