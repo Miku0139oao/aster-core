@@ -1,8 +1,13 @@
 package updater
 
 import (
+	"archive/zip"
+	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
 	C "github.com/Miku0139oao/aster-core/constant"
@@ -35,6 +40,71 @@ func TestParsePackageChecksum(t *testing.T) {
 		_, err := parsePackageChecksum(content, "missing.zip")
 		return err
 	}())
+}
+
+// The gzip header name comes from the downloaded archive, so it must never be
+// able to place the unpacked file outside the update directory.
+func TestGzFileUnpackContainsPathTraversal(t *testing.T) {
+	outDir := t.TempDir()
+	escaped := filepath.Join(filepath.Dir(outDir), "escaped-core")
+
+	archive := filepath.Join(outDir, "core.gz")
+	var buf bytes.Buffer
+	writer := gzip.NewWriter(&buf)
+	writer.Header.Name = "../../../escaped-core"
+	_, err := writer.Write([]byte("payload"))
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	require.NoError(t, os.WriteFile(archive, buf.Bytes(), 0o600))
+
+	outputName, err := DefaultCoreUpdater.gzFileUnpack(archive, outDir, 0o600)
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(outDir, "escaped-core"), outputName)
+	require.NoFileExists(t, escaped)
+}
+
+func TestGzFileUnpackUsesArchiveName(t *testing.T) {
+	outDir := t.TempDir()
+	archive := filepath.Join(outDir, "core.gz")
+	var buf bytes.Buffer
+	writer := gzip.NewWriter(&buf)
+	writer.Header.Name = "aster-core"
+	_, err := writer.Write([]byte("payload"))
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	require.NoError(t, os.WriteFile(archive, buf.Bytes(), 0o600))
+
+	outputName, err := DefaultCoreUpdater.gzFileUnpack(archive, outDir, 0o600)
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(outDir, "aster-core"), outputName)
+	content, err := os.ReadFile(outputName)
+	require.NoError(t, err)
+	require.Equal(t, "payload", string(content))
+}
+
+func TestZipFileUnpackKeepsOutputInsideDirectory(t *testing.T) {
+	outDir := t.TempDir()
+	archive := filepath.Join(outDir, "core.zip")
+	var buf bytes.Buffer
+	writer := zip.NewWriter(&buf)
+	entry, err := writer.Create("../../../escaped-core")
+	require.NoError(t, err)
+	_, err = entry.Write([]byte("payload"))
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	require.NoError(t, os.WriteFile(archive, buf.Bytes(), 0o600))
+
+	outputName, err := DefaultCoreUpdater.zipFileUnpack(archive, outDir, 0o600)
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(outDir, "escaped-core"), outputName)
+	require.NoFileExists(t, filepath.Join(filepath.Dir(outDir), "escaped-core"))
+}
+
+func TestArchiveOutputPathRejectsUnusableNames(t *testing.T) {
+	for _, name := range []string{"", ".", "..", "../..", "/", "foo/..", "./"} {
+		_, err := archiveOutputPath("/tmp/update", name)
+		require.Errorf(t, err, "name %q must be rejected", name)
+	}
 }
 
 func TestValidateReleaseUpdate(t *testing.T) {

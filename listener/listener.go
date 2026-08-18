@@ -32,22 +32,25 @@ var (
 	allowLan    = false
 	bindAddress = "*"
 
-	socksListener       *socks.Listener
-	socksUDPListener    *socks.UDPListener
-	httpListener        *http.Listener
-	redirListener       *redir.Listener
-	redirUDPListener    *tproxy.UDPListener
-	tproxyListener      *tproxy.Listener
-	tproxyUDPListener   *tproxy.UDPListener
-	mixedListener       *mixed.Listener
-	mixedUDPLister      *socks.UDPListener
-	tunnelTCPListeners  = map[string]*LT.Listener{}
-	tunnelUDPListeners  = map[string]*LT.PacketConn{}
-	inboundListeners    = map[string]C.InboundListener{}
-	tunLister           *sing_tun.Listener
-	shadowSocksListener C.MultiAddrListener
-	vmessListener       *sing_vmess.Listener
-	tuicListener        *tuic.Listener
+	socksListener      *socks.Listener
+	socksUDPListener   *socks.UDPListener
+	httpListener       *http.Listener
+	redirListener      *redir.Listener
+	redirUDPListener   *tproxy.UDPListener
+	tproxyListener     *tproxy.Listener
+	tproxyUDPListener  *tproxy.UDPListener
+	mixedListener      *mixed.Listener
+	mixedUDPLister     *socks.UDPListener
+	tunnelTCPListeners = map[string]*LT.Listener{}
+	tunnelUDPListeners = map[string]*LT.PacketConn{}
+	inboundListeners   = map[string]C.InboundListener{}
+	// Names registered in inboundListeners that are not serving, because a failed
+	// patch could not release them. Guarded by inboundMux.
+	unusableInboundListeners = map[string]struct{}{}
+	tunLister                *sing_tun.Listener
+	shadowSocksListener      C.MultiAddrListener
+	vmessListener            *sing_vmess.Listener
+	tuicListener             *tuic.Listener
 
 	// lock for recreate function
 	socksMux   sync.Mutex
@@ -646,11 +649,20 @@ func PatchInboundListeners(newListenerMap map[string]C.InboundListener, tunnel C
 	}
 	sort.Strings(newNames)
 
+	// A listener left registered by a failed rollback is not actually serving, so
+	// an equal config must not be taken as evidence that it can be reused.
+	reusable := func(name string, oldListener, newListener C.InboundListener) bool {
+		if _, unusable := unusableInboundListeners[name]; unusable {
+			return false
+		}
+		return oldListener.Config().Equal(newListener.Config())
+	}
+
 	stopped := make([]listenerPatch, 0, len(oldNames))
 	for _, name := range oldNames {
 		oldListener := inboundListeners[name]
 		newListener, exists := newListenerMap[name]
-		if exists && oldListener.Config().Equal(newListener.Config()) {
+		if exists && reusable(name, oldListener, newListener) {
 			continue
 		}
 		if !exists && !dropOld {
@@ -662,7 +674,7 @@ func PatchInboundListeners(newListenerMap map[string]C.InboundListener, tunnel C
 	replacements := make([]listenerPatch, 0, len(newNames))
 	for _, name := range newNames {
 		newListener := newListenerMap[name]
-		if oldListener, exists := inboundListeners[name]; exists && oldListener.Config().Equal(newListener.Config()) {
+		if oldListener, exists := inboundListeners[name]; exists && reusable(name, oldListener, newListener) {
 			continue
 		}
 		replacements = append(replacements, listenerPatch{name: name, listener: newListener})
@@ -676,10 +688,16 @@ func PatchInboundListeners(newListenerMap map[string]C.InboundListener, tunnel C
 			patch := started[i]
 			if err := patch.listener.Close(); err != nil {
 				rollbackErr = errors.Join(rollbackErr, fmt.Errorf("close replacement listener %q: %w", patch.name, err))
+				// The replacement still holds its address, so keep it registered to
+				// retain the only handle able to release it later, and remember that
+				// it is unusable so the next patch rebuilds it instead of matching
+				// its config and assuming it is healthy.
 				inboundListeners[patch.name] = patch.listener
+				unusableInboundListeners[patch.name] = struct{}{}
 				continue
 			}
 			delete(inboundListeners, patch.name)
+			delete(unusableInboundListeners, patch.name)
 		}
 		for _, patch := range closed {
 			if _, exists := inboundListeners[patch.name]; exists {
@@ -691,10 +709,12 @@ func PatchInboundListeners(newListenerMap map[string]C.InboundListener, tunnel C
 				if closeErr := patch.listener.Close(); closeErr != nil {
 					rollbackErr = errors.Join(rollbackErr, fmt.Errorf("clean up unrestored listener %q: %w", patch.name, closeErr))
 					inboundListeners[patch.name] = patch.listener
+					unusableInboundListeners[patch.name] = struct{}{}
 				}
 				continue
 			}
 			inboundListeners[patch.name] = patch.listener
+			delete(unusableInboundListeners, patch.name)
 		}
 		return errors.Join(cause, rollbackErr)
 	}
@@ -706,6 +726,7 @@ func PatchInboundListeners(newListenerMap map[string]C.InboundListener, tunnel C
 			continue
 		}
 		delete(inboundListeners, patch.name)
+		delete(unusableInboundListeners, patch.name)
 		closed = append(closed, patch)
 	}
 	if closeErr != nil {
@@ -721,6 +742,7 @@ func PatchInboundListeners(newListenerMap map[string]C.InboundListener, tunnel C
 	}
 	for _, patch := range started {
 		inboundListeners[patch.name] = patch.listener
+		delete(unusableInboundListeners, patch.name)
 	}
 	return nil
 }

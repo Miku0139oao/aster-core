@@ -34,6 +34,8 @@ import (
 
 type Listener struct {
 	closed      atomic.Bool
+	closeOnce   sync.Once
+	closeErr    error
 	config      LC.AnyTLSServer
 	listeners   []net.Listener
 	tlsConfig   *tls.Config
@@ -217,24 +219,24 @@ func New(config LC.AnyTLSServer, lc C.InboundListenConfig, tunnel C.Tunnel, addi
 }
 
 func (l *Listener) Close() error {
-	l.usersMu.Lock()
-	l.closed.Store(true)
-	snapshot := &userSnapshot{byPasswordHash: map[[32]byte]string{}}
-	l.users.Store(snapshot)
-	pendingConnections := l.removePendingConnectionsLocked()
-	activeConnections := l.removeInvalidConnectionsLocked(snapshot)
-	l.usersMu.Unlock()
-	closeAnyTLSConnections(pendingConnections)
-	closeAnyTLSConnections(activeConnections)
-	l.closeTransportConnections()
-	var retErr error
-	for _, lis := range l.listeners {
-		err := lis.Close()
-		if err != nil {
-			retErr = err
+	l.closeOnce.Do(func() {
+		l.usersMu.Lock()
+		l.closed.Store(true)
+		snapshot := &userSnapshot{byPasswordHash: map[[32]byte]string{}}
+		l.users.Store(snapshot)
+		pendingConnections := l.removePendingConnectionsLocked()
+		activeConnections := l.removeInvalidConnectionsLocked(snapshot)
+		l.usersMu.Unlock()
+		closeAnyTLSConnections(pendingConnections)
+		closeAnyTLSConnections(activeConnections)
+		l.closeTransportConnections()
+		for _, lis := range l.listeners {
+			if err := lis.Close(); err != nil {
+				l.closeErr = errors.Join(l.closeErr, err)
+			}
 		}
-	}
-	return retErr
+	})
+	return l.closeErr
 }
 
 func (l *Listener) UpdateUsers(users map[string]string) error {

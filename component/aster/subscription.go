@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 
 	C "github.com/Miku0139oao/aster-core/constant"
 	"github.com/Miku0139oao/aster-core/listener"
@@ -206,19 +207,37 @@ func hasAdvancedXHTTPConfig(config LI.XHTTPConfig) bool {
 		config.ScStreamUpServerSecs != "" || config.ScMaxBufferedPosts != "" || config.ScMaxEachPostBytes != ""
 }
 
+// realityPublicKeys caches the public key derived from a REALITY private key.
+// Deriving it costs a scalar multiplication, and the subscription endpoint that
+// needs it is unauthenticated and served while holding the manager lock.
+var realityPublicKeys sync.Map
+
+func realityPublicKey(privateKeyBase64 string) (string, error) {
+	if cached, ok := realityPublicKeys.Load(privateKeyBase64); ok {
+		return cached.(string), nil
+	}
+	privateKeyBytes, err := base64.RawURLEncoding.DecodeString(privateKeyBase64)
+	if err != nil {
+		return "", fmt.Errorf("decode REALITY private key: %w", err)
+	}
+	privateKey, err := ecdh.X25519().NewPrivateKey(privateKeyBytes)
+	if err != nil {
+		return "", fmt.Errorf("parse REALITY private key: %w", err)
+	}
+	publicKey := base64.RawURLEncoding.EncodeToString(privateKey.PublicKey().Bytes())
+	realityPublicKeys.Store(privateKeyBase64, publicKey)
+	return publicKey, nil
+}
+
 func setSecurityQuery(query url.Values, reality LI.RealityConfig, hasCertificate bool, defaultSNI string) error {
 	if reality.PrivateKey != "" {
-		privateKeyBytes, err := base64.RawURLEncoding.DecodeString(reality.PrivateKey)
+		publicKey, err := realityPublicKey(reality.PrivateKey)
 		if err != nil {
-			return fmt.Errorf("decode REALITY private key: %w", err)
-		}
-		privateKey, err := ecdh.X25519().NewPrivateKey(privateKeyBytes)
-		if err != nil {
-			return fmt.Errorf("parse REALITY private key: %w", err)
+			return err
 		}
 		query.Set("security", "reality")
 		query.Set("fp", "chrome")
-		query.Set("pbk", base64.RawURLEncoding.EncodeToString(privateKey.PublicKey().Bytes()))
+		query.Set("pbk", publicKey)
 		serverNames := append([]string(nil), reality.ServerNames...)
 		sort.Strings(serverNames)
 		if len(serverNames) > 0 {

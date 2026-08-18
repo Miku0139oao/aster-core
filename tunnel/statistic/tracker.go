@@ -25,6 +25,71 @@ type Tracker interface {
 	C.Connection
 }
 
+// Reporting every read and write to the traffic observer serialises the whole
+// data path on state shared by the manager. Each connection instead accumulates
+// its own bytes and reports once per threshold, plus a final report on close, so
+// per-user totals stay exact while the shared state is touched rarely.
+const principalReportThreshold = 64 << 10
+
+type principal struct {
+	inbound  string
+	userID   string
+	upload   atomic.Int64
+	download atomic.Int64
+}
+
+func newPrincipal(metadata *C.Metadata) *principal {
+	if metadata == nil || metadata.InName == "" || metadata.InUser == "" {
+		return nil
+	}
+	return &principal{inbound: metadata.InName, userID: metadata.InUser}
+}
+
+// accumulate adds size to pending and returns the amount to report, which is
+// zero until the threshold is reached.
+func accumulate(pending *atomic.Int64, size int64) int64 {
+	if size <= 0 {
+		return 0
+	}
+	total := pending.Add(size)
+	if total < principalReportThreshold {
+		return 0
+	}
+	if pending.CompareAndSwap(total, 0) {
+		return total
+	}
+	return 0
+}
+
+func (p *principal) reportUpload(manager *Manager, size int64) {
+	if p == nil {
+		return
+	}
+	if pending := accumulate(&p.upload, size); pending > 0 {
+		manager.recordPrincipal(p.inbound, p.userID, pending, 0)
+	}
+}
+
+func (p *principal) reportDownload(manager *Manager, size int64) {
+	if p == nil {
+		return
+	}
+	if pending := accumulate(&p.download, size); pending > 0 {
+		manager.recordPrincipal(p.inbound, p.userID, 0, pending)
+	}
+}
+
+// flush reports the bytes that never reached the threshold.
+func (p *principal) flush(manager *Manager) {
+	if p == nil {
+		return
+	}
+	upload, download := p.upload.Swap(0), p.download.Swap(0)
+	if upload > 0 || download > 0 {
+		manager.recordPrincipal(p.inbound, p.userID, upload, download)
+	}
+}
+
 type TrackerInfo struct {
 	UUID          uuid.UUID    `json:"id"`
 	Metadata      *C.Metadata  `json:"metadata"`
@@ -39,8 +104,9 @@ type TrackerInfo struct {
 
 type tcpTracker struct {
 	C.Conn `json:"-"`
-	TrackerInfo
+	*TrackerInfo
 	manager        *Manager
+	principal      *principal
 	traffic        *trafficControl.Session
 	ctx            context.Context
 	cancel         context.CancelFunc
@@ -56,7 +122,23 @@ func (tt *tcpTracker) ID() string {
 }
 
 func (tt *tcpTracker) Info() *TrackerInfo {
-	return &tt.TrackerInfo
+	return tt.TrackerInfo
+}
+
+func (tt *tcpTracker) pushDownloaded(download int64) {
+	if tt.pushToManager {
+		tt.manager.PushDownloaded(download)
+		tt.principal.reportDownload(tt.manager, download)
+	}
+	tt.DownloadTotal.Add(download)
+}
+
+func (tt *tcpTracker) pushUploaded(upload int64) {
+	if tt.pushToManager {
+		tt.manager.PushUploaded(upload)
+		tt.principal.reportUpload(tt.manager, upload)
+	}
+	tt.UploadTotal.Add(upload)
 }
 
 func (tt *tcpTracker) Read(b []byte) (int, error) {
@@ -69,10 +151,7 @@ func (tt *tcpTracker) Read(b []byte) (int, error) {
 		err = waitErr
 	}
 	tt.traffic.Record(trafficControl.Download, download)
-	if tt.pushToManager {
-		tt.manager.PushDownloadedFor(tt.Metadata.InName, tt.Metadata.InUser, download)
-	}
-	tt.DownloadTotal.Add(download)
+	tt.pushDownloaded(download)
 	return n, err
 }
 
@@ -93,10 +172,7 @@ func (tt *tcpTracker) ReadBuffer(buffer *buf.Buffer) (err error) {
 		err = waitErr
 	}
 	tt.traffic.Record(trafficControl.Download, download)
-	if tt.pushToManager {
-		tt.manager.PushDownloadedFor(tt.Metadata.InName, tt.Metadata.InUser, download)
-	}
-	tt.DownloadTotal.Add(download)
+	tt.pushDownloaded(download)
 	return
 }
 
@@ -107,10 +183,7 @@ func (tt *tcpTracker) UnwrapReader() (io.Reader, []N.CountFunc) {
 	}
 	return &controlledReader{reader: reader, session: tt.traffic, ctx: tt.ctx}, []N.CountFunc{func(download int64) {
 		tt.traffic.Record(trafficControl.Download, download)
-		if tt.pushToManager {
-			tt.manager.PushDownloadedFor(tt.Metadata.InName, tt.Metadata.InUser, download)
-		}
-		tt.DownloadTotal.Add(download)
+		tt.pushDownloaded(download)
 	}}
 }
 
@@ -124,10 +197,7 @@ func (tt *tcpTracker) Write(b []byte) (int, error) {
 	n, err := tt.Conn.Write(b)
 	upload := int64(n)
 	tt.traffic.Record(trafficControl.Upload, upload)
-	if tt.pushToManager {
-		tt.manager.PushUploadedFor(tt.Metadata.InName, tt.Metadata.InUser, upload)
-	}
-	tt.UploadTotal.Add(upload)
+	tt.pushUploaded(upload)
 	return n, err
 }
 
@@ -144,10 +214,7 @@ func (tt *tcpTracker) WriteBuffer(buffer *buf.Buffer) (err error) {
 		return err
 	}
 	tt.traffic.Record(trafficControl.Upload, upload)
-	if tt.pushToManager {
-		tt.manager.PushUploadedFor(tt.Metadata.InName, tt.Metadata.InUser, upload)
-	}
-	tt.UploadTotal.Add(upload)
+	tt.pushUploaded(upload)
 	return nil
 }
 
@@ -158,10 +225,7 @@ func (tt *tcpTracker) UnwrapWriter() (io.Writer, []N.CountFunc) {
 	}
 	return &controlledWriter{writer: writer, session: tt.traffic, ctx: tt.ctx}, []N.CountFunc{func(upload int64) {
 		tt.traffic.Record(trafficControl.Upload, upload)
-		if tt.pushToManager {
-			tt.manager.PushUploadedFor(tt.Metadata.InName, tt.Metadata.InUser, upload)
-		}
-		tt.UploadTotal.Add(upload)
+		tt.pushUploaded(upload)
 	}}
 }
 
@@ -169,6 +233,9 @@ func (tt *tcpTracker) Close() error {
 	tt.cancel()
 	tt.traffic.Close()
 	tt.manager.Leave(tt)
+	if tt.pushToManager {
+		tt.principal.flush(tt.manager)
+	}
 	return tt.Conn.Close()
 }
 
@@ -185,11 +252,12 @@ func NewTCPTracker(conn C.Conn, manager *Manager, metadata *C.Metadata, rule C.R
 	t := &tcpTracker{
 		Conn:           conn,
 		manager:        manager,
+		principal:      newPrincipal(metadata),
 		traffic:        traffic,
 		ctx:            ctx,
 		cancel:         cancel,
 		portalResponse: portalResponse,
-		TrackerInfo: TrackerInfo{
+		TrackerInfo: &TrackerInfo{
 			UUID:          utils.NewUUIDV4(),
 			Start:         time.Now(),
 			Metadata:      metadata,
@@ -204,10 +272,12 @@ func NewTCPTracker(conn C.Conn, manager *Manager, metadata *C.Metadata, rule C.R
 
 	if pushToManager {
 		if uploadTotal > 0 {
-			manager.PushUploadedFor(metadata.InName, metadata.InUser, uploadTotal)
+			manager.PushUploaded(uploadTotal)
+			t.principal.reportUpload(manager, uploadTotal)
 		}
 		if downloadTotal > 0 {
-			manager.PushDownloadedFor(metadata.InName, metadata.InUser, downloadTotal)
+			manager.PushDownloaded(downloadTotal)
+			t.principal.reportDownload(manager, downloadTotal)
 		}
 	}
 	traffic.Record(trafficControl.Upload, uploadTotal)
@@ -247,9 +317,10 @@ func trafficControlPortalResponse(session *trafficControl.Session, metadata *C.M
 
 type udpTracker struct {
 	C.PacketConn `json:"-"`
-	TrackerInfo
-	manager *Manager
-	traffic *trafficControl.Session
+	*TrackerInfo
+	manager   *Manager
+	principal *principal
+	traffic   *trafficControl.Session
 
 	pushToManager bool `json:"-"`
 }
@@ -259,7 +330,15 @@ func (ut *udpTracker) ID() string {
 }
 
 func (ut *udpTracker) Info() *TrackerInfo {
-	return &ut.TrackerInfo
+	return ut.TrackerInfo
+}
+
+func (ut *udpTracker) pushDownloaded(download int64) {
+	if ut.pushToManager {
+		ut.manager.PushDownloaded(download)
+		ut.principal.reportDownload(ut.manager, download)
+	}
+	ut.DownloadTotal.Add(download)
 }
 
 func (ut *udpTracker) ReadFrom(b []byte) (int, net.Addr, error) {
@@ -273,10 +352,7 @@ func (ut *udpTracker) ReadFrom(b []byte) (int, net.Addr, error) {
 		}
 		download := int64(n)
 		ut.traffic.Record(trafficControl.Download, download)
-		if ut.pushToManager {
-			ut.manager.PushDownloadedFor(ut.Metadata.InName, ut.Metadata.InUser, download)
-		}
-		ut.DownloadTotal.Add(download)
+		ut.pushDownloaded(download)
 		return n, addr, err
 	}
 }
@@ -295,10 +371,7 @@ func (ut *udpTracker) WaitReadFrom() (data []byte, put func(), addr net.Addr, er
 		}
 		download := int64(len(data))
 		ut.traffic.Record(trafficControl.Download, download)
-		if ut.pushToManager {
-			ut.manager.PushDownloadedFor(ut.Metadata.InName, ut.Metadata.InUser, download)
-		}
-		ut.DownloadTotal.Add(download)
+		ut.pushDownloaded(download)
 		return
 	}
 }
@@ -311,7 +384,8 @@ func (ut *udpTracker) WriteTo(b []byte, addr net.Addr) (int, error) {
 	upload := int64(n)
 	ut.traffic.Record(trafficControl.Upload, upload)
 	if ut.pushToManager {
-		ut.manager.PushUploadedFor(ut.Metadata.InName, ut.Metadata.InUser, upload)
+		ut.manager.PushUploaded(upload)
+		ut.principal.reportUpload(ut.manager, upload)
 	}
 	ut.UploadTotal.Add(upload)
 	return n, err
@@ -320,6 +394,9 @@ func (ut *udpTracker) WriteTo(b []byte, addr net.Addr) (int, error) {
 func (ut *udpTracker) Close() error {
 	ut.traffic.Close()
 	ut.manager.Leave(ut)
+	if ut.pushToManager {
+		ut.principal.flush(ut.manager)
+	}
 	return ut.PacketConn.Close()
 }
 
@@ -334,8 +411,9 @@ func NewUDPTracker(conn C.PacketConn, manager *Manager, metadata *C.Metadata, ru
 	ut := &udpTracker{
 		PacketConn: conn,
 		manager:    manager,
+		principal:  newPrincipal(metadata),
 		traffic:    traffic,
-		TrackerInfo: TrackerInfo{
+		TrackerInfo: &TrackerInfo{
 			UUID:          utils.NewUUIDV4(),
 			Start:         time.Now(),
 			Metadata:      metadata,
@@ -350,10 +428,12 @@ func NewUDPTracker(conn C.PacketConn, manager *Manager, metadata *C.Metadata, ru
 
 	if pushToManager {
 		if uploadTotal > 0 {
-			manager.PushUploadedFor(metadata.InName, metadata.InUser, uploadTotal)
+			manager.PushUploaded(uploadTotal)
+			ut.principal.reportUpload(manager, uploadTotal)
 		}
 		if downloadTotal > 0 {
-			manager.PushDownloadedFor(metadata.InName, metadata.InUser, downloadTotal)
+			manager.PushDownloaded(downloadTotal)
+			ut.principal.reportDownload(manager, downloadTotal)
 		}
 	}
 	traffic.Record(trafficControl.Upload, uploadTotal)

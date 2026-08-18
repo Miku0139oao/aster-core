@@ -3,6 +3,7 @@ package aster
 import (
 	"errors"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -500,6 +501,27 @@ func BenchmarkManagerRecordTrafficParallel(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			manager.RecordTraffic(key.inbound, key.userID, 1500, 0)
+		}
+	})
+}
+
+// Recording for distinct users must not contend, otherwise state shared by the
+// whole manager rather than the per-user counter is the bottleneck.
+func BenchmarkManagerRecordTrafficParallelDistinctUsers(b *testing.B) {
+	manager := NewManager()
+	runtime := newRuntimeState()
+	const userCount = 64
+	for i := 0; i < userCount; i++ {
+		runtime.traffic[trafficKey{inbound: "vless-in", userID: "user-" + strconv.Itoa(i)}] = &trafficCounter{generation: 1}
+	}
+	manager.runtime.Store(runtime)
+	var seed atomic.Int64
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		userID := "user-" + strconv.FormatInt(seed.Add(1)%userCount, 10)
+		for pb.Next() {
+			manager.RecordTraffic("vless-in", userID, 1500, 0)
 		}
 	})
 }

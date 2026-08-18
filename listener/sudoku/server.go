@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/Miku0139oao/aster-core/adapter/inbound"
@@ -24,7 +25,7 @@ import (
 type Listener struct {
 	listener  net.Listener
 	addr      string
-	closed    bool
+	closed    atomic.Bool
 	protoConf sudoku.ProtocolConfig
 	tunnelSrv *sudoku.HTTPMaskTunnelServer
 	fallback  string
@@ -46,7 +47,7 @@ func (l *Listener) Address() string {
 
 // Close implements C.Listener
 func (l *Listener) Close() error {
-	l.closed = true
+	l.closed.Store(true)
 	if l.listener != nil {
 		return l.listener.Close()
 	}
@@ -315,7 +316,7 @@ func New(config LC.SudokuServer, lc C.InboundListenConfig, tunnel C.Tunnel, addi
 		for {
 			c, err := l.Accept()
 			if err != nil {
-				if sl.closed {
+				if sl.closed.Load() {
 					break
 				}
 				continue

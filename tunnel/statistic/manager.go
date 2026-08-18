@@ -121,6 +121,15 @@ func (m *Manager) ActiveConnectionsByPrincipal() map[Principal]int {
 	return connections
 }
 
+// ActiveConnections avoids copying the whole table when only one principal is
+// of interest.
+func (m *Manager) ActiveConnections(principal Principal) int {
+	m.principalMu.RLock()
+	count := m.principals[principal]
+	m.principalMu.RUnlock()
+	return count
+}
+
 func (m *Manager) Get(id string) (c Tracker) {
 	parsedID, err := uuid.FromString(id)
 	if err != nil {
@@ -150,21 +159,20 @@ func (m *Manager) PushDownloaded(size int64) {
 
 func (m *Manager) PushUploadedFor(inbound, userID string, size int64) {
 	m.PushUploaded(size)
-	if userID == "" {
-		return
-	}
-	if observer := m.observer.Load(); observer != nil {
-		observer.observer.RecordTraffic(inbound, userID, size, 0)
-	}
+	m.recordPrincipal(inbound, userID, size, 0)
 }
 
 func (m *Manager) PushDownloadedFor(inbound, userID string, size int64) {
 	m.PushDownloaded(size)
+	m.recordPrincipal(inbound, userID, 0, size)
+}
+
+func (m *Manager) recordPrincipal(inbound, userID string, upload, download int64) {
 	if userID == "" {
 		return
 	}
 	if observer := m.observer.Load(); observer != nil {
-		observer.observer.RecordTraffic(inbound, userID, 0, size)
+		observer.observer.RecordTraffic(inbound, userID, upload, download)
 	}
 }
 

@@ -50,6 +50,40 @@ func BenchmarkManagerGetUser(b *testing.B) {
 	}
 }
 
+// The overview endpoint is polled by dashboards and only needs counts, so it must
+// not clone every user the way a full snapshot does.
+func BenchmarkManagerOverview(b *testing.B) {
+	for _, userCount := range []int{100, 1_000, 10_000} {
+		store, _ := benchmarkAsterStore(userCount)
+		manager := NewManager()
+		manager.config = &Config{
+			Secret: "0123456789abcdef0123456789abcdef", ManagedListeners: []string{"benchmark"},
+		}
+		manager.store = store
+		manager.userIndex = buildUserIndex(store)
+		manager.runtime.Store(buildRuntimeState(manager.config, "", store, newRuntimeState()))
+
+		b.Run("summary/users_"+strconv.Itoa(userCount), func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if _, err := manager.Summary(); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+		b.Run("snapshot/users_"+strconv.Itoa(userCount), func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if _, err := manager.ManagementSnapshot(""); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 func BenchmarkCloneStoreForListener(b *testing.B) {
 	for _, userCount := range []int{100, 1_000, 10_000} {
 		b.Run("users_"+strconv.Itoa(userCount), func(b *testing.B) {

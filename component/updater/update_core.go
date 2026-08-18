@@ -404,6 +404,24 @@ func (u *CoreUpdater) clean(updateDir string) {
 	_ = os.RemoveAll(updateDir)
 }
 
+// archiveOutputPath resolves an archive member name to a path inside outDir.
+// Member names come from the downloaded archive, so a name such as
+// "../../../tmp/evil" would otherwise escape outDir and overwrite an arbitrary
+// file. Only the base name is kept, and the result is checked for containment.
+func archiveOutputPath(outDir, name string) (string, error) {
+	base := filepath.Base(filepath.FromSlash(name))
+	switch base {
+	case "", ".", "..", string(os.PathSeparator):
+		return "", fmt.Errorf("illegal file name in archive: %q", name)
+	}
+	outputName := filepath.Join(outDir, base)
+	parent := filepath.Clean(outDir) + string(os.PathSeparator)
+	if !strings.HasPrefix(outputName, parent) {
+		return "", fmt.Errorf("illegal file name in archive: %q", name)
+	}
+	return outputName, nil
+}
+
 // Unpack a single .gz file to the specified directory
 // Existing files are overwritten
 // All files are created inside outDir, subdirectories are not created
@@ -440,7 +458,10 @@ func (u *CoreUpdater) gzFileUnpack(gzfile, outDir string, fileMode os.FileMode) 
 		originalName = strings.TrimSuffix(originalName, ".gz")
 	}
 
-	outputName = filepath.Join(outDir, originalName)
+	outputName, err = archiveOutputPath(outDir, originalName)
+	if err != nil {
+		return "", err
+	}
 
 	// Create the output file
 	wc, err := os.OpenFile(outputName, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fileMode)
@@ -499,11 +520,12 @@ func (u *CoreUpdater) zipFileUnpack(zipfile, outDir string, fileMode os.FileMode
 		}
 	}()
 	fi := zf.FileInfo()
-	name := fi.Name()
-	outputName = filepath.Join(outDir, name)
-
 	if fi.IsDir() {
 		return "", fmt.Errorf("the target file is a directory")
+	}
+	outputName, err = archiveOutputPath(outDir, fi.Name())
+	if err != nil {
+		return "", err
 	}
 
 	var wc io.WriteCloser
