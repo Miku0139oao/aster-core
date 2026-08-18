@@ -1,8 +1,8 @@
 package sniffer
 
 import (
+	"bufio"
 	"errors"
-	"net"
 	"net/netip"
 	"time"
 
@@ -227,11 +227,9 @@ func (sd *Dispatcher) sniffDomain(conn *N.BufferedConn, metadata *C.Metadata) (s
 	_, err := conn.Peek(1)
 	_ = conn.SetReadDeadline(time.Time{})
 	if err != nil {
-		if _, ok := err.(*net.OpError); ok {
-			sd.cacheSniffFailed(metadata)
-			log.Errorln("[Sniffer] [%s] may not have any sent data, Consider adding skip", metadata.DstIP)
-			_ = conn.Close()
-		}
+		// The caller owns failure accounting and the connection lifetime. No
+		// initial data can be valid for a server-first protocol, so sniffing must
+		// not close the connection merely because this deadline expired.
 		log.Debugln("[Sniffer] [%s] the data length not enough, error: %v", metadata.DstIP, err)
 		return "", SnifferConfig{}, err
 	}
@@ -240,14 +238,12 @@ func (sd *Dispatcher) sniffDomain(conn *N.BufferedConn, metadata *C.Metadata) (s
 	deadline := time.Now().Add(1 * time.Second)
 	want := conn.Buffered()
 	for len(candidates) > 0 {
-		// Preserve want even when it exceeds the allocation budget. Growing only
-		// to the limit makes Peek return ErrBufferFull instead of trusting an
-		// unbounded length advertised by the input protocol.
-		growTo := want
-		if growTo > maxSniffBufferSize {
-			growTo = maxSniffBufferSize
+		// Reject an unmet oversized request before Grow or Peek. Otherwise Peek
+		// fills the bounded buffer before reporting that the request cannot fit.
+		if want > maxSniffBufferSize && want > conn.Buffered() {
+			return "", SnifferConfig{}, bufio.ErrBufferFull
 		}
-		conn.Grow(growTo)
+		conn.Grow(want)
 
 		_ = conn.SetReadDeadline(deadline)
 		_, err = conn.Peek(want)

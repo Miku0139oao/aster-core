@@ -5,6 +5,7 @@ package sniffer
 // parsing itself (a complete buffer in, a domain out) belongs in sniff_test.go.
 
 import (
+	"bufio"
 	"bytes"
 	"io"
 	"net"
@@ -90,6 +91,10 @@ type stubSniffer struct {
 	reply   func(data []byte) (string, error)
 }
 
+type domainMatcherFunc func(domain string) bool
+
+func (f domainMatcherFunc) MatchDomain(domain string) bool { return f(domain) }
+
 var _ sniffer.Sniffer = (*stubSniffer)(nil)
 
 func (s *stubSniffer) SupportNetwork() C.NetWork { return s.network }
@@ -120,6 +125,9 @@ func TestDispatcherFeedLoop(t *testing.T) {
 		// rounds and how much they grew by are pinned down
 		seen       []int
 		bufferSize int
+		buffered   int
+		chunksLeft int
+		errorIs    error
 	}{
 		{
 			// a sniffer that discovers its needs incrementally (HTTP/2: preface,
@@ -177,15 +185,19 @@ func TestDispatcherFeedLoop(t *testing.T) {
 			seen:    []int{10},
 		},
 		{
-			// Peek cannot return more than the buffer holds
+			// An oversized request must be rejected before the reader grows or
+			// consumes more data while trying to fill its buffer.
 			name:   "stops when the request exceeds the peek limit",
 			chunks: threeSegments,
 			reply: func(data []byte) (string, error) {
 				return "", needAtLeast(1 << 20)
 			},
 			wantErr:    true,
+			errorIs:    bufio.ErrBufferFull,
 			seen:       []int{10},
-			bufferSize: maxSniffBufferSize,
+			bufferSize: 4096,
+			buffered:   10,
+			chunksLeft: 2,
 		},
 		{
 			name:   "gives up when the data never completes",
@@ -216,9 +228,18 @@ func TestDispatcherFeedLoop(t *testing.T) {
 				assert.NoError(t, err)
 				assert.Equal(t, test.host, host)
 			}
+			if test.errorIs != nil {
+				assert.ErrorIs(t, err, test.errorIs)
+			}
 			assert.Equal(t, test.seen, s.seen)
 			if test.bufferSize != 0 {
 				assert.Equal(t, test.bufferSize, conn.Reader().Size())
+			}
+			if test.buffered != 0 {
+				assert.Equal(t, test.buffered, conn.Buffered())
+			}
+			if test.chunksLeft != 0 {
+				assert.Len(t, raw.chunks, test.chunksLeft)
 			}
 			// sniffing must not leave a deadline behind for the relay that follows
 			assert.True(t, raw.deadline.IsZero(), "read deadline was not cleared")
@@ -340,6 +361,65 @@ func TestDispatcherMultipleSniffers(t *testing.T) {
 		_, _, err = sd.sniffDomain(N.NewBufferedConn(raw), metadata)
 
 		assert.Error(t, err)
+		assert.False(t, raw.closed)
+		_, cached := sd.skipList.Get(metadata.AddrPort())
+		assert.False(t, cached)
+	})
+
+	t.Run("keeps the connection open and caches an initial read failure once", func(t *testing.T) {
+		waiting := &stubSniffer{reply: func(data []byte) (string, error) {
+			return "", needAtLeast(len(data) + 1)
+		}}
+		sd, err := NewDispatcher(&Config{Enable: true, ParsePureIp: true})
+		assert.NoError(t, err)
+		sd.sniffers = []configuredSniffer{{Sniffer: waiting}}
+		raw := &chunkedConn{
+			t:       t,
+			readErr: &net.OpError{Op: "read", Net: "tcp", Err: io.ErrNoProgress},
+		}
+		t.Cleanup(raw.stopTimer)
+		metadata := &C.Metadata{
+			NetWork: C.TCP,
+			DstIP:   netip.MustParseAddr("192.0.2.1"),
+			DstPort: 80,
+		}
+
+		sniffed := sd.TCPSniff(N.NewBufferedConn(raw), metadata)
+
+		assert.False(t, sniffed)
+		assert.False(t, raw.closed)
+		assert.Empty(t, waiting.seen)
+		failures, cached := sd.skipList.Get(metadata.AddrPort())
+		assert.True(t, cached)
+		assert.Equal(t, uint8(1), failures)
+		assert.True(t, raw.deadline.IsZero(), "read deadline was not cleared")
+	})
+
+	t.Run("does not cache a forced initial read failure", func(t *testing.T) {
+		waiting := &stubSniffer{reply: func(data []byte) (string, error) {
+			return "", needAtLeast(len(data) + 1)
+		}}
+		sd, err := NewDispatcher(&Config{
+			Enable:      true,
+			ForceDomain: []C.DomainMatcher{domainMatcherFunc(func(string) bool { return true })},
+		})
+		assert.NoError(t, err)
+		sd.sniffers = []configuredSniffer{{Sniffer: waiting}}
+		raw := &chunkedConn{
+			t:       t,
+			readErr: &net.OpError{Op: "read", Net: "tcp", Err: io.ErrNoProgress},
+		}
+		t.Cleanup(raw.stopTimer)
+		metadata := &C.Metadata{
+			NetWork: C.TCP,
+			Host:    "forced.example",
+			DstIP:   netip.MustParseAddr("192.0.2.1"),
+			DstPort: 80,
+		}
+
+		sniffed := sd.TCPSniff(N.NewBufferedConn(raw), metadata)
+
+		assert.False(t, sniffed)
 		assert.False(t, raw.closed)
 		_, cached := sd.skipList.Get(metadata.AddrPort())
 		assert.False(t, cached)
