@@ -702,7 +702,7 @@ func (l *Listener) updateRule(ruleProvider P.RuleProvider, exclude bool, update 
 	default:
 		return
 	}
-	if update && l.autoRedirect != nil {
+	if update && !l.closed && l.autoRedirect != nil {
 		l.autoRedirect.UpdateRouteAddressSet()
 	}
 }
