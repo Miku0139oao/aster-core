@@ -156,6 +156,13 @@ func (c *Client) createSession(ctx context.Context) (*Session, error) {
 	}
 
 	c.sessionsLock.Lock()
+	select {
+	case <-c.die.Done():
+		c.sessionsLock.Unlock()
+		_ = underlying.Close()
+		return nil, io.ErrClosedPipe
+	default:
+	}
 	c.sessions[session.seq] = session
 	c.sessionsLock.Unlock()
 
