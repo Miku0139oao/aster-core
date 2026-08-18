@@ -6,14 +6,14 @@ Aster does not magically make your network faster. It removes a lot of repeated 
 
 | Workload you actually hit | How much faster | Why |
 | --- | ---: | --- |
-| Moving 32 KiB over TCP | **about 3% more throughput**, about 3% less processing time | Reuse the scratch buffer that moves data |
-| Packing a 1 KiB AnyTLS frame | **about 1.9× faster** | Write straight into a reusable buffer; no extra object wrapper |
+| Moving 32 KiB over TCP | **about 4% more throughput**, about 4% less processing time | Reuse the scratch buffer that moves data |
+| Packing a 1 KiB AnyTLS frame | **about 2.0× faster** | Write straight into a reusable buffer; no extra object wrapper |
 | Packing a 16 KiB AnyTLS frame | **about 1.3× faster** | Same as above, plus fewer small allocations |
-| Preparing one UDP packet | **about 5.1× faster** | Recycle the packet data structure and reuse it next time |
-| Ignoring one disabled debug log | **about 97× faster** | Return before the string or log event is built |
+| Preparing one UDP packet | **about 5.7× faster** | Recycle the packet data structure and reuse it next time |
+| Ignoring one disabled debug log | **about 98× faster** | Return before the string or log event is built |
 
 > [!IMPORTANT]
-> **The closest “actually moving data” number is the TCP improvement of about 3%.** 5.1× and 97× are tiny core steps that run many times. They do not mean download speed becomes 5.1× or 97×.
+> **The closest “actually moving data” number is the TCP improvement of about 4%.** 5.7× and 98× are tiny core steps that run many times. They do not mean download speed becomes 5.7× or 98×.
 
 ## What actually changed?
 
@@ -45,40 +45,42 @@ Upload, download, and connection counts use cheap incremental stats. Each traffi
 
 ## OpenWrt on real hardware (primary result)
 
-The comparison baseline is Aster’s upstream Mihomo `v1.19.29`, commit `e26714a181ac0e2fa803453c0a8e9a9ce94e31cb`. Both versions used the same benchmark program and parameters, three sequential rounds, at least 2 seconds each. The table uses the three-round median.
+The comparison baseline is Mihomo `v1.19.30`, commit `ac017cdd246ce8bd547653d927e7bf77d7ee73d5`. Aster was `main` at `dd750849`. Both sides used the same `go test -c` Linux amd64 binaries and parameters, three sequential rounds, at least 2 seconds each. The table uses the three-round median. Rerun on 2026-08-19 on the same OpenWrt soft router.
 
 | Environment | Actual value |
 | --- | --- |
 | System | OpenWrt, Linux 6.6.86, x86-64 |
 | CPU | Ryzen 7 5825U host, VM configured with 12 vCPU |
 | CPU frequency | Hypervisor did not expose it, **unavailable** |
-| Memory | VM configured with about 6 GB |
+| Memory | VM configured with about 6 GB (`MemTotal` 6081752 kB) |
 | DRAM frequency | Hypervisor did not expose it, **unavailable** |
-| Go | 1.26.3, Linux amd64 test binary |
-| Load average before the test | 0.19／0.15／0.10 (1／5／15 minutes) |
-| Load average after the test | 0.94／0.41／0.20 (1／5／15 minutes) |
+| Go | 1.26.3, `GOAMD64=v1` cross-compiled Linux amd64 test binary |
+| Load average before the test | 0.02／0.05／0.05 (1／5／15 minutes) |
+| Load average after the test | 1.03／0.43／0.19 (1／5／15 minutes) |
 
-| Core work | Mihomo median | Aster median | Aster relative result |
+| Core work | Mihomo 1.19.30 median | Aster median | Aster relative result |
 | --- | ---: | ---: | ---: |
-| UDP packet metadata | 68.45 ns; 416 B／1 alloc | 13.38 ns; 0 B／0 alloc | **5.1× faster**; removed the 416 B allocation |
-| Disabled debug log | 222.3 ns; 24 B／1 alloc | 2.291 ns; 0 B／0 alloc | **97× faster**; removed the event allocation |
-| AnyTLS frame (1 KiB) | 71.03 ns; 64 B／1 alloc | 36.65 ns; 0 B／0 alloc | **1.94× faster**; latency down 48% |
-| AnyTLS frame (16 KiB) | 270.3 ns; 64 B／1 alloc | 207.1 ns; 0 B／0 alloc | **1.31× faster**; latency down 23% |
-| TCP relay (32 KiB) | 4.397 µs; 7.45 GB/s; 64 B／1 alloc | 4.271 µs; 7.67 GB/s; 0 B／0 alloc | Latency down **2.9%**; throughput up **3.0%** |
+| UDP packet metadata | 73.74 ns; 416 B／1 alloc | 13.04 ns; 0 B／0 alloc | **5.65× faster**; removed the 416 B allocation |
+| Disabled debug log | 225.3 ns; 24 B／1 alloc | 2.289 ns; 0 B／0 alloc | **98× faster**; removed the event allocation |
+| AnyTLS frame (1 KiB) | 72.12 ns; 64 B／1 alloc | 36.34 ns; 0 B／0 alloc | **1.98× faster**; latency down 50% |
+| AnyTLS frame (16 KiB) | 270.8 ns; 64 B／1 alloc | 205.0 ns; 0 B／0 alloc | **1.32× faster**; latency down 24% |
+| TCP relay (32 KiB) | 4.607 µs; 7.11 GB/s; 64 B／1 alloc | 4.433 µs; 7.39 GB/s; 0 B／0 alloc | Latency down **3.8%**; throughput up **3.9%** |
 
 ### Three-round ranges
 
-| Benchmark | Mihomo range | Aster range |
+| Benchmark | Mihomo 1.19.30 range | Aster range |
 | --- | ---: | ---: |
-| UDP packet metadata | 67.50–68.91 ns/op | 13.02–13.38 ns/op |
-| Disabled debug log | 221.1–225.4 ns/op | 2.245–2.297 ns/op |
-| AnyTLS frame (1 KiB) | 70.78–71.09 ns/op | 35.71–36.67 ns/op |
-| AnyTLS frame (16 KiB) | 269.7–275.1 ns/op | 204.5–211.8 ns/op |
-| TCP relay (32 KiB) | 4.396–4.418 µs/op | 4.227–4.337 µs/op |
+| UDP packet metadata | 71.66–75.71 ns/op | 12.97–13.04 ns/op |
+| Disabled debug log | 224.1–225.3 ns/op | 2.278–2.295 ns/op |
+| AnyTLS frame (1 KiB) | 71.09–72.40 ns/op | 35.71–36.81 ns/op |
+| AnyTLS frame (16 KiB) | 260.1–273.7 ns/op | 195.8–211.6 ns/op |
+| TCP relay (32 KiB) | 4.510–4.738 µs/op | 4.373–4.452 µs/op |
 
 This 5825U soft router is still stronger than many MT7621, low-end ARM, or cheap VPS hosts. These results only prove the optimizations still work on real OpenWrt. Weaker devices will have lower absolute GB/s, and the improvement ratio must be remeasured on that device.
 
 ## Hyper-V low-resource simulation (secondary result)
+
+> This section, the protocol loopback table, and idle RSS are still measurements against Mihomo `v1.19.29`. They have not been rerun against `v1.19.30`. The homepage and the primary table above use the `v1.19.30` rerun.
 
 To get closer to weaker hardware most users have, we added another resource limit on the same Hyper-V OpenWrt VM. The benchmark was allowed **1 vCPU**, and at most 25 ms of execution every 100 ms, which is **single-core 25% CPU time**. Memory was capped at **512 MiB**, with swap disabled.
 
@@ -146,7 +148,7 @@ Three-round ranges: TCP Mihomo 39.5–40.5 MiB, Aster 24.0–24.5 MiB; log Mihom
 | AnyTLS frame (16 KiB) | 1.047–1.097 µs/op | 731.3–895.3 ns/op |
 | TCP relay (32 KiB) | 16.605–17.087 µs/op | 15.754–16.501 µs/op |
 
-Absolute processing time became about four times the unrestricted run, which shows the CPU quota was real. Aster was still faster on all five jobs. In plain language, **weaker hardware usually feels the saved CPU work and allocations more**: TCP improved from about 3% to 4.3%, and AnyTLS 1 KiB from 1.94× to 2.46×. UDP and AnyTLS 16 KiB ratios barely changed, so you cannot assume every optimization scales the same way as hardware gets weaker. The homepage still uses the unrestricted OpenWrt **TCP about 3%**, not this more flattering 4.3%, as the main advertised number.
+Absolute processing time became about four times the unrestricted run, which shows the CPU quota was real. Aster was still faster on all five jobs. In plain language, **weaker hardware usually feels the saved CPU work and allocations more**: TCP improved from about 3% to 4.3%, and AnyTLS 1 KiB from 1.94× to 2.46×. UDP and AnyTLS 16 KiB ratios barely changed, so you cannot assume every optimization scales the same way as hardware gets weaker. The homepage still uses the unrestricted OpenWrt **TCP about 4%** versus Mihomo 1.19.30, not this more flattering 4.3% (versus 1.19.29), as the main advertised number.
 
 ## Per-protocol loopback tests
 
@@ -175,10 +177,10 @@ The same benchmark measures Mihomo’s direct metadata-construction path and Ast
 
 | Path | Time | Memory allocation |
 | --- | ---: | ---: |
-| Mihomo constructs per packet | 67.50–68.91 ns/op | 416 B/op, 1 alloc/op |
-| Aster metadata pool | 13.02–13.38 ns/op | 0 B/op, 0 allocs/op |
+| Mihomo 1.19.30 constructs per packet | 71.66–75.71 ns/op | 416 B/op, 1 alloc/op |
+| Aster metadata pool | 12.97–13.04 ns/op | 0 B/op, 0 allocs/op |
 
-The object-pool path is about **5.1× faster** on the three-round median and removes a 416-byte heap allocation per packet.
+The object-pool path is about **5.65× faster** on the three-round median and removes a 416-byte heap allocation per packet.
 
 ## High-end development machine (appendix)
 
@@ -219,7 +221,7 @@ go test \
   -count=3
 ```
 
-When you compare two versions, run them on the same machine, same Go version, and same power mode, then analyze multiple rounds with `benchstat`. Do not compute a percentage from a single run on different machines.
+When comparing against Mihomo, build the same Linux amd64 test binaries from tag `v1.19.30` (`ac017cdd`) and run three sequential rounds on the same machine. Do not compute a percentage from a single run on different machines.
 
 ## How to read the numbers
 

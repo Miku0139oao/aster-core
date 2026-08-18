@@ -33,7 +33,7 @@ features:
     link: /en/tutorials/anytls-reality
   - icon: ⚡
     title: Leaner, faster core forwarding
-    details: "Same-host OpenWrt tests: TCP core forwarding about 3% faster, AnyTLS framing about 1.3–1.9× faster."
+    details: "Same-host OpenWrt tests vs Mihomo 1.19.30: TCP core forwarding about 4% faster, AnyTLS framing about 1.3–2.0× faster."
     link: /en/reference/performance
   - icon: ⇄
     title: OpenWrt Kernel DIRECT
@@ -61,10 +61,10 @@ In plain terms: Aster removes core work that used to be redone for every packet.
 
 | Workload you actually hit | How much faster | What that means |
 | --- | ---: | --- |
-| TCP core forwarding | **about 3% faster** | Less wasted work while moving data, and no per-relay allocation |
-| AnyTLS framing | **about 1.3–1.9× faster** | Lower packing cost on high-speed transfers or many small packets |
-| New UDP packet setup | **about 5.1× faster** | Games, voice, and QUIC create less throwaway memory |
-| Disabled debug logs | **about 97× faster** | Unused logs are skipped before the string is built |
+| TCP core forwarding | **about 4% faster** | Less wasted work while moving data, and no per-relay allocation |
+| AnyTLS framing | **about 1.3–2.0× faster** | Lower packing cost on high-speed transfers or many small packets |
+| New UDP packet setup | **about 5.7× faster** | Games, voice, and QUIC create less throwaway memory |
+| Disabled debug logs | **about 98× faster** | Unused logs are skipped before the string is built |
 
 In a constrained single-core 25% CPU / 512 MiB RAM environment, the isolated test programs for five core cases used about **30–49%** less peak memory than Mihomo. A full core with a minimal idle profile is a different story: Aster is about 31.6 MiB, Mihomo about 28.9 MiB, so Aster is about **2.8 MiB** larger. Busy paths allocate less temporary memory; the idle footprint is slightly larger because Aster ships more features.
 
@@ -78,7 +78,7 @@ In a constrained single-core 25% CPU / 512 MiB RAM environment, the isolated tes
 - **Cheaper traffic stats:** upload and download counters increment in place instead of scanning every connection.
 
 > [!IMPORTANT]
-> This does not mean Speedtest becomes 5.1× faster. That 5.1× figure is one small core step: preparing a UDP packet. The closest whole-path number is the TCP test, about 3% faster. The Ryzen 7 5825U soft router used for these runs is still stronger than many home routers. Lower-end hardware will have lower absolute speeds; do not copy these numbers onto a different device. A separate run that simulated weaker hardware (single-core 25% CPU time, 512 MiB RAM) still showed all five optimizations. Weaker hardware usually feels the saved CPU and allocations more. The homepage keeps the more conservative unrestricted results.
+> This does not mean Speedtest becomes 5.7× faster. That 5.7× figure is one small core step: preparing a UDP packet. The closest whole-path number is the TCP test, about 4% faster. The Ryzen 7 5825U soft router used for these runs is still stronger than many home routers. Lower-end hardware will have lower absolute speeds; do not copy these numbers onto a different device. A separate run that simulated weaker hardware (single-core 25% CPU time, 512 MiB RAM) still showed all five optimizations. Weaker hardware usually feels the saved CPU and allocations more. The homepage keeps the more conservative unrestricted results.
 
 > [!WARNING]
 > “Closer to dae” is not the same as faster. On one real OpenWrt router, the experimental TC eBPF classifier dropped same-server speedtest from about 1,647 Mbps to 692 Mbps. The recommended setup is still Kernel DIRECT with the nftables backend and OpenWrt flow offload. See [OpenWrt and Nikki](/en/deployment/openwrt).
