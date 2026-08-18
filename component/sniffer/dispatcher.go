@@ -6,13 +6,13 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/metacubex/sing/common/metadata"
-
 	"github.com/Miku0139oao/aster-core/common/lru"
 	N "github.com/Miku0139oao/aster-core/common/net"
 	C "github.com/Miku0139oao/aster-core/constant"
 	"github.com/Miku0139oao/aster-core/constant/sniffer"
 	"github.com/Miku0139oao/aster-core/log"
+
+	"github.com/metacubex/sing/common/metadata"
 )
 
 var (

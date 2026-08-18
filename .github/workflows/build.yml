@@ -443,7 +443,7 @@ jobs:
           gh release edit "${RELEASE_VERSION}" --draft=false --latest
 
   Docker:
-    if: ${{ always() && needs.build.result == 'success' && !startsWith(github.event_name, 'pull_request') && (github.event_name != 'workflow_dispatch' || needs.Upload-Release.result == 'success') }}
+    if: ${{ always() && needs.build.result == 'success' && secrets.DOCKER_HUB_TOKEN != '' && !startsWith(github.event_name, 'pull_request') && (github.event_name != 'workflow_dispatch' || needs.Upload-Release.result == 'success') }}
     permissions:
       contents: read
     needs: [build, Upload-Release]
