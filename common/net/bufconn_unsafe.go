@@ -60,6 +60,8 @@ func (c *BufferedConn) AppendData(buf []byte) (ok bool) {
 		}
 
 		b.w += copy(b.buf[b.w:], buf)
+		b.lastByte = -1
+		b.lastRuneSize = -1
 		return true
 	}
 	return false

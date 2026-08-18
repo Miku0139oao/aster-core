@@ -94,55 +94,87 @@ func (ss *DomainSet) Has(key string) bool {
 		bmIdx, index int
 	}
 	stack := make([]wildcardCursor, 0)
-	for i := 0; i < len(key); i++ {
-	RESTART:
-		c := revLowerAt(key, i)
-		for ; ; bmIdx++ {
-			if getBit(ss.labelBitmap, bmIdx) != 0 {
-				if len(stack) > 0 {
-					cursor := stack[len(stack)-1]
-					stack = stack[0 : len(stack)-1]
-					// back wildcard and find next node
-					nextNodeId := countZeros(ss.labelBitmap, ss.ranks, cursor.bmIdx+1)
-					nextBmIdx := selectIthOne(ss.labelBitmap, ss.ranks, ss.selects, nextNodeId-1) + 1
-					j := cursor.index
-					for ; j < len(key) && revLowerAt(key, j) != domainStepByte; j++ {
-					}
-					if j == len(key) {
-						if getBit(ss.leaves, nextNodeId) != 0 {
-							return true
-						} else {
-							goto RESTART
-						}
-					}
-					for ; nextBmIdx-nextNodeId < len(ss.labels); nextBmIdx++ {
-						if ss.labels[nextBmIdx-nextNodeId] == domainStepByte {
-							bmIdx = nextBmIdx
-							nodeId = nextNodeId
-							i = j
-							goto RESTART
-						}
-					}
-				}
-				return false
+
+	// Backtrack wildcard alternatives at both child boundaries and end of
+	// input. The latter is needed when a specific branch consumes the final
+	// label before a wildcard branch is tried.
+	backtrackWildcard := func() (nextNodeId, nextBmIdx, nextIndex int, ok, matched bool) {
+		for len(stack) > 0 {
+			cursor := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			nextNodeId = countZeros(ss.labelBitmap, ss.ranks, cursor.bmIdx+1)
+			nextBmIdx = selectIthOne(ss.labelBitmap, ss.ranks, ss.selects, nextNodeId-1) + 1
+			nextIndex = cursor.index
+			for ; nextIndex < len(key) && revLowerAt(key, nextIndex) != domainStepByte; nextIndex++ {
 			}
-			// handle wildcard for domain
-			if ss.labels[bmIdx-nodeId] == complexWildcardByte {
-				return true
-			} else if ss.labels[bmIdx-nodeId] == wildcardByte {
-				cursor := wildcardCursor{}
-				cursor.bmIdx = bmIdx
-				cursor.index = i
-				stack = append(stack, cursor)
-			} else if ss.labels[bmIdx-nodeId] == c {
-				break
+			if nextIndex == len(key) {
+				if getBit(ss.leaves, nextNodeId) != 0 {
+					return 0, 0, 0, false, true
+				}
+				continue
+			}
+			for ; nextBmIdx-nextNodeId < len(ss.labels); nextBmIdx++ {
+				if ss.labels[nextBmIdx-nextNodeId] == domainStepByte {
+					return nextNodeId, nextBmIdx, nextIndex, true, false
+				}
 			}
 		}
-		nodeId = countZeros(ss.labelBitmap, ss.ranks, bmIdx+1)
-		bmIdx = selectIthOne(ss.labelBitmap, ss.ranks, ss.selects, nodeId-1) + 1
+		return 0, 0, 0, false, false
 	}
 
-	return getBit(ss.leaves, nodeId) != 0
+	i := 0
+	for {
+		restart := false
+		for ; i < len(key); i++ {
+			c := revLowerAt(key, i)
+			for ; ; bmIdx++ {
+				if getBit(ss.labelBitmap, bmIdx) != 0 {
+					nextNodeId, nextBmIdx, nextIndex, ok, matched := backtrackWildcard()
+					if matched {
+						return true
+					}
+					if !ok {
+						return false
+					}
+					nodeId = nextNodeId
+					bmIdx = nextBmIdx
+					i = nextIndex
+					restart = true
+					break
+				}
+				// handle wildcard for domain
+				if ss.labels[bmIdx-nodeId] == complexWildcardByte {
+					return true
+				} else if ss.labels[bmIdx-nodeId] == wildcardByte {
+					stack = append(stack, wildcardCursor{bmIdx: bmIdx, index: i})
+				} else if ss.labels[bmIdx-nodeId] == c {
+					break
+				}
+			}
+			if restart {
+				break
+			}
+			nodeId = countZeros(ss.labelBitmap, ss.ranks, bmIdx+1)
+			bmIdx = selectIthOne(ss.labelBitmap, ss.ranks, ss.selects, nodeId-1) + 1
+		}
+		if restart {
+			continue
+		}
+
+		if getBit(ss.leaves, nodeId) != 0 {
+			return true
+		}
+		nextNodeId, nextBmIdx, nextIndex, ok, matched := backtrackWildcard()
+		if matched {
+			return true
+		}
+		if !ok {
+			return false
+		}
+		nodeId = nextNodeId
+		bmIdx = nextBmIdx
+		i = nextIndex
+	}
 }
 
 // revLowerAt returns the i-th byte of key read back to front, lowercased for

@@ -110,6 +110,19 @@ func TestDomainSetWildcard(t *testing.T) {
 	testDump(t, tree, set)
 }
 
+func TestDomainSetWildcardFallbackAtEnd(t *testing.T) {
+	tree := trie.New[struct{}]()
+	assert.NoError(t, tree.Insert("*", struct{}{}))
+	assert.NoError(t, tree.Insert("a.a", struct{}{}))
+
+	set := tree.NewDomainSet()
+	assert.NotNil(t, set)
+	assert.True(t, set.Has("a"))
+	assert.True(t, set.Has("b"))
+	assert.True(t, set.Has("a.a"))
+	assert.False(t, set.Has("a.a.a"))
+}
+
 func TestDomainSetCase(t *testing.T) {
 	tree := trie.New[struct{}]()
 	for _, domain := range []string{"example.com", "+.mixed.example.org"} {
