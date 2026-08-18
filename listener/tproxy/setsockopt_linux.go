@@ -18,7 +18,7 @@ func setsockopt(rc syscall.RawConn, addr string) error {
 		isIPv6 = false
 	}
 
-	rc.Control(func(fd uintptr) {
+	if controlErr := rc.Control(func(fd uintptr) {
 		err = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
 
 		if err == nil {
@@ -38,7 +38,9 @@ func setsockopt(rc syscall.RawConn, addr string) error {
 		if err == nil {
 			_ = setDSCPsockopt(fd, isIPv6)
 		}
-	})
+	}); controlErr != nil {
+		return controlErr
+	}
 
 	return err
 }

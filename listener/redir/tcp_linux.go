@@ -31,13 +31,15 @@ func parserPacket(conn net.Conn) (socks5.Addr, error) {
 
 	var addr netip.AddrPort
 
-	rc.Control(func(fd uintptr) {
+	if controlErr := rc.Control(func(fd uintptr) {
 		if ip4 := c.LocalAddr().(*net.TCPAddr).IP.To4(); ip4 != nil {
 			addr, err = getorigdst(fd)
 		} else {
 			addr, err = getorigdst6(fd)
 		}
-	})
+	}); controlErr != nil {
+		return nil, controlErr
+	}
 
 	return socks5.AddrFromStdAddrPort(addr), err
 }
