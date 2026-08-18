@@ -52,7 +52,7 @@ func BenchmarkSessionUpload(b *testing.B) {
 			}, &paddingFactory)
 			go serverSession.Run()
 
-			clientSession := NewClientSession(clientConn, &paddingFactory)
+			clientSession := NewClientSession(clientConn, &paddingFactory, "")
 			clientSession.Run()
 			clientStream, err := clientSession.OpenStream()
 			if err != nil {
