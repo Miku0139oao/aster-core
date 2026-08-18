@@ -34,18 +34,17 @@ anytls://<password>@<server>:<port>?security=reality&sni=<sni>&fp=chrome&pbk=<pu
 
 依[下載](/downloads)選擇作業系統與 CPU 架構。目前請用 [`Prerelease-main`](https://github.com/Miku0139oao/aster-core/releases/tag/Prerelease-main)；這是會隨 `main` 更新的 prerelease，官方編號 `v*` 尚未發布。舊款 x86-64 優先 `amd64-v1` 或 `amd64-compatible`。
 
-下載後，把檔案的 SHA-256 與同一個 release 公布的 checksum 比對：
-
-Linux／macOS：
+下載 asset 與同一個 release 的 [`checksums.txt`](https://github.com/Miku0139oao/aster-core/releases/download/Prerelease-main/checksums.txt)，把兩者放在同一個目錄後再驗證。Linux：
 
 ```sh
-sha256sum ./<downloaded-release-file>
+sha256sum --check --ignore-missing checksums.txt
 ```
 
 macOS 如果沒有 `sha256sum`，可用：
 
 ```sh
 shasum -a 256 ./<downloaded-release-file>
+# 對照 checksums.txt 中同一檔名那一行
 ```
 
 Windows PowerShell：
@@ -54,16 +53,18 @@ Windows PowerShell：
 Get-FileHash .\<downloaded-release-file> -Algorithm SHA256
 ```
 
-解壓後可把執行檔命名為 `aster-core`；Windows 使用 `aster-core.exe`。在 Unix 系統加上執行權限並確認版本：
+對 raw `.gz` asset，驗證的是壓縮檔；驗證成功後再解壓，在 Unix 系統加上執行權限並確認版本：
 
 ```sh
+gzip --decompress --stdout ./<downloaded-gz-asset> > ./aster-core
 chmod +x ./aster-core
 ./aster-core -v
 ```
 
-PowerShell：
+Windows `.zip` asset 驗證成功後解壓：
 
 ```powershell
+Expand-Archive <downloaded-release-file> -DestinationPath .
 .\aster-core.exe -v
 ```
 

@@ -15,13 +15,16 @@
 
 請先到[下載](/downloads)依作業系統與 CPU 架構選檔。目前只有滾動預發行 [`Prerelease-main`](https://github.com/Miku0139oao/aster-core/releases/tag/Prerelease-main)，官方編號 `v*` 尚未發布。舊款 x86-64 優先 `amd64-v1`。
 
-Unix-like 的 binary 是 `.gz`，檔名為 `aster-core-<os>-<arch>-alpha-main-<sha7>.gz`。先用同一個 release 的 [`checksums.txt`](https://github.com/Miku0139oao/aster-core/releases/download/Prerelease-main/checksums.txt) 核對壓縮檔，再解壓並賦予執行權限：
+Unix-like 的 binary 是 `.gz`，檔名為 `aster-core-<os>-<arch>-alpha-main-<sha7>.gz`。把 binary asset 與同一個 release 的 [`checksums.txt`](https://github.com/Miku0139oao/aster-core/releases/download/Prerelease-main/checksums.txt) 放在同一個目錄，先核對壓縮檔，再解壓並賦予執行權限：
 
 ```sh
+sha256sum --check --ignore-missing checksums.txt
 gzip -dc ./aster-core-OS-ARCH-alpha-main-SHA7.gz > ./aster-core
 chmod +x aster-core
 ./aster-core -v
 ```
+
+`checksums.txt` 是整個 release 的清單；只下載單一 asset 時，`--ignore-missing` 會略過其他尚未下載的檔案，但仍會驗證目前目錄中存在的目標檔。
 
 Windows asset 是 `.zip`；解壓後執行 `aster-core-<os>-<arch>.exe -v`。Asset 後綴以 release 內的 `version.txt` 為準，不要自行改成未在該 release 頁存在的 tag。
 
