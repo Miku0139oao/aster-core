@@ -30,7 +30,7 @@ type Session struct {
 	die     chan struct{}
 	dieHook func()
 
-	synDone     func()
+	synDone     map[uint32]func()
 	synDoneLock sync.Mutex
 
 	// pool
@@ -38,7 +38,7 @@ type Session struct {
 	idleSince time.Time
 	padding   *atomic.Pointer[padding.PaddingFactory]
 
-	peerVersion byte
+	peerVersion atomic.Uint32
 
 	// client
 	isClient       bool
@@ -114,6 +114,7 @@ func (s *Session) Close() error {
 		once = true
 	})
 	if once {
+		s.cancelAllSynDone()
 		if s.dieHook != nil {
 			s.dieHook()
 			s.dieHook = nil
@@ -139,18 +140,19 @@ func (s *Session) OpenStream() (*Stream, error) {
 	sid := s.streamId.Add(1)
 	stream := newStream(sid, s)
 
-	if sid >= 2 && s.peerVersion >= 2 {
+	if sid >= 2 && s.peerVersion.Load() >= 2 {
 		s.synDoneLock.Lock()
-		if s.synDone != nil {
-			s.synDone()
+		if s.synDone == nil {
+			s.synDone = make(map[uint32]func())
 		}
-		s.synDone = util.NewDeadlineWatcher(time.Second*3, func() {
+		s.synDone[sid] = util.NewDeadlineWatcher(time.Second*3, func() {
 			s.Close()
 		})
 		s.synDoneLock.Unlock()
 	}
 
 	if _, err := s.writeControlFrame(newFrame(cmdSYN, sid)); err != nil {
+		s.cancelSynDone(sid)
 		return nil, err
 	}
 
@@ -160,6 +162,7 @@ func (s *Session) OpenStream() (*Stream, error) {
 	defer s.streamLock.Unlock()
 	select {
 	case <-s.die:
+		s.cancelSynDone(sid)
 		return nil, io.ErrClosedPipe
 	default:
 		s.streams[sid] = stream
@@ -227,9 +230,9 @@ func (s *Session) recvLoop() error {
 				s.streamLock.Unlock()
 			case cmdSYNACK: // should be client only
 				s.synDoneLock.Lock()
-				if s.synDone != nil {
-					s.synDone()
-					s.synDone = nil
+				if done, ok := s.synDone[sid]; ok {
+					done()
+					delete(s.synDone, sid)
 				}
 				s.synDoneLock.Unlock()
 				if hdr.Length() > 0 {
@@ -289,7 +292,7 @@ func (s *Session) recvLoop() error {
 						}
 						// check client's version
 						if v, err := strconv.Atoi(m["v"]); err == nil && v >= 2 {
-							s.peerVersion = byte(v)
+							s.peerVersion.Store(uint32(v))
 							// send cmdServerSettings
 							f := newFrame(cmdServerSettings, 0)
 							f.data = util.StringMap{
@@ -354,8 +357,8 @@ func (s *Session) recvLoop() error {
 					if s.isClient {
 						// check server's version
 						m := util.StringMapFromBytes(buffer)
-						if v, err := strconv.Atoi(m["v"]); err == nil {
-							s.peerVersion = byte(v)
+						if v, err := strconv.Atoi(m["v"]); err == nil && v >= 0 {
+							s.peerVersion.Store(uint32(v))
 						}
 					}
 					pool.Put(buffer)
@@ -370,6 +373,26 @@ func (s *Session) recvLoop() error {
 		} else {
 			return err
 		}
+	}
+}
+
+func (s *Session) cancelSynDone(sid uint32) {
+	s.synDoneLock.Lock()
+	if done, ok := s.synDone[sid]; ok {
+		done()
+		delete(s.synDone, sid)
+	}
+	s.synDoneLock.Unlock()
+}
+
+func (s *Session) cancelAllSynDone() {
+	s.synDoneLock.Lock()
+	done := s.synDone
+	s.synDone = nil
+	s.synDoneLock.Unlock()
+
+	for _, cancel := range done {
+		cancel()
 	}
 }
 
