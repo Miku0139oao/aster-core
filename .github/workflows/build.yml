@@ -222,7 +222,9 @@ jobs:
       run: |
         set -xeuo pipefail
         sudo gem install fpm --no-document --version 1.17.0
-        sudo apt-get update && sudo apt-get install -y libarchive-tools
+        # Do not apt-get update: Ubuntu mirrors hang for tens of minutes
+        # and a single stuck matrix job skips Upload-Prerelease.
+        sudo timeout 90 apt-get install -y libarchive-tools
         cp .github/release/.fpm_systemd .fpm
         chmod 0644 .github/release/config.yaml .github/release/aster-core.service .github/release/aster-core@.service LICENSE
         ln -sfn aster-core mihomo
