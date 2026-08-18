@@ -148,8 +148,10 @@ jobs:
 
     - name: Update CA
       run: |
-        sudo apt-get update && sudo apt-get install -y ca-certificates
-        sudo update-ca-certificates
+        # Runners already ship ca-certificates. Do not apt-get: Ubuntu
+        # mirrors regularly hang this step for 30–60 minutes and a single
+        # timed-out matrix job skips Upload-Prerelease.
+        sudo update-ca-certificates || true
         cp -f /etc/ssl/certs/ca-certificates.crt component/ca/ca-certificates.crt
 
     - name: Build core
@@ -312,6 +314,7 @@ jobs:
       uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       with:
         fetch-depth: 0
+        fetch-tags: true
 
     - name: Generate prerelease notes
       env:
@@ -319,12 +322,14 @@ jobs:
       run: |
         set -euo pipefail
         RANGE_END="${GITHUB_SHA}"
-        if [ -n "${PREV_SHA:-}" ] && [ "${PREV_SHA}" != "${RANGE_END}" ]; then
-          RANGE="${PREV_SHA}...${RANGE_END}"
-        elif PREVERSION="$(git describe --tags --abbrev=0 --match 'v[0-9]*' HEAD^ 2>/dev/null)"; then
+        # List everything since the last numbered v* tag (v1.19.29 is the
+        # Aster baseline). The previous Prerelease-* tag only covers a
+        # handful of CI commits and hid the real changelog when the last
+        # body was GitHub auto-PR notes plus Mihomo wiki links.
+        if PREVERSION="$(git describe --tags --abbrev=0 --match 'v[0-9]*' "${RANGE_END}^" 2>/dev/null)"; then
           RANGE="${PREVERSION}...${RANGE_END}"
         else
-          RANGE="$(git rev-list --max-parents=0 HEAD)...${RANGE_END}"
+          RANGE="$(git rev-list --max-parents=0 "${RANGE_END}")...${RANGE_END}"
         fi
         bash ./.github/genReleaseNote.sh -v "${RANGE}"
         {

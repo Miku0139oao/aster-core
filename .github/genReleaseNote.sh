@@ -20,15 +20,29 @@ if [ -z "$version_range" ]; then
   exit 1
 fi
 
+git_log() {
+  git log --no-merges --pretty=format:"* %h %s by @%an" "$@"
+}
+
 {
   echo "## What's Changed"
-  git log --pretty=format:"* %h %s by @%an" --grep="^feat" -i "$version_range" | sort -f | uniq
+  git_log --grep="^feat" -i "$version_range"
+  echo
   echo
   echo "## BUG & Fix"
-  git log --pretty=format:"* %h %s by @%an" --grep="^fix" -i "$version_range" | sort -f | uniq
+  git_log --grep="^fix" -i "$version_range"
+  echo
   echo
   echo "## Maintenance"
-  git log --pretty=format:"* %h %s by @%an" --grep="^chore\|^docs\|^refactor\|^test\|^perf\|^ci" -i "$version_range" | sort -f | uniq
+  git_log --grep="^chore\|^docs\|^refactor\|^test\|^perf\|^ci" -i "$version_range"
   echo
+  echo
+  other="$(git_log "$version_range" | grep -ivE '^\* [0-9a-f]+ (feat|fix|chore|docs|refactor|test|perf|ci)(\(|:)' || true)"
+  if [ -n "$other" ]; then
+    echo "## Other"
+    printf '%s\n' "$other"
+    echo
+    echo
+  fi
   echo "**Full Changelog**: https://github.com/Miku0139oao/aster-core/compare/$version_range"
 } > release.md
