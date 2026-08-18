@@ -203,6 +203,9 @@ func (s *Session) recvLoop() error {
 					}
 				}
 			case cmdSYN: // should be server only
+				if err := s.discardFramePayload(hdr.Length()); err != nil {
+					return err
+				}
 				if !s.isClient && !receivedSettingsFromClient {
 					f := newFrame(cmdAlert, 0)
 					f.data = []byte("client did not send its settings")
@@ -245,6 +248,9 @@ func (s *Session) recvLoop() error {
 					pool.Put(buffer)
 				}
 			case cmdFIN:
+				if err := s.discardFramePayload(hdr.Length()); err != nil {
+					return err
+				}
 				s.streamLock.Lock()
 				stream, ok := s.streams[sid]
 				delete(s.streams, sid)
@@ -309,8 +315,8 @@ func (s *Session) recvLoop() error {
 						log.Errorln("[Alert from server] %s", string(buffer))
 					}
 					pool.Put(buffer)
-					return nil
 				}
+				return nil
 			case cmdUpdatePaddingScheme:
 				if hdr.Length() > 0 {
 					// `rawScheme` Do not use buffer to prevent subsequent misuse
@@ -327,12 +333,17 @@ func (s *Session) recvLoop() error {
 					}
 				}
 			case cmdHeartRequest:
+				if err := s.discardFramePayload(hdr.Length()); err != nil {
+					return err
+				}
 				if _, err := s.writeControlFrame(newFrame(cmdHeartResponse, sid)); err != nil {
 					return err
 				}
 			case cmdHeartResponse:
 				// Active keepalive checking is not implemented yet
-				break
+				if err := s.discardFramePayload(hdr.Length()); err != nil {
+					return err
+				}
 			case cmdServerSettings:
 				if hdr.Length() > 0 {
 					buffer := pool.Get(int(hdr.Length()))
@@ -350,12 +361,27 @@ func (s *Session) recvLoop() error {
 					pool.Put(buffer)
 				}
 			default:
-				// I don't know what command it is (can't have data)
+				// Preserve framing when an extension or malformed peer sends a
+				// payload with a command this implementation does not know.
+				if err := s.discardFramePayload(hdr.Length()); err != nil {
+					return err
+				}
 			}
 		} else {
 			return err
 		}
 	}
+}
+
+func (s *Session) discardFramePayload(length uint16) error {
+	if length == 0 {
+		return nil
+	}
+
+	buffer := pool.Get(int(length))
+	defer pool.Put(buffer)
+	_, err := io.ReadFull(s.conn, buffer)
+	return err
 }
 
 func (s *Session) streamClosed(sid uint32) error {
