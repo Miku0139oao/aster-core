@@ -17,12 +17,7 @@ type PacketDialer interface {
 }
 
 func DialQuic(ctx context.Context, address string, opts []dialer.Option, pDialer PacketDialer, tlsConf *tls.Config, conf *quic.Config, early bool) (net.PacketConn, *quic.Conn, error) {
-	monitorAuthEarly := early
-	if _, err := netip.ParseAddrPort(address); err != nil {
-		// A hostname can resolve to multiple candidates. Authenticate each one
-		// before the dialer selects it, so a failed candidate can fall back.
-		monitorAuthEarly = false
-	}
+	monitorAuthEarly := jlsMonitorAuthEarly(address, early)
 	d := dialer.NewDialer(
 		dialer.WithOptions(opts...),
 		dialer.WithNetDialer(dialer.NetDialerFunc(func(ctx context.Context, network, address string) (net.Conn, error) {
@@ -61,6 +56,16 @@ func DialQuic(ctx context.Context, address string, opts []dialer.Option, pDialer
 	}
 	nc := c.(quicNetConn)
 	return nc.pc, nc.Conn, nil
+}
+
+// jlsMonitorAuthEarly reports whether JLS auth may complete after Dial returns.
+// Hostname targets can resolve to multiple candidates, so those must authenticate
+// before the dialer selects one and a failed candidate can still fall back.
+func jlsMonitorAuthEarly(address string, early bool) bool {
+	if _, err := netip.ParseAddrPort(address); err != nil {
+		return false
+	}
+	return early
 }
 
 func monitorJLSAuth(quicConn *quic.Conn, packetConn net.PacketConn, tlsConf *tls.Config, early bool) error {
