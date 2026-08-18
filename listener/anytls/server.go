@@ -5,13 +5,13 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"io"
 	"net"
 	"strings"
 	"sync"
 	"sync/atomic"
 
 	"github.com/Miku0139oao/aster-core/adapter/inbound"
-	"github.com/Miku0139oao/aster-core/common/buf"
 	N "github.com/Miku0139oao/aster-core/common/net"
 	"github.com/Miku0139oao/aster-core/component/ca"
 	"github.com/Miku0139oao/aster-core/component/ech"
@@ -27,7 +27,6 @@ import (
 	"github.com/Miku0139oao/aster-core/transport/anytls/session"
 
 	"github.com/metacubex/sing/common/auth"
-	"github.com/metacubex/sing/common/bufio"
 	M "github.com/metacubex/sing/common/metadata"
 	"github.com/metacubex/tls"
 )
@@ -369,21 +368,10 @@ func (l *Listener) HandleConn(conn net.Conn, h *sing.ListenerHandler) {
 	}
 	defer l.pending.Delete(pending)
 
-	b := buf.NewPacket()
-	defer b.Release()
-
-	_, err := b.ReadOnceFrom(conn)
-	if err != nil {
-		return
-	}
-	conn = bufio.NewCachedConn(conn, b)
-
-	by, err := b.ReadBytes(32)
-	if err != nil {
-		return
-	}
 	var passwordSha256 [32]byte
-	copy(passwordSha256[:], by)
+	if _, err := io.ReadFull(conn, passwordSha256[:]); err != nil {
+		return
+	}
 	snapshot := l.users.Load()
 	user, authenticated := snapshot.byPasswordHash[passwordSha256]
 	if authenticated {
@@ -391,14 +379,13 @@ func (l *Listener) HandleConn(conn net.Conn, h *sing.ListenerHandler) {
 	} else {
 		return
 	}
-	by, err = b.ReadBytes(2)
-	if err != nil {
+	var paddingHeader [2]byte
+	if _, err := io.ReadFull(conn, paddingHeader[:]); err != nil {
 		return
 	}
-	paddingLen := binary.BigEndian.Uint16(by)
+	paddingLen := binary.BigEndian.Uint16(paddingHeader[:])
 	if paddingLen > 0 {
-		_, err = b.ReadBytes(int(paddingLen))
-		if err != nil {
+		if _, err := io.CopyN(io.Discard, conn, int64(paddingLen)); err != nil {
 			return
 		}
 	}

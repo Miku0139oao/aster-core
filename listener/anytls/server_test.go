@@ -1,6 +1,7 @@
 package anytls
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"net"
 	"sync"
@@ -9,6 +10,28 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
+
+type shortReadAnyTLSConn struct {
+	reader    *bytes.Reader
+	readBytes int
+}
+
+func (c *shortReadAnyTLSConn) Read(p []byte) (int, error) {
+	if len(p) > 1 {
+		p = p[:1]
+	}
+	n, err := c.reader.Read(p)
+	c.readBytes += n
+	return n, err
+}
+
+func (c *shortReadAnyTLSConn) Write(p []byte) (int, error)      { return len(p), nil }
+func (c *shortReadAnyTLSConn) Close() error                     { return nil }
+func (c *shortReadAnyTLSConn) LocalAddr() net.Addr              { return nil }
+func (c *shortReadAnyTLSConn) RemoteAddr() net.Addr             { return nil }
+func (c *shortReadAnyTLSConn) SetDeadline(time.Time) error      { return nil }
+func (c *shortReadAnyTLSConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *shortReadAnyTLSConn) SetWriteDeadline(time.Time) error { return nil }
 
 type blockingCloseConn struct {
 	net.Conn
@@ -34,6 +57,19 @@ func TestUpdateUsersPublishesCompleteSnapshot(t *testing.T) {
 	require.NotSame(t, initial, updated)
 	require.NotContains(t, updated.byPasswordHash, sha256.Sum256([]byte("old-password")))
 	require.Equal(t, "second", updated.byPasswordHash[sha256.Sum256([]byte("new-password"))])
+}
+
+func TestHandleConnReadsSplitAuthenticationPreamble(t *testing.T) {
+	password := "password"
+	hash := sha256.Sum256([]byte(password))
+	input := append(hash[:], 0, 0)
+	conn := &shortReadAnyTLSConn{reader: bytes.NewReader(input)}
+	listener := &Listener{}
+	listener.users.Store(&userSnapshot{byPasswordHash: map[[32]byte]string{hash: "user"}})
+
+	listener.HandleConn(conn, nil)
+
+	require.Equal(t, len(input), conn.readBytes)
 }
 
 func TestUpdateUsersRejectsDuplicatePassword(t *testing.T) {
