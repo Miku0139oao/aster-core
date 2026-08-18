@@ -43,7 +43,10 @@ const (
 
 var (
 	waitTime = time.Second
-	localIP  = netip.MustParseAddr("127.0.0.1")
+	// localIP reaches a published protocol-server port from the test process.
+	localIP = netip.MustParseAddr("127.0.0.1")
+	// loopbackIP reaches an echo listener in the test process from a protocol-server container.
+	loopbackIP = localIP
 
 	defaultExposedPorts = nat.PortSet{
 		"10002/tcp": struct{}{},
@@ -57,7 +60,8 @@ var (
 			{HostPort: "10002", HostIP: "0.0.0.0"},
 		},
 	}
-	isDarwin = runtime.GOOS == "darwin"
+	isDarwin  = runtime.GOOS == "darwin"
+	isWindows = runtime.GOOS == "windows"
 )
 
 func init() {
@@ -73,6 +77,7 @@ func init() {
 		if err != nil {
 			panic(err)
 		}
+		loopbackIP = localIP
 	}
 
 	c, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
@@ -121,6 +126,13 @@ func init() {
 		}
 
 		io.Copy(io.Discard, imageStream)
+	}
+
+	if isWindows {
+		loopbackIP, err = defaultRouteIP()
+		if err != nil {
+			panic(err)
+		}
 	}
 }
 
@@ -305,7 +317,7 @@ func testPingPongWithPacketConn(t *testing.T, pc net.PacketConn) error {
 	require.NoError(t, err)
 	defer l.Close()
 
-	rAddr := &net.UDPAddr{IP: localIP.AsSlice(), Port: 10001}
+	rAddr := &net.UDPAddr{IP: loopbackIP.AsSlice(), Port: 10001}
 
 	pingCh, pongCh, test := newPingPongPair()
 	go func() {
@@ -443,7 +455,7 @@ func testLargeDataWithPacketConn(t *testing.T, pc net.PacketConn) error {
 	require.NoError(t, err)
 	defer l.Close()
 
-	rAddr := &net.UDPAddr{IP: localIP.AsSlice(), Port: 10001}
+	rAddr := &net.UDPAddr{IP: loopbackIP.AsSlice(), Port: 10001}
 
 	times := 50
 	chunkSize := int64(1024)
@@ -556,7 +568,7 @@ func testPacketConnTimeout(t *testing.T, pc net.PacketConn) error {
 func testSuit(t *testing.T, proxy C.ProxyAdapter) {
 	assert.NoError(t, testPingPongWithConn(t, func() net.Conn {
 		conn, err := proxy.DialContext(context.Background(), &C.Metadata{
-			Host:    localIP.String(),
+			Host:    loopbackIP.String(),
 			DstPort: 10001,
 		})
 		require.NoError(t, err)
@@ -565,7 +577,7 @@ func testSuit(t *testing.T, proxy C.ProxyAdapter) {
 
 	assert.NoError(t, testLargeDataWithConn(t, func() net.Conn {
 		conn, err := proxy.DialContext(context.Background(), &C.Metadata{
-			Host:    localIP.String(),
+			Host:    loopbackIP.String(),
 			DstPort: 10001,
 		})
 		require.NoError(t, err)
@@ -578,7 +590,7 @@ func testSuit(t *testing.T, proxy C.ProxyAdapter) {
 
 	pc, err := proxy.ListenPacketContext(context.Background(), &C.Metadata{
 		NetWork: C.UDP,
-		DstIP:   localIP,
+		DstIP:   loopbackIP,
 		DstPort: 10001,
 	})
 	require.NoError(t, err)
@@ -588,7 +600,7 @@ func testSuit(t *testing.T, proxy C.ProxyAdapter) {
 
 	pc, err = proxy.ListenPacketContext(context.Background(), &C.Metadata{
 		NetWork: C.UDP,
-		DstIP:   localIP,
+		DstIP:   loopbackIP,
 		DstPort: 10001,
 	})
 	require.NoError(t, err)
@@ -598,7 +610,7 @@ func testSuit(t *testing.T, proxy C.ProxyAdapter) {
 
 	pc, err = proxy.ListenPacketContext(context.Background(), &C.Metadata{
 		NetWork: C.UDP,
-		DstIP:   localIP,
+		DstIP:   loopbackIP,
 		DstPort: 10001,
 	})
 	require.NoError(t, err)
@@ -635,7 +647,7 @@ func benchmarkProxy(b *testing.B, proxy C.ProxyAdapter) {
 	}()
 
 	conn, err := proxy.DialContext(context.Background(), &C.Metadata{
-		Host:    localIP.String(),
+		Host:    loopbackIP.String(),
 		DstPort: 10001,
 	})
 	require.NoError(b, err)

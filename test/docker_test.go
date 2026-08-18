@@ -3,11 +3,16 @@ package main
 import (
 	"context"
 	"os"
+	"runtime"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
 )
+
+func shouldUseHostNetwork(goos string) bool {
+	return goos == "linux"
+}
 
 func startContainer(cfg *container.Config, hostCfg *container.HostConfig, name string) (string, error) {
 	c, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
@@ -16,7 +21,7 @@ func startContainer(cfg *container.Config, hostCfg *container.HostConfig, name s
 	}
 	defer c.Close()
 
-	if !isDarwin {
+	if shouldUseHostNetwork(runtime.GOOS) {
 		hostCfg.NetworkMode = "host"
 	}
 
