@@ -71,7 +71,7 @@ func (h *Hysteria) ListenPacketContext(ctx context.Context, metadata *C.Metadata
 
 func (h *Hysteria) genHdc(ctx context.Context) hyUtils.PacketDialer {
 	return &hyDialerWithContext{
-		ctx: context.Background(),
+		ctx: ctx,
 		hyDialer: func(network string, rAddr net.Addr) (net.PacketConn, error) {
 			rAddrPort, _ := netip.ParseAddrPort(rAddr.String())
 			return h.dialer.ListenPacket(ctx, network, "", rAddrPort)
