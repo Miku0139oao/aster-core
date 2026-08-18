@@ -111,6 +111,30 @@ func TestPacketSenderDestinationMapping(t *testing.T) {
 	}
 }
 
+func TestPacketSenderDestinationMappingUnmaps(t *testing.T) {
+	sender := newPacketSender().(*packetSender)
+	t.Cleanup(sender.Close)
+
+	origin4in6 := netip.MustParseAddr("::ffff:192.0.2.1")
+	target4in6 := netip.MustParseAddr("::ffff:198.51.100.1")
+	origin := netip.MustParseAddr("192.0.2.1")
+	target := netip.MustParseAddr("198.51.100.1")
+
+	sender.AddMapping(&C.Metadata{DstIP: origin4in6}, &C.Metadata{DstIP: target4in6})
+	if got := sender.RestoreReadFrom(target); got != origin {
+		t.Fatalf("unmapped lookup = %s, want %s", got, origin)
+	}
+	if got := sender.RestoreReadFrom(target4in6); got != origin {
+		t.Fatalf("4in6 lookup = %s, want %s", got, origin)
+	}
+	if got := sender.targetAddress(&C.Metadata{DstIP: origin4in6}); got == nil || got.AddrPort().Addr() != target {
+		t.Fatalf("4in6 origin key should resolve to unmapped target, got %v", got)
+	}
+	if got := sender.targetAddress(&C.Metadata{DstIP: origin}); got == nil || got.AddrPort().Addr() != target {
+		t.Fatalf("unmapped origin key should hit the same mapping, got %v", got)
+	}
+}
+
 func TestPacketSenderCoalescesReadDeadlines(t *testing.T) {
 	sender := newPacketSender().(*packetSender)
 	t.Cleanup(sender.Close)

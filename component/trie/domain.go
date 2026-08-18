@@ -41,12 +41,23 @@ func ValidAndSplitDomain(domain string) ([]string, bool) {
 		if parts[0] == "" {
 			return nil, false
 		}
-
-		return parts, true
+	} else {
+		for _, part := range parts[1:] {
+			if part == "" {
+				return nil, false
+			}
+		}
 	}
 
-	for _, part := range parts[1:] {
-		if part == "" {
+	// Keep DomainTrie.Search and DomainSet.Has consistent. Search treats a
+	// wildcard-looking label as a literal unless it is a complete label, while
+	// DomainSet.Has interprets the wildcard bytes during traversal.
+	for i, part := range parts {
+		if strings.Contains(part, complexWildcard) &&
+			(part != complexWildcard || i != 0 || len(parts) == 1) {
+			return nil, false
+		}
+		if strings.Contains(part, wildcard) && part != wildcard {
 			return nil, false
 		}
 	}

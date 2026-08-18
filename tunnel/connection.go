@@ -40,7 +40,7 @@ func metadataDestinationKey(metadata *C.Metadata) destinationKey {
 	if metadata.Host != "" {
 		return destinationKey{host: metadata.Host, port: metadata.DstPort}
 	}
-	return destinationKey{ip: metadata.DstIP, port: metadata.DstPort}
+	return destinationKey{ip: metadata.DstIP.Unmap(), port: metadata.DstPort}
 }
 
 // newPacketSender return a chan based C.PacketSender
@@ -60,8 +60,8 @@ func newPacketSender() C.PacketSender {
 
 func (s *packetSender) AddMapping(originMetadata *C.Metadata, metadata *C.Metadata) {
 	originKey := metadataDestinationKey(originMetadata)
-	originAddr := originMetadata.DstIP
-	targetAddr := metadata.DstIP
+	originAddr := originMetadata.DstIP.Unmap()
+	targetAddr := metadata.DstIP.Unmap()
 	if s.originToTarget[originKey] == nil {
 		s.originToTarget[originKey] = net.UDPAddrFromAddrPort(netip.AddrPortFrom(targetAddr, metadata.DstPort))
 	}
@@ -77,6 +77,7 @@ func (s *packetSender) AddMapping(originMetadata *C.Metadata, metadata *C.Metada
 }
 
 func (s *packetSender) RestoreReadFrom(addr netip.Addr) netip.Addr {
+	addr = addr.Unmap()
 	snapshot := s.reverseMappings.Load()
 	if snapshot != nil {
 		if originAddr := (*snapshot)[addr]; originAddr.IsValid() {

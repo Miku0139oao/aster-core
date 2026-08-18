@@ -108,6 +108,30 @@ func TestTrie_WildcardBoundary(t *testing.T) {
 	assert.NotNil(t, tree.Search("example.com"))
 }
 
+func TestTrie_InvalidWildcardPlacement(t *testing.T) {
+	valid := []string{"+.example.com", "*.example.com", "+.*", "stun.*.*.*", "*", "a.*", "*.a"}
+	for _, domain := range valid {
+		tree := trie.New[netip.Addr]()
+		assert.NoErrorf(t, tree.Insert(domain, localIP), "should accept %q", domain)
+	}
+
+	invalid := []string{"stun.+", "a.+.b", "a.+", "+", "+.+.com", "a+b.com", "a*b.com", "*a.com", "a*.com"}
+	for _, domain := range invalid {
+		tree := trie.New[netip.Addr]()
+		assert.ErrorIsf(t, tree.Insert(domain, localIP), trie.ErrInvalidDomain, "should reject %q", domain)
+	}
+
+	queries := []string{"example.com", "a.example.com", "com", "x.com", "za.com", "anything.at.all"}
+	for _, domain := range valid {
+		tree := trie.New[netip.Addr]()
+		assert.NoError(t, tree.Insert(domain, localIP))
+		set := tree.NewDomainSet()
+		for _, query := range queries {
+			assert.Equalf(t, tree.Search(query) != nil, set != nil && set.Has(query), "pattern %q query %q", domain, query)
+		}
+	}
+}
+
 func TestTrie_Foreach(t *testing.T) {
 	tree := trie.New[netip.Addr]()
 	domainList := []string{
