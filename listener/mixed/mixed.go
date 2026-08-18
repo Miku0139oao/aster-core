@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"sync/atomic"
 
 	"github.com/Miku0139oao/aster-core/adapter/inbound"
 	N "github.com/Miku0139oao/aster-core/common/net"
@@ -26,7 +27,7 @@ import (
 type Listener struct {
 	listener net.Listener
 	addr     string
-	closed   bool
+	closed   atomic.Bool
 }
 
 // RawAddress implements C.Listener
@@ -41,7 +42,7 @@ func (l *Listener) Address() string {
 
 // Close implements C.Listener
 func (l *Listener) Close() error {
-	l.closed = true
+	l.closed.Store(true)
 	return l.listener.Close()
 }
 
@@ -130,7 +131,7 @@ func NewWithConfig(config LC.AuthServer, lc C.InboundListenConfig, tunnel C.Tunn
 		for {
 			c, err := ml.listener.Accept()
 			if err != nil {
-				if ml.closed {
+				if ml.closed.Load() {
 					break
 				}
 				continue

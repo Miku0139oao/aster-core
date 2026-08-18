@@ -3,6 +3,7 @@ package tproxy
 import (
 	"context"
 	"net"
+	"sync/atomic"
 
 	"github.com/Miku0139oao/aster-core/adapter/inbound"
 	"github.com/Miku0139oao/aster-core/component/keepalive"
@@ -14,7 +15,7 @@ import (
 type Listener struct {
 	listener net.Listener
 	addr     string
-	closed   bool
+	closed   atomic.Bool
 }
 
 // RawAddress implements C.Listener
@@ -29,7 +30,7 @@ func (l *Listener) Address() string {
 
 // Close implements C.Listener
 func (l *Listener) Close() error {
-	l.closed = true
+	l.closed.Store(true)
 	return l.listener.Close()
 }
 
@@ -79,7 +80,7 @@ func New(addr string, tunnel C.Tunnel, additions ...inbound.Addition) (*Listener
 		for {
 			c, err := l.Accept()
 			if err != nil {
-				if rl.closed {
+				if rl.closed.Load() {
 					break
 				}
 				continue

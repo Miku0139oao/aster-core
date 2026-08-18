@@ -3,6 +3,7 @@ package tproxy
 import (
 	"net"
 	"net/netip"
+	"sync/atomic"
 
 	"github.com/Miku0139oao/aster-core/adapter/inbound"
 	"github.com/Miku0139oao/aster-core/common/pool"
@@ -15,7 +16,7 @@ import (
 type UDPListener struct {
 	packetConn net.PacketConn
 	addr       string
-	closed     bool
+	closed     atomic.Bool
 }
 
 // RawAddress implements C.Listener
@@ -30,7 +31,7 @@ func (l *UDPListener) Address() string {
 
 // Close implements C.Listener
 func (l *UDPListener) Close() error {
-	l.closed = true
+	l.closed.Store(true)
 	return l.packetConn.Close()
 }
 
@@ -72,7 +73,7 @@ func NewUDP(addr string, tunnel C.Tunnel, additions ...inbound.Addition) (*UDPLi
 			n, oobn, _, lAddr, err := c.ReadMsgUDPAddrPort(buf, oob)
 			if err != nil {
 				pool.Put(buf)
-				if rl.closed {
+				if rl.closed.Load() {
 					break
 				}
 				continue
