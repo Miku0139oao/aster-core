@@ -183,6 +183,23 @@ func TestManagerReconcileMutateAndTraffic(t *testing.T) {
 	}}, managed.users())
 }
 
+func TestManagerRejectsNonPositiveMutationRevision(t *testing.T) {
+	managed := newManagedVLESSTestListener()
+	registerManagedTestListener(t, managed)
+	manager := NewManager()
+	require.NoError(t, manager.Configure(managerTestConfig(filepath.Join(t.TempDir(), "aster-state.json"), managed.name)))
+	t.Cleanup(func() { _ = manager.Configure(nil) })
+
+	records, err := manager.ListUserRecords(managed.name)
+	require.NoError(t, err)
+	_, _, err = manager.CreateUser(CreateUserInput{Inbound: managed.name, Name: "invalid"}, 0)
+	require.ErrorIs(t, err, ErrInvalid)
+	require.Len(t, managed.users(), 1)
+	_, revision, err := manager.GetUser(records[0].User.ID)
+	require.NoError(t, err)
+	require.Equal(t, records[0].Revision, revision)
+}
+
 func TestManagerSnapshotAndUserIndexTrackMutations(t *testing.T) {
 	managed := newManagedVLESSTestListener()
 	registerManagedTestListener(t, managed)

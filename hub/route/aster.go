@@ -408,6 +408,10 @@ func decodeAsterUserInput(writer http.ResponseWriter, request *http.Request) (as
 		writeAsterError(writer, request, http.StatusBadRequest, err.Error())
 		return asterUserInput{}, false
 	}
+	if input.Revision <= 0 {
+		writeAsterError(writer, request, http.StatusBadRequest, "revision must be a positive integer")
+		return asterUserInput{}, false
+	}
 	return input, true
 }
 

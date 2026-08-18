@@ -461,11 +461,14 @@ func (m *Manager) SubscriptionToken(userID string) (string, error) {
 }
 
 func (m *Manager) mutateListenerLocked(inbound string, expectedRevision int64, mutate func(*Store, *ListenerState) error) (*ListenerState, error) {
+	if expectedRevision <= 0 {
+		return nil, fmt.Errorf("%w: revision must be a positive integer", ErrInvalid)
+	}
 	current := m.store.Listeners[inbound]
 	if current == nil {
 		return nil, ErrNotFound
 	}
-	if expectedRevision <= 0 || current.Revision != expectedRevision {
+	if current.Revision != expectedRevision {
 		return nil, fmt.Errorf("%w: expected %d, current %d", ErrConflict, expectedRevision, current.Revision)
 	}
 	m.trafficMu.Lock()

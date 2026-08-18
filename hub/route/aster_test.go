@@ -225,3 +225,17 @@ func TestAsterUserCRUDAndCredentialRedaction(t *testing.T) {
 	require.Equal(t, 409, response.Code)
 	require.Len(t, managed.current, 2)
 }
+
+func TestAsterMutationRejectsNonPositiveRevision(t *testing.T) {
+	setupAsterRouteTest(t)
+	handler := router(false, "", "", Cors{}, asterRoutePolicy{adminAllowed: true})
+
+	request := httptest.NewRequest("POST", "http://controller.example/api/admin/users", bytes.NewBufferString(`{"inbound":"vless-in","name":"invalid"}`))
+	request.Header.Set("Authorization", "Bearer 0123456789abcdef0123456789abcdef")
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	require.Equal(t, 400, response.Code)
+	require.Contains(t, response.Body.String(), "revision must be a positive integer")
+}
