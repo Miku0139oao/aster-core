@@ -66,7 +66,7 @@ In plain terms: Aster removes core work that used to be redone for every packet.
 | New UDP packet setup | **about 5.7× faster** | Games, voice, and QUIC create less throwaway memory |
 | Disabled debug logs | **about 98× faster** | Unused logs are skipped before the string is built |
 
-In a constrained single-core 25% CPU / 512 MiB RAM environment, the isolated test programs for five core cases used about **30–49%** less peak memory than Mihomo. A full core with a minimal idle profile is a different story: Aster is about 31.6 MiB, Mihomo about 28.9 MiB, so Aster is about **2.8 MiB** larger. Busy paths allocate less temporary memory; the idle footprint is slightly larger because Aster ships more features.
+In a constrained single-core 25% CPU / 512 MiB RAM environment, the isolated test programs for disabled log and AnyTLS used about **31–44%** less peak memory than Mihomo 1.19.30. UDP was roughly even, and the isolated TCP test process peaked higher for Aster. A full core with a minimal idle profile is a different story: Aster is about 39.3 MiB, Mihomo about 34.8 MiB, so Aster is about **4.5 MiB** larger. Some busy paths allocate less temporary memory; the idle footprint is slightly larger because Aster ships more features.
 
 ### What changed?
 

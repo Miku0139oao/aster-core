@@ -80,9 +80,7 @@ This 5825U soft router is still stronger than many MT7621, low-end ARM, or cheap
 
 ## Hyper-V low-resource simulation (secondary result)
 
-> This section, the protocol loopback table, and idle RSS are still measurements against Mihomo `v1.19.29`. They have not been rerun against `v1.19.30`. The homepage and the primary table above use the `v1.19.30` rerun.
-
-To get closer to weaker hardware most users have, we added another resource limit on the same Hyper-V OpenWrt VM. The benchmark was allowed **1 vCPU**, and at most 25 ms of execution every 100 ms, which is **single-core 25% CPU time**. Memory was capped at **512 MiB**, with swap disabled.
+To get closer to weaker hardware most users have, we added another resource limit on the same Hyper-V OpenWrt VM. The benchmark was allowed **1 vCPU**, and at most 25 ms of execution every 100 ms, which is **single-core 25% CPU time**. Memory was capped at **512 MiB**, with swap disabled. Rerun on 2026-08-19 against Mihomo `v1.19.30` with the same Linux amd64 test binaries.
 
 This simulates a resource-starved situation. It is not an MT7621 or ARM ISA simulation. It answers “do Aster’s optimizations still exist when CPU is slow and RAM is scarce,” but it does not replace a test on a real low-end router.
 
@@ -91,68 +89,67 @@ This simulates a resource-starved situation. It is not an MT7621 or ARM ISA simu
 | System | OpenWrt on Hyper-V, Linux 6.6.86, x86-64 |
 | Host CPU | Ryzen 7 5825U |
 | CPU limit | Pinned to vCPU 0; cgroup `cpu.max = 25000 100000`, i.e. single-core 25% CPU time |
-| Guest-reported CPU frequency | Average 1.998 GHz before the test; average 2.080 GHz after. This is a frequency sample and **does not include the 25% CPU-time limit** |
-| Memory limit | 512 MiB, no swap; test-process peak about 23.2 MiB |
+| Guest-reported CPU frequency | Average 2.304 GHz before the test; average 2.002 GHz after. This is a frequency sample and **does not include the 25% CPU-time limit** |
+| Memory limit | 512 MiB, no swap |
 | DRAM frequency | Hypervisor did not expose it, **unavailable** |
 | Go | 1.26.3, Linux amd64 test binary |
-| Load average before the test | 0.00／0.11／0.12 (1／5／15 minutes) |
-| Load average after the test | 0.29／0.19／0.15 (1／5／15 minutes) |
-| Throttle confirmation | 1,197 of 1,200 CPU quota periods were throttled |
+| Load average before the test | 0.11／0.17／0.16 (1／5／15 minutes) |
+| Load average after the test | 0.26／0.20／0.17 (1／5／15 minutes) |
+| Throttle confirmation | 1,121 of 1,122 CPU quota periods were throttled |
 
 Both versions ran the same benchmarks sequentially, three rounds, at least 2 seconds each. The table uses the three-round median:
 
-| Core work | Mihomo median | Aster median | Aster relative result |
+| Core work | Mihomo 1.19.30 median | Aster median | Aster relative result |
 | --- | ---: | ---: | ---: |
-| UDP packet metadata | 239.0 ns; 416 B／1 alloc | 47.60 ns; 0 B／0 alloc | **5.0× faster**; removed the 416 B allocation |
-| Disabled debug log | 842.6 ns; 24 B／1 alloc | 8.044 ns; 0 B／0 alloc | **about 105× faster**; removed the event allocation |
-| AnyTLS frame (1 KiB) | 315.1 ns; 64 B／1 alloc | 128.0 ns; 0 B／0 alloc | **2.46× faster**; latency down 59% |
-| AnyTLS frame (16 KiB) | 1.087 µs; 64 B／1 alloc | 835.6 ns; 0 B／0 alloc | **1.30× faster**; latency down 23% |
-| TCP relay (32 KiB) | 16.627 µs; 1.97 GB/s; 64 B／1 alloc | 15.918 µs; 2.06 GB/s; 0 B／0 alloc | Latency down **4.3%**; throughput up **4.5%** |
+| UDP packet metadata | 240.5 ns; 416 B／1 alloc | 50.97 ns; 0 B／0 alloc | **4.72× faster**; removed the 416 B allocation |
+| Disabled debug log | 846.6 ns; 24 B／1 alloc | 8.314 ns; 0 B／0 alloc | **about 102× faster**; removed the event allocation |
+| AnyTLS frame (1 KiB) | 328.9 ns; 64 B／1 alloc | 135.5 ns; 0 B／0 alloc | **2.43× faster**; latency down 59% |
+| AnyTLS frame (16 KiB) | 1.126 µs; 64 B／1 alloc | 753.7 ns; 0 B／0 alloc | **1.49× faster**; latency down 33% |
+| TCP relay (32 KiB) | 17.829 µs; 1.84 GB/s; 64 B／1 alloc | 16.879 µs; 1.94 GB/s; 0 B／0 alloc | Latency down **5.3%**; throughput up **5.6%** |
 
 ### Peak memory
 
 Keep two “memory” numbers separate:
 
-| Situation | Mihomo | Aster | Conclusion |
+| Situation | Mihomo 1.19.30 | Aster | Conclusion |
 | --- | ---: | ---: | --- |
-| Full core, minimal profile, idle 15 s RSS | 28.9 MiB | 31.6 MiB | Aster is 2.8 MiB larger, about **+9.5%** |
-| Full-core cgroup `memory.current` | 6.50 MiB | 6.80 MiB | Aster is about 0.30 MiB larger, about **+4.6%** |
+| Full core, minimal profile, idle 15 s RSS | 34.8 MiB | 39.3 MiB | Aster is 4.5 MiB larger, about **+13%** |
 
-The full-core test used the same profile: Direct mode, no proxies, no rules, silent logs, IPv6 off. Aster and Mihomo were interleaved for three rounds, waiting 15 seconds after each start. RSS three-round ranges were Aster 31.5–31.9 MiB and Mihomo 28.9–29.1 MiB. The OpenWrt kernel did not provide `smaps_rollup`, so there is no PSS data.
+The full-core test used the same profile: Direct mode, no proxies, no rules, silent logs, IPv6 off, TUN off, bound only to unused 127.0.0.1 ports. Aster and Mihomo each ran three rounds, waiting 15 seconds after each start. RSS three-round ranges were Aster 39.0–39.5 MiB and Mihomo 34.6–35.4 MiB. The OpenWrt kernel did not provide `smaps_rollup`, so there is no PSS. This run also could not read a per-process `memory.current` from a child cgroup (controller delegation was denied), so only `/proc/<pid>/status` `VmRSS` is reported.
 
-**So you cannot say Aster uses less RAM when idle.** Aster ships more features and code, and the minimal idle base is currently about 2.8 MiB larger than Mihomo. The 30–49% reductions below only appear when specific hot paths are repeated. They mean less temporary memory while busy, not a smaller idle RSS for the whole program.
+**So you cannot say Aster uses less RAM when idle.** Aster ships more features and code, and the minimal idle base is currently about 4.5 MiB larger than Mihomo 1.19.30. The isolated-process peaks below are Max RSS of a Go test program that only loaded that package. They are not the total RAM of a full proxy with rules, GeoIP, DNS cache, and live connections.
 
 ### Isolated-process peaks for core hot paths
 
 Each case was rerun as an isolated process for three rounds. Max RSS was recorded with Linux `/usr/bin/time -v`. The table uses the three-round median. Both sides used the same single-core 25% CPU time and 512 MiB memory limit.
 
-| Core work | Mihomo peak RSS | Aster peak RSS | Difference |
+| Core work | Mihomo 1.19.30 peak RSS | Aster peak RSS | Difference |
 | --- | ---: | ---: | ---: |
-| TCP relay (32 KiB) | 39.5 MiB | 24.5 MiB | **38% less** |
-| Disabled debug log | 33.0 MiB | 23.0 MiB | **30% less** |
-| UDP packet metadata | 50.6 MiB | 26.0 MiB | **49% less** |
-| AnyTLS frame (1 KiB) | 38.9 MiB | 23.5 MiB | **40% less** |
-| AnyTLS frame (16 KiB) | 39.6 MiB | 23.5 MiB | **41% less** |
+| TCP relay (32 KiB) | 39.5 MiB | 50.5 MiB | Aster is **28% larger** |
+| Disabled debug log | 33.4 MiB | 23.0 MiB | **31% less** |
+| UDP packet metadata | 56.0 MiB | 53.4 MiB | Roughly even (about 5% less) |
+| AnyTLS frame (1 KiB) | 34.7 MiB | 19.5 MiB | **44% less** |
+| AnyTLS frame (16 KiB) | 34.0 MiB | 19.5 MiB | **43% less** |
 
-These numbers are peak RSS of a Go test program that only loaded that package and ran the benchmark. They are not the total RAM of a full proxy with rules, GeoIP, DNS cache, and live connections. They are useful for comparing memory pressure from the same small job. They do not claim Aster always uses 30–49% less RAM under every configuration.
+After the 1.19.30 rerun, **do not keep saying all five cases used 30–49% less RAM**. Disabled log and AnyTLS are still clearly lower. UDP is roughly even. The isolated TCP test process peaked higher for Aster. This compares temporary pressure from that package test, not Aster’s RAM under every configuration.
 
-Three-round ranges: TCP Mihomo 39.5–40.5 MiB, Aster 24.0–24.5 MiB; log Mihomo 32.5–33.9 MiB, Aster fixed 23.0 MiB; UDP Mihomo 42.9–55.5 MiB, Aster fixed 26.0 MiB; AnyTLS Mihomo 38.0–40.0 MiB, Aster 23.5–24.0 MiB. All tests used 0 swap.
+Three-round ranges: TCP Mihomo 38.5–40.0 MiB, Aster 50.5–50.8 MiB; log Mihomo 33.0–33.4 MiB, Aster fixed 23.0 MiB; UDP Mihomo 43.1–58.0 MiB, Aster 51.8–57.0 MiB; AnyTLS 1 KiB Mihomo 34.3–34.8 MiB, Aster fixed 19.5 MiB; AnyTLS 16 KiB Mihomo 33.8–34.9 MiB, Aster fixed 19.5 MiB. All tests used 0 swap.
 
 ### Constrained three-round ranges
 
-| Benchmark | Mihomo range | Aster range |
+| Benchmark | Mihomo 1.19.30 range | Aster range |
 | --- | ---: | ---: |
-| UDP packet metadata | 231.3–243.0 ns/op | 47.13–48.03 ns/op |
-| Disabled debug log | 825.6–921.2 ns/op | 7.958–8.066 ns/op |
-| AnyTLS frame (1 KiB) | 313.3–319.2 ns/op | 126.3–129.9 ns/op |
-| AnyTLS frame (16 KiB) | 1.047–1.097 µs/op | 731.3–895.3 ns/op |
-| TCP relay (32 KiB) | 16.605–17.087 µs/op | 15.754–16.501 µs/op |
+| UDP packet metadata | 235.1–240.6 ns/op | 50.83–50.99 ns/op |
+| Disabled debug log | 826.0–873.5 ns/op | 8.052–8.401 ns/op |
+| AnyTLS frame (1 KiB) | 318.7–333.8 ns/op | 131.8–136.1 ns/op |
+| AnyTLS frame (16 KiB) | 1.123–1.205 µs/op | 723.6–803.6 ns/op |
+| TCP relay (32 KiB) | 17.702–18.418 µs/op | 16.240–17.239 µs/op |
 
-Absolute processing time became about four times the unrestricted run, which shows the CPU quota was real. Aster was still faster on all five jobs. In plain language, **weaker hardware usually feels the saved CPU work and allocations more**: TCP improved from about 3% to 4.3%, and AnyTLS 1 KiB from 1.94× to 2.46×. UDP and AnyTLS 16 KiB ratios barely changed, so you cannot assume every optimization scales the same way as hardware gets weaker. The homepage still uses the unrestricted OpenWrt **TCP about 4%** versus Mihomo 1.19.30, not this more flattering 4.3% (versus 1.19.29), as the main advertised number.
+Absolute processing time became about four times the unrestricted run, which shows the CPU quota was real. Aster was still faster on all five latency jobs. In plain language, **weaker hardware usually feels the saved CPU work more**: TCP improved from 3.8% unrestricted to 5.3%, AnyTLS 1 KiB from 1.98× to 2.43×, and AnyTLS 16 KiB from 1.32× to 1.49×. The UDP ratio eased from 5.65× to 4.72×, so you cannot assume every optimization scales the same way as hardware gets weaker. The homepage still uses the unrestricted OpenWrt **TCP about 4%** versus Mihomo 1.19.30, not this more flattering 5.3%, as the main advertised number.
 
 ## Per-protocol loopback tests
 
-A faster core microbenchmark does not mean every protocol’s end-to-end throughput rises in lockstep. To check that, we connected Aster and Mihomo to the same local server on a Linux Docker host network and measured read/write with 16 KiB chunks.
+A faster core microbenchmark does not mean every protocol’s end-to-end throughput rises in lockstep. To check that, we previously connected Aster and Mihomo to the same local server on a Linux Docker host network and measured read/write with 16 KiB chunks. The table below is still versus Mihomo `v1.19.29`; the protocol servers were not rerun against `v1.19.30`.
 
 | Protocol | Server | Aster vs Mihomo |
 | --- | --- | --- |
@@ -167,7 +164,7 @@ A faster core microbenchmark does not mean every protocol’s end-to-end through
 
 Numbers in the table are **Aster vs Mihomo**. VMess, VLESS, Trojan, Snell, and Shadowsocks B/op and allocs/op are also roughly the same. This round of work mainly improved shared relay, UDP metadata, logging, and AnyTLS frame hot paths. It did not magically make every encrypted protocol much faster.
 
-These protocol tests used a Ryzen 9 5900X, Docker Linux amd64, Go 1.26.5. Ordinary protocols ran at least three rounds. Trojan produced contradictory ±20% results in the first sequential set, so it got an extra five interleaved Aster/Mihomo rounds with a fixed test binary; the gap converged to about 2%. Raw host load was not recorded in sync during the protocol tests, so they are only used to look for an obvious protocol regression. **They are not homepage advertising numbers.**
+These protocol tests are still the earlier Docker loopback against Mihomo `v1.19.29`. They were **not** rerun against `v1.19.30`. This 5900X host has Docker Engine, but not the original pinned protocol server images, and pulling new tags would not match those SHAs. The encryption and copy paths are shared; the 1.19.30 microbenchmarks already cover the changed relay, UDP, log, and AnyTLS frame work. The table is only here to show that encrypted protocols did not all jump together. **They are not homepage advertising numbers.**
 
 Server images were pinned to shadowsocks-rust `sha256:85d01d…e1359`, V2Fly `sha256:e81a07…de78c`, Trojan `sha256:5b36c2…b98b5f7`, OpenSnell `sha256:70053f…345467`, and Hysteria v1.3.5 `sha256:4c8c92…f1e35`.
 
@@ -184,27 +181,39 @@ The object-pool path is about **5.65× faster** on the three-round median and re
 
 ## High-end development machine (appendix)
 
-The original Aster absolute numbers were taken on a high-end desktop. They are only useful as a development-time regression check and should not represent an ordinary router:
+The original Aster absolute numbers were taken on a high-end desktop. They are only useful as a development-time regression check and should not represent an ordinary router. On 2026-08-19 the same 5900X reran the same microbenchmarks against Mihomo `v1.19.30` and Aster `main`, interleaved, three rounds, at least 2 seconds each:
 
 | Environment | Actual value |
 | --- | --- |
-| System | Windows amd64; balanced power mode |
+| System | Windows 11 amd64; balanced power mode |
 | CPU | Ryzen 9 5900X, 12 cores／24 logical CPUs |
-| Actual CPU frequency | Later representative rerun averaged 4.46 GHz, range 4.42–4.51 GHz |
+| Reported frequency | Windows `\Processor Frequency` stayed at 3701 MHz (advertised clock, **not** actual boost) |
 | DRAM | 64 GB (4×16 GB) G.Skill DDR4-3600, configured 3600 MT/s |
-| Go | 1.26.3 |
-| Original test load | **Not recorded in sync; cannot be backfilled** |
-| Later representative rerun CPU load | Average 36.4% before the test (24.7–58.5%); average 37.7% during the test (27.3–55.6%) |
-| Later processor queue | Average 0.1, range 0–1 |
+| Go | 1.26.3 windows/amd64 |
+| CPU load before each case | About 30% average across start samples (17.6–60.9%) |
+| CPU load after each case | About 34% average across end samples (20.3–54.8%) |
+| Processor queue | 0 throughout |
 
-Because background load was high and the original test did not record load point by point, the 5900X data is no longer the homepage’s primary comparison. It is kept only to watch for an obvious performance regression.
+Background load is still not low, so the 5900X run is **not** the homepage’s primary comparison. It is only here to confirm the desktop development machine did not regress. An earlier same-day pass with about 42–47% background load and no interleaving produced contradictory TCP numbers and was discarded.
+
+| Core work | Mihomo 1.19.30 median | Aster median | Aster relative result |
+| --- | ---: | ---: | ---: |
+| UDP packet metadata | 150.8 ns; 416 B／1 alloc | 11.66 ns; 0 B／0 alloc | **12.9× faster**; removed the 416 B allocation |
+| Disabled debug log | 607.8 ns; 24 B／1 alloc | 2.820 ns; 0 B／0 alloc | **215× faster**; removed the event allocation |
+| AnyTLS frame (1 KiB) | 69.60 ns; 64 B／1 alloc | 34.35 ns; 0 B／0 alloc | **2.03× faster** |
+| AnyTLS frame (16 KiB) | 245.7 ns; 64 B／1 alloc | 199.8 ns; 0 B／0 alloc | **1.23× faster** |
+| TCP relay (32 KiB) | 10.607 µs; 3.09 GB/s; 64 B／1 alloc | 9.871 µs; 3.32 GB/s; 0 B／0 alloc | Latency down **6.9%**; throughput up **7.5%** |
+
+Three-round ranges: UDP Mihomo 139.3–173.9 ns, Aster pool 11.41–11.77 ns; log Mihomo 421.8–617.4 ns, Aster 2.277–2.996 ns; AnyTLS 1 KiB Mihomo 69.42–71.19 ns, Aster 32.85–38.97 ns; AnyTLS 16 KiB Mihomo 243.4–267.1 ns, Aster 190.3–213.6 ns; TCP Mihomo 10.108–11.045 µs, Aster 9.258–10.064 µs. A second interleaved TCP trio had Aster at 9.418 µs versus Mihomo 10.269 µs, same direction.
+
+Aster standalone regression (same pass, not a comparison):
 
 | Aster standalone benchmark | Payload | Three-round result | Memory allocation |
 | --- | ---: | ---: | ---: |
-| UDPFlowSteadyState | 1,200 B | 0.85–1.22 µs/op | 0 B/op, 0 allocs/op |
-| TCPRelayThroughput | 32 KiB | 9.99–10.72 µs/op | 0 B/op, 0 allocs/op |
-| SessionUpload | 1 KiB | 5.46–5.52 µs/op | 0 B/op, 0 allocs/op |
-| SessionUpload | 16 KiB | 8.02–8.46 µs/op | 0 B/op, 0 allocs/op |
+| UDPFlowSteadyState | 1,200 B | 1.02–1.13 µs/op | 0 B/op, 0 allocs/op |
+| TCPRelayThroughput | 32 KiB | 9.26–10.06 µs/op | 0 B/op, 0 allocs/op |
+| SessionUpload | 1 KiB | 4.81–5.48 µs/op | 0 B/op, 0 allocs/op |
+| SessionUpload | 16 KiB | 9.05–10.74 µs/op | 0 B/op, 0 allocs/op |
 
 ## How to rerun
 

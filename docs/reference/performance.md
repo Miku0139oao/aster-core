@@ -80,9 +80,7 @@ Padding 規則在載入設定時就先解析好。真正傳資料時，Aster 只
 
 ## Hyper-V 低階資源模擬（次要結果）
 
-> 這一節與後面的協議 loopback、空載 RSS 仍是對 Mihomo `v1.19.29` 的舊測量，尚未用 `v1.19.30` 重跑。首頁與本頁主表已改用上面的 `v1.19.30` 數字。
-
-為了更接近大部分使用者的弱硬體，我們在同一台 Hyper-V OpenWrt VM 裡再加一層資源限制。Benchmark 只准使用 **1 顆 vCPU**，而且每 100 ms 最多只能執行 25 ms，相當於 **單核 25% CPU 時間**；記憶體上限設為 **512 MiB**，並停用 swap。
+為了更接近大部分使用者的弱硬體，我們在同一台 Hyper-V OpenWrt VM 裡再加一層資源限制。Benchmark 只准使用 **1 顆 vCPU**，而且每 100 ms 最多只能執行 25 ms，相當於 **單核 25% CPU 時間**；記憶體上限設為 **512 MiB**，並停用 swap。2026-08-19 用 Mihomo `v1.19.30` 與同一組 Linux amd64 test binary 重跑。
 
 這是資源不足情境的模擬，不是 MT7621 或 ARM 指令集模擬。它能回答「CPU 很慢、記憶體很少時，Aster 的優化是否仍存在」，但不能取代真實低階路由器測試。
 
@@ -91,68 +89,67 @@ Padding 規則在載入設定時就先解析好。真正傳資料時，Aster 只
 | 系統 | Hyper-V 上的 OpenWrt，Linux 6.6.86，x86-64 |
 | 宿主 CPU | Ryzen 7 5825U |
 | CPU 限制 | 綁定 vCPU 0；cgroup `cpu.max = 25000 100000`，即單核 25% CPU 時間 |
-| 客體回報 CPU 頻率 | 測試前平均 1.998 GHz；測試後平均 2.080 GHz。這是頻率取樣，**不包含 25% CPU 時間限制** |
-| 記憶體限制 | 512 MiB、無 swap；測試程序峰值約 23.2 MiB |
+| 客體回報 CPU 頻率 | 測試前平均 2.304 GHz；測試後平均 2.002 GHz。這是頻率取樣，**不包含 25% CPU 時間限制** |
+| 記憶體限制 | 512 MiB、無 swap |
 | DRAM 頻率 | Hypervisor 未提供，**無法取得** |
 | Go | 1.26.3，Linux amd64 test binary |
-| 測試前 load average | 0.00／0.11／0.12（1／5／15 分鐘） |
-| 測試後 load average | 0.29／0.19／0.15（1／5／15 分鐘） |
-| 節流確認 | 1,200 個 CPU quota periods 中有 1,197 個發生 throttling |
+| 測試前 load average | 0.11／0.17／0.16（1／5／15 分鐘） |
+| 測試後 load average | 0.26／0.20／0.17（1／5／15 分鐘） |
+| 節流確認 | 1,122 個 CPU quota periods 中有 1,121 個發生 throttling |
 
 兩個版本依序跑相同 benchmark，各三輪、每輪至少 2 秒。以下採三輪中位數：
 
-| 核心工作 | Mihomo 中位數 | Aster 中位數 | Aster 相對結果 |
+| 核心工作 | Mihomo 1.19.30 中位數 | Aster 中位數 | Aster 相對結果 |
 | --- | ---: | ---: | ---: |
-| UDP packet metadata | 239.0 ns；416 B／1 alloc | 47.60 ns；0 B／0 alloc | **5.0× faster**；消除 416 B 配置 |
-| 停用的 debug log | 842.6 ns；24 B／1 alloc | 8.044 ns；0 B／0 alloc | **約 105× faster**；消除 event 配置 |
-| AnyTLS frame（1 KiB） | 315.1 ns；64 B／1 alloc | 128.0 ns；0 B／0 alloc | **2.46× faster**；延遲降低 59% |
-| AnyTLS frame（16 KiB） | 1.087 µs；64 B／1 alloc | 835.6 ns；0 B／0 alloc | **1.30× faster**；延遲降低 23% |
-| TCP relay（32 KiB） | 16.627 µs；1.97 GB/s；64 B／1 alloc | 15.918 µs；2.06 GB/s；0 B／0 alloc | 延遲降低 **4.3%**；吞吐提高 **4.5%** |
+| UDP packet metadata | 240.5 ns；416 B／1 alloc | 50.97 ns；0 B／0 alloc | **4.72× faster**；消除 416 B 配置 |
+| 停用的 debug log | 846.6 ns；24 B／1 alloc | 8.314 ns；0 B／0 alloc | **約 102× faster**；消除 event 配置 |
+| AnyTLS frame（1 KiB） | 328.9 ns；64 B／1 alloc | 135.5 ns；0 B／0 alloc | **2.43× faster**；延遲降低 59% |
+| AnyTLS frame（16 KiB） | 1.126 µs；64 B／1 alloc | 753.7 ns；0 B／0 alloc | **1.49× faster**；延遲降低 33% |
+| TCP relay（32 KiB） | 17.829 µs；1.84 GB/s；64 B／1 alloc | 16.879 µs；1.94 GB/s；0 B／0 alloc | 延遲降低 **5.3%**；吞吐提高 **5.6%** |
 
 ### 峰值記憶體佔用
 
 先把兩種「記憶體佔用」分開看：
 
-| 情境 | Mihomo | Aster | 結論 |
+| 情境 | Mihomo 1.19.30 | Aster | 結論 |
 | --- | ---: | ---: | --- |
-| 完整核心、最小設定、空載 15 秒的 RSS | 28.9 MiB | 31.6 MiB | Aster 多 2.8 MiB，約 **+9.5%** |
-| 完整核心的 cgroup `memory.current` | 6.50 MiB | 6.80 MiB | Aster 多約 0.30 MiB，約 **+4.6%** |
+| 完整核心、最小設定、空載 15 秒的 RSS | 34.8 MiB | 39.3 MiB | Aster 多 4.5 MiB，約 **+13%** |
 
-完整核心測試使用相同設定：Direct 模式、無代理、無規則、靜默 log、IPv6 關閉；Aster 與 Mihomo 交錯三輪，每輪啟動後等待 15 秒。RSS 三輪範圍為 Aster 31.5–31.9 MiB、Mihomo 28.9–29.1 MiB。OpenWrt 核心沒有提供 `smaps_rollup`，因此沒有 PSS 數據。
+完整核心測試使用相同設定：Direct 模式、無代理、無規則、靜默 log、IPv6 關閉、TUN 關閉、只綁 127.0.0.1 未使用埠；Aster 與 Mihomo 各三輪，每輪啟動後等待 15 秒。RSS 三輪範圍為 Aster 39.0–39.5 MiB、Mihomo 34.6–35.4 MiB。OpenWrt 核心沒有提供 `smaps_rollup`，因此沒有 PSS。這次也無法在子 cgroup 讀到獨立的 `memory.current`（控制器委派被拒絕），所以只報 `/proc/<pid>/status` 的 `VmRSS`。
 
-**所以不能說 Aster 空載比較省 RAM。** Aster 加入更多功能與程式碼，最小設定的常駐底座目前比 Mihomo 多約 2.8 MiB。下面的 30–49% 降幅只出現在重複執行特定 hot path 時，代表忙碌時少製造臨時記憶體，不代表完整程式的 idle RSS 較小。
+**所以不能說 Aster 空載比較省 RAM。** Aster 加入更多功能與程式碼，最小設定的常駐底座目前比 Mihomo 1.19.30 多約 4.5 MiB。下面的獨立程序峰值只代表「重複執行某個 hot path 的 Go 測試程式」當時的 Max RSS，不是完整代理掛著規則、GeoIP、DNS cache 和連線時的總 RAM。
 
 ### 核心 hot path 的獨立程序峰值
 
 每個案例改用獨立程序重跑三輪，透過 Linux `/usr/bin/time -v` 記錄 Max RSS。表格採三輪中位數；兩邊都套用相同的單核 25% CPU 時間與 512 MiB 記憶體限制。
 
-| 核心工作 | Mihomo 峰值 RSS | Aster 峰值 RSS | 差異 |
+| 核心工作 | Mihomo 1.19.30 峰值 RSS | Aster 峰值 RSS | 差異 |
 | --- | ---: | ---: | ---: |
-| TCP relay（32 KiB） | 39.5 MiB | 24.5 MiB | **少 38%** |
-| 停用的 debug log | 33.0 MiB | 23.0 MiB | **少 30%** |
-| UDP packet metadata | 50.6 MiB | 26.0 MiB | **少 49%** |
-| AnyTLS frame（1 KiB） | 38.9 MiB | 23.5 MiB | **少 40%** |
-| AnyTLS frame（16 KiB） | 39.6 MiB | 23.5 MiB | **少 41%** |
+| TCP relay（32 KiB） | 39.5 MiB | 50.5 MiB | Aster 多 **28%** |
+| 停用的 debug log | 33.4 MiB | 23.0 MiB | **少 31%** |
+| UDP packet metadata | 56.0 MiB | 53.4 MiB | 大致持平（少約 5%） |
+| AnyTLS frame（1 KiB） | 34.7 MiB | 19.5 MiB | **少 44%** |
+| AnyTLS frame（16 KiB） | 34.0 MiB | 19.5 MiB | **少 43%** |
 
-這裡量到的是「只載入該 package 並執行 benchmark」的 Go 測試程序峰值，不是完整代理程式掛著規則、GeoIP、DNS cache 和連線時的總 RAM。它適合比較相同小工作造成的記憶體壓力，不能宣稱 Aster 在任何設定下整體 RAM 都固定少 30–49%。
+對 1.19.30 重跑後，**不能再寫「五個案例都少 30–49%」**。停用 log 與 AnyTLS 仍明顯較低；UDP 幾乎打平；TCP 這個獨立測試程序的峰值反而較高。這比較的是該 package 測試程式的暫存壓力，不能外推成「Aster 在任何設定下整體 RAM 都比較小」。
 
-三輪範圍分別為：TCP Mihomo 39.5–40.5 MiB、Aster 24.0–24.5 MiB；log Mihomo 32.5–33.9 MiB、Aster 固定 23.0 MiB；UDP Mihomo 42.9–55.5 MiB、Aster 固定 26.0 MiB；AnyTLS Mihomo 38.0–40.0 MiB、Aster 23.5–24.0 MiB。所有測試皆為 0 swap。
+三輪範圍分別為：TCP Mihomo 38.5–40.0 MiB、Aster 50.5–50.8 MiB；log Mihomo 33.0–33.4 MiB、Aster 固定 23.0 MiB；UDP Mihomo 43.1–58.0 MiB、Aster 51.8–57.0 MiB；AnyTLS 1 KiB Mihomo 34.3–34.8 MiB、Aster 固定 19.5 MiB；AnyTLS 16 KiB Mihomo 33.8–34.9 MiB、Aster 固定 19.5 MiB。所有測試皆為 0 swap。
 
 ### 受限環境三輪範圍
 
-| Benchmark | Mihomo 範圍 | Aster 範圍 |
+| Benchmark | Mihomo 1.19.30 範圍 | Aster 範圍 |
 | --- | ---: | ---: |
-| UDP packet metadata | 231.3–243.0 ns/op | 47.13–48.03 ns/op |
-| 停用的 debug log | 825.6–921.2 ns/op | 7.958–8.066 ns/op |
-| AnyTLS frame（1 KiB） | 313.3–319.2 ns/op | 126.3–129.9 ns/op |
-| AnyTLS frame（16 KiB） | 1.047–1.097 µs/op | 731.3–895.3 ns/op |
-| TCP relay（32 KiB） | 16.605–17.087 µs/op | 15.754–16.501 µs/op |
+| UDP packet metadata | 235.1–240.6 ns/op | 50.83–50.99 ns/op |
+| 停用的 debug log | 826.0–873.5 ns/op | 8.052–8.401 ns/op |
+| AnyTLS frame（1 KiB） | 318.7–333.8 ns/op | 131.8–136.1 ns/op |
+| AnyTLS frame（16 KiB） | 1.123–1.205 µs/op | 723.6–803.6 ns/op |
+| TCP relay（32 KiB） | 17.702–18.418 µs/op | 16.240–17.239 µs/op |
 
-受限後的絕對處理時間約變成原本的四倍，證明 CPU quota 確實生效；Aster 在五項工作中仍全部較快。人話來說，**硬體越弱，Aster 省掉的 CPU 工作和記憶體配置通常越有感**：TCP 改善由約 3% 增至 4.3%，AnyTLS 1 KiB 由 1.94 倍增至 2.46 倍。不過 UDP 與 AnyTLS 16 KiB 的倍率幾乎不變，所以不能保證每項優化都會隨硬體變弱而等比例放大。首頁仍採用未限速 OpenWrt 對 Mihomo 1.19.30 的 **TCP 約 4%**，不使用這組較好看的 4.3%（對 1.19.29）當主要宣傳數字。
+受限後的絕對處理時間約變成原本的四倍，證明 CPU quota 確實生效；Aster 在五項延遲工作中仍全部較快。人話來說，**硬體越弱，Aster 省掉的 CPU 工作通常越有感**：TCP 改善由未限速的 3.8% 增至 5.3%，AnyTLS 1 KiB 由 1.98 倍增至 2.43 倍，AnyTLS 16 KiB 由 1.32 倍增至 1.49 倍。UDP 倍率由 5.65 倍略降到 4.72 倍，所以不能保證每項優化都會隨硬體變弱而等比例放大。首頁仍採用未限速 OpenWrt 對 Mihomo 1.19.30 的 **TCP 約 4%**，不使用這組較好看的 5.3% 當主要宣傳數字。
 
 ## 各協議 loopback 測試
 
-核心 microbenchmark 變快，不等於每一種協議的端到端吞吐都會同步增加。為了驗證這點，我們在 Linux Docker host network 上，讓 Aster 與 Mihomo 連到相同的本機服務端，以 16 KiB chunk 分別測量讀寫。
+核心 microbenchmark 變快，不等於每一種協議的端到端吞吐都會同步增加。為了驗證這點，我們先前在 Linux Docker host network 上，讓 Aster 與 Mihomo 連到相同的本機服務端，以 16 KiB chunk 分別測量讀寫。下表仍是對 Mihomo `v1.19.29` 的結果；這次沒有用 `v1.19.30` 重跑協議服務端。
 
 | 協議 | 服務端 | Aster 與 Mihomo 的結果 |
 | --- | --- | --- |
@@ -167,7 +164,7 @@ Padding 規則在載入設定時就先解析好。真正傳資料時，Aster 只
 
 表內數字順序皆為 **Aster vs Mihomo**。VMess、VLESS、Trojan、Snell、Shadowsocks 的 B/op 與 allocs/op 也大致相同，表示這次優化主要改善共用 relay、UDP metadata、log 與 AnyTLS frame 等底層 hot path，沒有神奇地讓所有加密協議一起大幅變快。
 
-這組協議測試使用 Ryzen 9 5900X、Docker Linux amd64、Go 1.26.5。每個一般協議至少三輪；Trojan 因第一組順序測試出現互相矛盾的 ±20% 結果，另外用固定 test binary 做 Aster／Mihomo 交錯五輪，差距收斂到約 2% 內。協議測試期間沒有同步記錄原始 host load，因此只用來判斷有沒有明顯協議回歸，**不作為首頁宣傳數字**。
+這組協議測試仍是先前對 Mihomo `v1.19.29` 的 Docker loopback，**沒有**用 `v1.19.30` 重跑。這次 5900X 主機有 Docker Engine，但沒有當時釘死的協議服務端映像，補拉映像再比一次端到端吞吐，無法對上原 SHA。這些協議的加密與搬運路徑兩邊共用，1.19.30 的 microbenchmark 已覆蓋有改動的 relay／UDP／log／AnyTLS frame；協議表只用來說明「沒有讓所有加密協議一起大幅變快」，**不作為首頁宣傳數字**。
 
 服務端映像固定為 shadowsocks-rust `sha256:85d01d…e1359`、V2Fly `sha256:e81a07…de78c`、Trojan `sha256:5b36c2…b98b5f7`、OpenSnell `sha256:70053f…345467`、Hysteria v1.3.5 `sha256:4c8c92…f1e35`。
 
@@ -184,27 +181,39 @@ Padding 規則在載入設定時就先解析好。真正傳資料時，Aster 只
 
 ## 高階開發機結果（附錄）
 
-最初的 Aster 絕對數據是在高階桌機上取得，只適合做開發期回歸檢查，不應拿來代表一般路由器：
+最初的 Aster 絕對數據是在高階桌機上取得，只適合做開發期回歸檢查，不應拿來代表一般路由器。2026-08-19 在同一台 5900X 上，對 Mihomo `v1.19.30` 與 Aster `main` 交錯重跑同一組 microbenchmark（各三輪、每輪至少 2 秒）：
 
 | 環境項目 | 實際值 |
 | --- | --- |
-| 系統 | Windows amd64；平衡電源模式 |
+| 系統 | Windows 11 amd64；平衡電源模式 |
 | CPU | Ryzen 9 5900X，12 cores／24 logical CPUs |
-| CPU 實際頻率 | 後續代表性重跑平均 4.46 GHz，範圍 4.42–4.51 GHz |
+| 回報頻率 | Windows `\Processor Frequency` 計數器固定 3701 MHz（標稱時脈，**不是**實際 boost） |
 | DRAM | 64 GB（4×16 GB）G.Skill DDR4-3600，configured 3600 MT/s |
-| Go | 1.26.3 |
-| 原始測試 load | **未同步記錄，無法事後補值** |
-| 後續代表性重跑 CPU load | 測試前平均 36.4%（24.7–58.5%）；測試中平均 37.7%（27.3–55.6%） |
-| 後續 processor queue | 平均 0.1，範圍 0–1 |
+| Go | 1.26.3 windows/amd64 |
+| 測試前 CPU load | 各項開始前取樣平均約 30%（17.6–60.9%） |
+| 測試後 CPU load | 各項結束後取樣平均約 34%（20.3–54.8%） |
+| processor queue | 全程 0 |
 
-因為背景負載高且原始測試沒有逐點記錄 load，5900X 數據已不再作為首頁的主要比較；它只保留用來觀察是否發生明顯效能回退。
+背景負載仍然不低，所以 5900X **不是**首頁的主要比較；它只用來確認桌面開發機沒有明顯回退。同一天稍早一輪因背景約 42–47% 且未交錯，TCP 數字互相打架，已丟棄，不用那一輪。
+
+| 核心工作 | Mihomo 1.19.30 中位數 | Aster 中位數 | Aster 相對結果 |
+| --- | ---: | ---: | ---: |
+| UDP packet metadata | 150.8 ns；416 B／1 alloc | 11.66 ns；0 B／0 alloc | **12.9× faster**；消除 416 B 配置 |
+| 停用的 debug log | 607.8 ns；24 B／1 alloc | 2.820 ns；0 B／0 alloc | **215× faster**；消除 event 配置 |
+| AnyTLS frame（1 KiB） | 69.60 ns；64 B／1 alloc | 34.35 ns；0 B／0 alloc | **2.03× faster** |
+| AnyTLS frame（16 KiB） | 245.7 ns；64 B／1 alloc | 199.8 ns；0 B／0 alloc | **1.23× faster** |
+| TCP relay（32 KiB） | 10.607 µs；3.09 GB/s；64 B／1 alloc | 9.871 µs；3.32 GB/s；0 B／0 alloc | 延遲降低 **6.9%**；吞吐提高 **7.5%** |
+
+三輪範圍：UDP Mihomo 139.3–173.9 ns、Aster pool 11.41–11.77 ns；log Mihomo 421.8–617.4 ns、Aster 2.277–2.996 ns；AnyTLS 1 KiB Mihomo 69.42–71.19 ns、Aster 32.85–38.97 ns；AnyTLS 16 KiB Mihomo 243.4–267.1 ns、Aster 190.3–213.6 ns；TCP Mihomo 10.108–11.045 µs、Aster 9.258–10.064 µs。另加一組交錯 TCP 三輪，Aster 中位數 9.418 µs 對 Mihomo 10.269 µs，方向相同。
+
+Aster 單體回歸（同一輪、不是對照數字）：
 
 | Aster 單體 benchmark | Payload | 三輪結果 | 記憶體配置 |
 | --- | ---: | ---: | ---: |
-| UDPFlowSteadyState | 1,200 B | 0.85–1.22 µs/op | 0 B/op、0 allocs/op |
-| TCPRelayThroughput | 32 KiB | 9.99–10.72 µs/op | 0 B/op、0 allocs/op |
-| SessionUpload | 1 KiB | 5.46–5.52 µs/op | 0 B/op、0 allocs/op |
-| SessionUpload | 16 KiB | 8.02–8.46 µs/op | 0 B/op、0 allocs/op |
+| UDPFlowSteadyState | 1,200 B | 1.02–1.13 µs/op | 0 B/op、0 allocs/op |
+| TCPRelayThroughput | 32 KiB | 9.26–10.06 µs/op | 0 B/op、0 allocs/op |
+| SessionUpload | 1 KiB | 4.81–5.48 µs/op | 0 B/op、0 allocs/op |
+| SessionUpload | 16 KiB | 9.05–10.74 µs/op | 0 B/op、0 allocs/op |
 
 ## 如何重跑
 

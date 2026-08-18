@@ -72,7 +72,7 @@ Aster Core 是 [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo) 的衍生
 | UDP 新封包準備 | **快約 5.7 倍** | 遊戲、語音、QUIC 等大量 UDP 封包較少製造垃圾記憶體 |
 | 被關掉的 debug log | **快約 98 倍** | 不需要的 log 不再先做好再丟掉 |
 
-在單核 25% CPU 時間、512 MiB RAM 的受限環境中，五個核心案例的獨立測試程序峰值記憶體比 Mihomo 少約 **30–49%**；但完整核心以最小設定空載時，Aster 約 31.6 MiB、Mihomo 約 28.9 MiB，Aster 反而多約 **2.8 MiB**。也就是忙碌時少製造臨時記憶體，空載底座則因功能較多而稍大。
+在單核 25% CPU 時間、512 MiB RAM 的受限環境中，停用 log 與 AnyTLS 的獨立測試程序峰值記憶體比 Mihomo 1.19.30 少約 **31–44%**；UDP 大致持平，TCP 獨立測試程序峰值反而較高。完整核心以最小設定空載時，Aster 約 39.3 MiB、Mihomo 約 34.8 MiB，Aster 多約 **4.5 MiB**。忙碌時部分 hot path 少製造臨時記憶體，空載底座則因功能較多而稍大。
 
 ### 改了什麼？
 
