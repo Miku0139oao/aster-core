@@ -183,14 +183,16 @@ tun:
   kernel-direct-ebpf-flow-entries: 65536
   kernel-direct-ebpf-direct-prefixes: []
   kernel-direct-ebpf-proxy-prefixes: []
-  auto-detect-interface: true
+  auto-detect-interface: false # dual-WAN / macvlan / mwan3 必須 false；true 時 FindInterfaceName 可能回 <invalid>
   dns-hijack:
     - any:53
 ```
 
 Release build 已包含 `with_gvisor`。TUN 的 route、auto-redirect、UID/package include/exclude 及平台差異很多，請先在目標平台用最小設定驗證。
 
-`kernel-direct` 是 Linux/OpenWrt 專用的 kernel forwarding 模式。Aster 觀察自己處理的真實 A/AAAA 回應，使用目前路由規則做保守分類，將可由目的網域/IP 單獨確定為 `DIRECT` 的位址放進 nftables auto-redirect exclude set；之後的新連線留在 Linux forwarding/NAT path，不再建立 Aster `DIRECT` socket。它要求 `auto-route: true`、`auto-redirect: true`、可用的 nftables，以及 client DNS 經過 Aster。共享 IP 出現任何代理判定時採 proxy-wins；source/process/inbound/port 等無法以目的 IP 等價表達的規則不會 bypass。規則、proxy、mode 或 provider 更新會立即清空 learned set，等待新的 DNS 回應重新學習。`backend: nftables` 是此功能的推薦正常狀態，不是降級錯誤。
+`kernel-direct` 是 Linux/OpenWrt 專用的 kernel forwarding 模式。Aster 觀察自己處理的真實 A/AAAA 回應，並可從已判定為 `DIRECT`／`Compatible` 的 live flow 學習純 IP 目的地（會 unwrap 選擇器／URLTest／fallback，因此 `漏網之魚` → `DIRECT` 也會學到），使用目前路由規則做保守分類，將可由目的網域/IP 單獨確定為 `DIRECT` 的位址放進 nftables auto-redirect exclude set；之後的新連線留在 Linux forwarding/NAT path，不再建立 Aster `DIRECT` socket。它要求 `auto-route: true`、`auto-redirect: true`、可用的 nftables，以及 client DNS 經過 Aster。共享 IP 出現任何代理判定時採 proxy-wins；source/process/inbound/port 等無法以目的 IP 等價表達的規則不會 bypass。規則、proxy、mode 或 provider 更新會立即清空 learned set，等待新的 DNS 或 live flow 重新學習；fake-IP、private、loopback、link-local 與其他非 global 位址永不學習。`backend: nftables` 是此功能的推薦正常狀態，不是降級錯誤。
+
+不要在 userspace 丟本機來源的 REDIR／TUN SYN 來「防迴圈」：`auto-redirect` 已經拿走唯一一份封包，直接 return 會黑洞 DIRECT 與未綁定介面的節點。迴圈防護是 `DIRECT.CheckConn`（只拒絕已登記的 outbound AddrPort）、`ObserveFlow`，以及 30 秒零位元組 TCP reaper（略過 UDP，含 `500`／`4500`）。
 
 fake-IP 回應不會加入 kernel set；因此要取得完整收益，建議使用 redir-host/mapping DNS，或把希望 kernel-direct 的網域放入 `fake-ip-filter`。繞過流量不會出現在 Aster connection/traffic 統計中。
 

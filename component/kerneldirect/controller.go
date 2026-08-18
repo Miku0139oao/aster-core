@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Miku0139oao/aster-core/component/resolver"
 	"go4.org/netipx"
 	"golang.org/x/exp/slices"
 )
@@ -126,6 +127,22 @@ func Statuses() []ControllerStatus {
 	return statuses
 }
 
+// ObserveFlow records one live DIRECT/PROXY destination, including dests that
+// never went through Aster DNS (pure-IP reconnects, lobby-issued battle IPs).
+func ObserveFlow(host string, addr netip.Addr, ttl time.Duration) {
+	addr = addr.Unmap()
+	if isUnsafeAddress(addr) {
+		return
+	}
+	if ttl <= 0 {
+		ttl = 10 * time.Minute
+	}
+	if host == "" {
+		host = addr.String()
+	}
+	ObserveDNS(host, []DNSAnswer{{Addr: addr, TTL: ttl}})
+}
+
 // ObserveDNS sends one DNS response to all active kernel DIRECT consumers.
 func ObserveDNS(host string, answers []DNSAnswer) {
 	host = strings.TrimSuffix(strings.ToLower(host), ".")
@@ -167,7 +184,7 @@ func (c *controller) observe(host string, answers []DNSAnswer) {
 	c.removeExpiredLocked(now)
 	for _, answer := range answers {
 		addr := answer.Addr.Unmap()
-		if !addr.IsValid() || !addr.IsGlobalUnicast() || addr.IsPrivate() || addr.IsLoopback() || addr.IsLinkLocalUnicast() {
+		if isUnsafeAddress(addr) {
 			continue
 		}
 		ttl := answer.TTL
@@ -217,6 +234,13 @@ func (c *controller) observe(host string, answers []DNSAnswer) {
 	if changed {
 		<-c.publish(sets, generation)
 	}
+}
+
+func isUnsafeAddress(addr netip.Addr) bool {
+	if !addr.IsValid() || resolver.IsFakeIP(addr) {
+		return true
+	}
+	return !addr.IsGlobalUnicast() || addr.IsPrivate() || addr.IsLoopback() || addr.IsLinkLocalUnicast()
 }
 
 func (c *controller) expireLoop() {

@@ -488,7 +488,7 @@ make test
 - TProxy UDP, automatic iptables configuration, and socket routing marks are Linux-specific. Redir support is platform-dependent.
 - Automatic iptables management and TUN mode cannot be enabled at the same time.
 - TUN, TProxy, redir, low ports, and system routing changes may require root privileges or specific capabilities.
-- Linux/OpenWrt `tun.kernel-direct` requires auto-route, auto-redirect, nftables, and DNS through Aster; it keeps safely classified DIRECT destinations in the kernel forwarding path. The recommended backend is nftables with OpenWrt flow offload. The optional TC eBPF DIRECT/PROXY classifier is experimental and disabled by default because its per-packet hook can reduce throughput; enable it only after a same-server A/B test.
+- Linux/OpenWrt `tun.kernel-direct` requires auto-route, auto-redirect, nftables, and DNS through Aster; it keeps safely classified DIRECT destinations (including live flows whose unwrapped group currently selects DIRECT) in the kernel forwarding path. Do not drop inbound REDIR/TUN SYNs to prevent self-hijack. The recommended backend is nftables with OpenWrt flow offload. Disable `auto-detect-interface` on dual-WAN. The optional TC eBPF DIRECT/PROXY classifier is experimental and disabled by default because its per-packet hook can reduce throughput; enable it only after a same-server A/B test.
 - `-v` intentionally retains the `Mihomo Meta` prefix because Nikki uses it for compatibility detection.
 - `SIGHUP` re-reads file-backed configuration. Configurations supplied through stdin or Base64 reapply the original in-memory bytes.
 - A configured Controller with an empty `secret` is unauthenticated. Bind it to loopback or set a strong secret.

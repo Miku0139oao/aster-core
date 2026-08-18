@@ -577,6 +577,12 @@ ip route show table all
 
 TUN／transparent routing 通常需要 `CAP_NET_ADMIN` 與適當裝置存取。不要同時讓 TUN auto-route／auto-redirect 和外部 iptables 規則接管相同流量。
 
+OpenWrt + Nikki + `kernel-direct` 另見 [OpenWrt 與 Nikki](/deployment/openwrt) 與[疑難排解](/troubleshooting)：
+
+- 延遲測試全失敗：`auto-detect-interface` 在雙 WAN 上必須是 `false`。
+- DIRECT 與未綁定節點同時掛掉：不要丟 inbound REDIR／TUN SYN。
+- 連線數／記憶體暴漲：查零位元組 TCP 與 `inet4_route_exclude_address_set`，不要 `DELETE /connections`。
+
 Packet capture 可能暴露目的 IP、DNS 名稱與使用模式。只有在取得授權且了解隱私影響時才擷取；不要直接把原始 pcap 上傳到公開 issue。
 
 ## 症狀：設定 reload 後沒有生效

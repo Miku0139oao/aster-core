@@ -43,7 +43,7 @@ Aster 修正了目前 Mihomo 基線仍存在的幾類問題：
 
 ## Linux／OpenWrt Kernel DIRECT
 
-Aster 可從經過自身 DNS 的真實 A/AAAA 回應保守學習 DIRECT 目的位址，將其加入 nftables auto-redirect exclude set，讓後續新連線留在 Linux kernel forwarding/NAT path。共享 IP 採 proxy-wins，無法只由目的網域/IP 等價判斷的規則不會 bypass。
+Aster 可從經過自身 DNS 的真實 A/AAAA 回應，以及已判定為 `DIRECT`／`Compatible` 的 live flow（含 unwrap 後的選擇器），保守學習 DIRECT 目的位址，將其加入 nftables auto-redirect exclude set，讓後續新連線留在 Linux kernel forwarding/NAT path。共享 IP 採 proxy-wins，無法只由目的網域/IP 等價判斷的規則不會 bypass。Aster **不會**丟 inbound REDIR／TUN SYN 來防自劫持；那會把 DIRECT 一起黑洞。
 
 這項 `kernel-direct` 功能不要求 eBPF；推薦 backend 是 nftables 加 OpenWrt flow offload。另有預設關閉的實驗性 TC eBPF DIRECT／PROXY classifier，功能上更接近 dae 的 ingress hook，但逐封包工作可能降低吞吐量，必須在目標路由器做同 server A/B 後才啟用。設定、安全界線、IPv6 split-WAN 排查與實測反例見 [OpenWrt 與 Nikki](/deployment/openwrt)。
 

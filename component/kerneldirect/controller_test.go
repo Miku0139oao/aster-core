@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/Miku0139oao/aster-core/component/resolver"
 )
 
 func TestControllerProxyWinsAndFlushes(t *testing.T) {
@@ -166,6 +168,90 @@ func TestControllerBoundsLearnedAddressesWithSafeLRUEviction(t *testing.T) {
 		t.Fatal("most recently used DIRECT addresses must remain learned")
 	}
 }
+
+func TestObserveFlowLearnsPureIPDirect(t *testing.T) {
+	var current DecisionSets
+	c := Register(func(string, netip.Addr) bool { return true }, func(sets DecisionSets) {
+		current = sets
+	}, ControllerOptions{MaxEntries: 8}).(*controller)
+	defer c.Close()
+
+	addr := netip.MustParseAddr("36.155.199.151")
+	ObserveFlow("iwx.smoba.qq.com", addr, time.Minute)
+	if current.Direct == nil || !current.Direct.Contains(addr) {
+		t.Fatal("live DIRECT dest must enter the kernel-direct set")
+	}
+}
+
+func TestObserveFlowSkipsFakeIP(t *testing.T) {
+	fakeIP := netip.MustParseAddr("198.18.0.4")
+	previousMapper := resolver.DefaultHostMapper
+	resolver.DefaultHostMapper = testFakeIPMapper{fakeIP: fakeIP}
+	t.Cleanup(func() { resolver.DefaultHostMapper = previousMapper })
+
+	c := Register(func(string, netip.Addr) bool { return true }, func(DecisionSets) {})
+	defer c.Close()
+
+	ObserveFlow("fake.example", fakeIP, time.Minute)
+	if status := c.(*controller).status(); status.LearnedAddresses != 0 || status.LearnedDomains != 0 {
+		t.Fatalf("fake-IP destination was learned: %+v", status)
+	}
+}
+
+func TestObserveFlowSkipsPrivateAndNonGlobalAddresses(t *testing.T) {
+	c := Register(func(string, netip.Addr) bool { return true }, func(DecisionSets) {})
+	defer c.Close()
+
+	for _, addr := range []netip.Addr{
+		netip.MustParseAddr("192.168.1.1"),
+		netip.MustParseAddr("127.0.0.1"),
+		netip.MustParseAddr("169.254.1.1"),
+		netip.MustParseAddr("224.0.0.1"),
+		netip.MustParseAddr("0.0.0.0"),
+	} {
+		ObserveFlow("unsafe.example", addr, time.Minute)
+	}
+
+	if status := c.(*controller).status(); status.LearnedAddresses != 0 || status.LearnedDomains != 0 {
+		t.Fatalf("private or non-global destination was learned: %+v", status)
+	}
+}
+
+type testFakeIPMapper struct {
+	fakeIP netip.Addr
+}
+
+func (testFakeIPMapper) FakeIPEnabled() bool {
+	return true
+}
+
+func (testFakeIPMapper) MappingEnabled() bool {
+	return true
+}
+
+func (m testFakeIPMapper) IsFakeIP(addr netip.Addr) bool {
+	return addr == m.fakeIP
+}
+
+func (testFakeIPMapper) IsFakeBroadcastIP(netip.Addr) bool {
+	return false
+}
+
+func (testFakeIPMapper) IsExistFakeIP(netip.Addr) bool {
+	return false
+}
+
+func (testFakeIPMapper) FindHostByIP(netip.Addr) (string, bool) {
+	return "", false
+}
+
+func (testFakeIPMapper) FlushFakeIP() error {
+	return nil
+}
+
+func (testFakeIPMapper) InsertHostByIP(netip.Addr, string) {}
+
+func (testFakeIPMapper) StoreFakePoolState() {}
 
 func TestControllerExpiresBeforeEvictingLiveAddress(t *testing.T) {
 	c := Register(func(string, netip.Addr) bool { return true }, func(DecisionSets) {}, ControllerOptions{MaxEntries: 1}).(*controller)

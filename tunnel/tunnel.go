@@ -16,6 +16,7 @@ import (
 	"github.com/Miku0139oao/aster-core/common/atomic"
 	N "github.com/Miku0139oao/aster-core/common/net"
 	"github.com/Miku0139oao/aster-core/common/utils"
+	"github.com/Miku0139oao/aster-core/component/iface"
 	"github.com/Miku0139oao/aster-core/component/kerneldirect"
 	"github.com/Miku0139oao/aster-core/component/loopback"
 	"github.com/Miku0139oao/aster-core/component/nat"
@@ -564,6 +565,11 @@ func handleTCPConn(connCtx C.ConnContext) {
 	}
 	fixMetadata(metadata) // fix some metadata not set via metadata.SetRemoteAddr or metadata.SetRemoteAddress
 
+	// Do not drop REDIR/TUN SYNs here. auto-redirect has already stolen the
+	// only copy of the packet; returning would blackhole DIRECT and any
+	// unmarked proxy dial (konjac-ai, mo2, etc.). Loop prevention belongs
+	// on DIRECT.CheckConn + ObserveFlow + the zero-byte reaper.
+
 	preHandleFailed := false
 	if err := preHandleMetadata(metadata); err != nil {
 		log.Debugln("[Metadata PreHandle] error: %s", err)
@@ -604,6 +610,7 @@ func handleTCPConn(connCtx C.ConnContext) {
 		log.Warnln("[Metadata] parse failed: %s", err.Error())
 		return
 	}
+	observeKernelDirectFlow(metadata, proxy)
 
 	dialMetadata := metadata
 	if len(metadata.Host) > 0 {
@@ -658,6 +665,9 @@ func handleTCPConn(connCtx C.ConnContext) {
 	if err != nil {
 		return
 	}
+	// resolveMetadata may not have a dest IP yet (domain-only match).
+	// After a successful DIRECT dial the peer address is known.
+	observeKernelDirectFlowAfterDial(metadata, proxy, remoteConn)
 	logMetadata(metadata, rule, remoteConn)
 
 	remoteConn = statistic.NewTCPTracker(remoteConn, statistic.DefaultManager, metadata, rule, int64(peekLen), 0, true)
@@ -770,6 +780,109 @@ func getRules(metadata *C.Metadata, state *routingSnapshot) []C.Rule {
 		log.Debugln("[Rule] use default rules")
 		return state.rules
 	}
+}
+
+func observeKernelDirectFlow(metadata *C.Metadata, proxy C.ProxyAdapter) {
+	if metadata == nil || !kernelDirectProxyIsDirect(metadata, proxy) {
+		return
+	}
+	addr := metadata.DstIP.Unmap()
+	if !addr.IsValid() || resolver.IsFakeIP(addr) {
+		return
+	}
+	host := metadata.Host
+	if host == "" {
+		host = addr.String()
+	}
+	kerneldirect.ObserveFlow(host, addr, 10*time.Minute)
+}
+
+// kernelDirectProxyIsDirect reports whether the selected outbound is DIRECT
+// after unwrapping groups (漏網之魚, 節點選擇, URLTest, etc.). Learning only
+// C.Direct adapters left MATCH/group→DIRECT dests in TUN, so Aster's own
+// SYN was auto-redirected again and leaked zero-byte connections.
+func kernelDirectProxyIsDirect(metadata *C.Metadata, proxy C.ProxyAdapter) bool {
+	if proxy == nil {
+		return false
+	}
+	for i := 0; i < 16; i++ {
+		switch proxy.Type() {
+		case C.Direct, C.Compatible:
+			return true
+		}
+		next := proxy.Unwrap(metadata, false)
+		if next == nil {
+			return false
+		}
+		nextAdapter := next.Adapter()
+		if nextAdapter == nil || nextAdapter == proxy {
+			return false
+		}
+		proxy = nextAdapter
+	}
+	return false
+}
+
+func observeKernelDirectFlowAfterDial(metadata *C.Metadata, proxy C.ProxyAdapter, remote net.Conn) {
+	if metadata == nil || !kernelDirectProxyIsDirect(metadata, proxy) {
+		return
+	}
+	if !metadata.DstIP.IsValid() || resolver.IsFakeIP(metadata.DstIP) {
+		if addr := destIPFromConn(remote); addr.IsValid() && !resolver.IsFakeIP(addr) {
+			metadata.DstIP = addr
+		}
+	}
+	observeKernelDirectFlow(metadata, proxy)
+}
+
+func destIPFromConn(conn net.Conn) netip.Addr {
+	if conn == nil {
+		return netip.Addr{}
+	}
+	remote := conn.RemoteAddr()
+	if remote == nil {
+		return netip.Addr{}
+	}
+	var parsed C.Metadata
+	if err := parsed.SetRemoteAddr(remote); err != nil {
+		return netip.Addr{}
+	}
+	return parsed.DstIP.Unmap()
+}
+
+// isHijackedLocalTCP reports a transparent-inbound TCP SYN whose source is a
+// local interface (or loopback) and whose dest is a public address. That is
+// Aster's own DIRECT dial being re-captured by auto-redirect. LAN clients
+// (192.168.1.0/24 etc.) and all UDP — including ePDG 500/4500 — return false.
+func isHijackedLocalTCP(metadata *C.Metadata) bool {
+	if metadata == nil || metadata.NetWork != C.TCP {
+		return false
+	}
+	switch metadata.Type {
+	case C.REDIR, C.TPROXY, C.TUN:
+	default:
+		return false
+	}
+	src := metadata.SourceAddrPort().Addr()
+	if !src.IsValid() {
+		return false
+	}
+	dst := metadata.DstIP.Unmap()
+	if !dst.IsValid() || !dst.IsGlobalUnicast() || dst.IsPrivate() || dst.IsLoopback() {
+		return false
+	}
+	src = src.Unmap()
+	isLocalIP, err := iface.IsLocalIp(src)
+	if err != nil {
+		if !src.IsLoopback() {
+			return false
+		}
+	} else if !isLocalIP && !src.IsLoopback() {
+		return false
+	}
+	// Only drop the DIRECT self-hijack. Proxy node IPs must still go out;
+	// rejecting every public dest here breaks VLESS (konjac-ai, mo2, etc.).
+	return Tunnel.ClassifyKernelDirect(*metadata, metadata.Host, dst)
 }
 
 func shouldStopRetry(err error) bool {

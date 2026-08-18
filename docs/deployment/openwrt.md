@@ -111,6 +111,8 @@ uci commit nikki
 /etc/init.d/nikki restart
 ```
 
+Dual-WAN / macvlan / mwan3 環境請保持 `tun.auto-detect-interface: false`。`true` 時 `FindInterfaceName` 會回 `<invalid>`，延遲測試與未綁定介面的節點會失敗；Nikki 的 `mixin.uc` 在開啟 kernel-direct 時不得再覆寫成 `true`。`nikki.init` 在 mixin 之後也應再強制一次 `false`，避免下次重啟把延遲測試打掛。
+
 確認 nftables learned exclude set 與 controller status：
 
 ```sh
@@ -121,7 +123,17 @@ curl -H "Authorization: Bearer $SECRET" \
 
 status 顯示 `backend: nftables` 是推薦且正常的工作狀態，不代表 eBPF 載入失敗。此模式沒有 TC filter，較容易保留 OpenWrt software/hardware flow offload 的收益。同一個回應還包含 `learned_sets`（含 `max_entries` 與 `evictions`）、`process`、`aster_traffic`。`proxy_traffic` 是已棄用別名，數值等於 `aster_traffic`（所有經 Aster 處理的流量，不是僅代理；被 kernel 繞過的 DIRECT 不計入）。`evictions` 只計 address LRU 因容量上限淘汰的次數，不含 TTL、flush 或 collapse。
 
-所有使用 Kernel DIRECT 的 client DNS 都必須經過 Aster；未被觀察的 DoH/DoT 或舊 DNS cache 無法提供網域判定，尤其共享 CDN IP 不能保證符合 domain rule。建議使用 redir-host/mapping DNS，或把希望 bypass 的網域放進 `fake-ip-filter`。規則、proxy、mode 或 provider 更新時 learned set 會先清空，再由新 DNS 回應保守重建。
+所有使用 Kernel DIRECT 的 client DNS 都必須經過 Aster；未被觀察的 DoH/DoT 或舊 DNS cache 無法提供網域判定，尤其共享 CDN IP 不能保證符合 domain rule。已由 Aster 判定為 `DIRECT`／`Compatible` 的 live flow 也可在後續連線中學習純 IP 目的地，**包含選擇器／URLTest／fallback 目前選到 DIRECT 的情況**（例如 `漏網之魚` → `DIRECT`）；只看最外層 group 類型會讓這些目的位址永遠留在 TUN。fake-IP、private、loopback、link-local 與其他非 global 位址不會學習。建議使用 redir-host/mapping DNS，或把希望 bypass 的網域放進 `fake-ip-filter`。規則、proxy、mode 或 provider 更新時 learned set 會先清空，再由新 DNS 或 live flow 保守重建。
+
+## 迴圈防護（不要丟 inbound SYN）
+
+`auto-redirect` 會把 Aster 自己打出去的 DIRECT SYN 再導回 REDIR／TUN。這時封包只剩這一份：
+
+- **不要**在 `handleTCPConn` 看到本機來源的 REDIR／TUN SYN 就直接 return。那會把 DIRECT 和未綁定介面的節點一起黑洞（延遲測試全掛、網頁打不開）。
+- 迴圈防護放在三處：`DIRECT.CheckConn` 只拒絕 **已登記的 outbound AddrPort**（connMap）；`ObserveFlow` 在 dial 前把可安全判定的 DIRECT 目的位址寫進 nftables exclude；30 秒零位元組 TCP reaper 清掉沒有 payload 的殘留 tracker。
+- Reaper **只關 TCP**。UDP（含 ePDG / Wi‑Fi 通話的 `500`／`4500`）與仍有上下載的連線不會被關。不要用 `DELETE /connections` 當日常清理，那會拆掉 IKE。
+
+遊戲或必須釘在單一 WAN 的埠級流量，mark 本身擋不住 auto-redirect。要嘛把目的位址學進 exclude set，要嘛在 Aster 的 `dstnat + 1` 之前做 identity DNAT／`exclude-dst-port`，讓封包根本不進 TUN。
 
 ## 實驗性 TC eBPF classifier
 
@@ -194,6 +206,7 @@ tun:
   enable: true
   auto-route: true
   auto-redirect: true
+  auto-detect-interface: false
   kernel-direct: true
   kernel-direct-max-entries: 4096
   dns-hijack:
