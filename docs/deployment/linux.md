@@ -4,6 +4,8 @@
 要從 release asset、檔案權限、防火牆、systemd、驗證一路做到更新與回退，請使用[Linux VPS 正式部署實戰](/tutorials/linux-production)。
 :::
 
+目前請從[下載](/downloads)取得 [`Prerelease-main`](https://github.com/Miku0139oao/aster-core/releases/tag/Prerelease-main) 的 `.gz`／`.deb`／`.rpm`。官方編號 `v*` 尚未發布。
+
 ## Release packages
 
 發行流程可產生：

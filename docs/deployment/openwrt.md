@@ -1,5 +1,7 @@
 # OpenWrt 與 Nikki
 
+取得執行檔請看[下載](/downloads)。請用本專案的 `aster-core` 套件，或把 [`Prerelease-main`](https://github.com/Miku0139oao/aster-core/releases/tag/Prerelease-main) 的 `linux-amd64-v1`（或對應架構）解壓後放入 `/usr/libexec/aster-core`。不要使用騰訊雲或其他第三方 dump 的 Mihomo 二進位檔。
+
 ## 整合方式
 
 Aster OpenWrt package：

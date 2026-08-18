@@ -1,5 +1,7 @@
 # Docker
 
+二進位檔、套件與映像來源見[下載](/downloads)。目前公開建置來自 [`Prerelease-main`](https://github.com/Miku0139oao/aster-core/releases/tag/Prerelease-main)；官方編號 `v*` 尚未發布。
+
 ## 使用官方映像
 
 映像發布到：

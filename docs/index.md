@@ -13,6 +13,9 @@ hero:
       text: 快速開始
       link: /tutorials/first-proxy
     - theme: alt
+      text: 下載
+      link: /downloads
+    - theme: alt
       text: AnyTLS + REALITY
       link: /tutorials/anytls-reality
     - theme: alt
@@ -46,7 +49,7 @@ features:
   - icon: ⬡
     title: 多平台
     details: 提供 Linux、Windows、macOS、Android、FreeBSD、Docker 與 OpenWrt 建置。
-    link: /deployment/docker
+    link: /downloads
 ---
 
 ## 關於 Aster Core
@@ -87,6 +90,7 @@ Aster Core 是 [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo) 的衍生
 
 ## 從這裡開始
 
+- 取得二進位檔：[下載](/downloads)
 - 第一次使用：[建立第一份客戶端設定](/tutorials/first-proxy)
 - 已有 AnyTLS + REALITY 節點：[AnyTLS + REALITY 設定](/tutorials/anytls-reality)
 - 設定分流與 DNS：[路由與 DNS](/tutorials/routing-dns)

@@ -13,11 +13,9 @@
 
 ## 取得 Aster Core
 
-### GitHub Releases
+請先到[下載](/downloads)依作業系統與 CPU 架構選檔。目前只有滾動預發行 [`Prerelease-main`](https://github.com/Miku0139oao/aster-core/releases/tag/Prerelease-main)，官方編號 `v*` 尚未發布。舊款 x86-64 優先 `amd64-v1`。
 
-從 [Releases](https://github.com/Miku0139oao/aster-core/releases) 選擇作業系統與 CPU 架構。舊款 x86-64 CPU 優先使用 `amd64-v1` 或 `amd64-compatible`。
-
-下載後先檢查 release 中的 checksum，再賦予執行權限：
+下載後先用同一個 release 的 [`checksums.txt`](https://github.com/Miku0139oao/aster-core/releases/download/Prerelease-main/checksums.txt) 核對，再賦予執行權限：
 
 ```sh
 chmod +x aster-core

@@ -32,7 +32,7 @@ anytls://<password>@<server>:<port>?security=reality&sni=<sni>&fp=chrome&pbk=<pu
 
 ## 1. 下載與安裝 Aster Core
 
-前往 [GitHub Releases](https://github.com/Miku0139oao/aster-core/releases)，選擇符合系統及 CPU 架構的檔案。舊款 x86-64 CPU 可優先選擇名稱含 `amd64-v1` 或 `amd64-compatible` 的版本。
+依[下載](/downloads)選擇作業系統與 CPU 架構。目前請用 [`Prerelease-main`](https://github.com/Miku0139oao/aster-core/releases/tag/Prerelease-main)；官方編號 `v*` 尚未發布。舊款 x86-64 優先 `amd64-v1`。
 
 下載後，把檔案的 SHA-256 與同一個 release 公布的 checksum 比對：
 
