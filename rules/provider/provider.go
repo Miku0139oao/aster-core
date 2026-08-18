@@ -179,6 +179,24 @@ func rulesParse(buf []byte, strategy ruleStrategy, format P.RuleFormat) (ruleStr
 	}
 
 	schema := &RulePayload{}
+	if format == P.YamlRule && !bytes.ContainsRune(buf, '\n') {
+		if err := yaml.Unmarshal(bytes.TrimSpace(buf), schema); err == nil {
+			rules := schema.Rules
+			if len(schema.Payload) > 0 {
+				rules = schema.Payload
+			}
+			if len(rules) > 0 {
+				for _, rule := range rules {
+					if rule != "" {
+						strategy.Insert(rule)
+					}
+				}
+				strategy.FinishInsert()
+				return strategy, nil
+			}
+		}
+		return nil, ErrNoPayload
+	}
 
 	firstLineBuffer := pool.GetBuffer()
 	defer pool.PutBuffer(firstLineBuffer)
