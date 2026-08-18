@@ -109,8 +109,8 @@ func ApplyConfig(cfg *config.Config, force bool) error {
 	updateSniffer(cfg.Sniffer)
 	updateHosts(cfg.Hosts)
 	updateGeneral(cfg.General, true)
-	updateNTP(cfg.NTP)
 	updateDNS(cfg.DNS, cfg.General.IPv6)
+	updateNTP(cfg.NTP)
 	stageManagedListeners(cfg.Aster, cfg.Listeners)
 	// Inbound and Aster management fail closed, but the rest of the configuration
 	// must still be applied: skipping it leaves proxy providers unloaded and the
