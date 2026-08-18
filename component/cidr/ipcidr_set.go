@@ -43,7 +43,17 @@ func (set *IpCidrSet) IsContainForString(ipString string) bool {
 }
 
 func (set *IpCidrSet) IsContain(ip netip.Addr) bool {
-	return set.ToIPSet().Contains(ip.WithZone(""))
+	if set == nil || !ip.IsValid() {
+		return false
+	}
+
+	ip = ip.WithZone("")
+	for _, r := range set.rr {
+		if r.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // MatchIp implements C.IpMatcher

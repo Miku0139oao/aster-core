@@ -23,18 +23,9 @@ if (
 
 await rm(outputDirectory, { recursive: true, force: true });
 await mkdir(resolve(outputDirectory, "client"), { recursive: true });
-await mkdir(resolve(outputDirectory, "server"), { recursive: true });
 
 await cp(
   resolve(docsDirectory, ".vitepress", "dist"),
   resolve(outputDirectory, "client"),
   { recursive: true },
-);
-await cp(
-  resolve(docsDirectory, "worker", "index.js"),
-  resolve(outputDirectory, "server", "index.js"),
-);
-await cp(
-  resolve(docsDirectory, "worker", "index.js"),
-  resolve(outputDirectory, "client", "_worker.js"),
 );

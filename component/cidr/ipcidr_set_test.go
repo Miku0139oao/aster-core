@@ -1,6 +1,7 @@
 package cidr
 
 import (
+	"net/netip"
 	"testing"
 )
 
@@ -103,5 +104,22 @@ func TestMerge(t *testing.T) {
 				t.Errorf("Expected len: %v, got: %v", test.expectedLen, rangesLen)
 			}
 		})
+	}
+}
+
+func TestIsContainBeforeMergeWithUnsortedRanges(t *testing.T) {
+	set := NewIpCidrSet()
+	if err := set.AddIpCidrForString("200.0.0.0/8"); err != nil {
+		t.Fatal(err)
+	}
+	if err := set.AddIpCidrForString("10.0.0.0/8"); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, ip := range []string{"200.1.2.3", "10.1.2.3"} {
+		addr := netip.MustParseAddr(ip)
+		if !set.IsContain(addr) {
+			t.Fatalf("expected %s to be contained before Merge", ip)
+		}
 	}
 }
