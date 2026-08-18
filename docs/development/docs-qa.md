@@ -1,6 +1,6 @@
 # 文件網站 QA
 
-本頁記錄 Aster Core VitePress 文件站的可重複驗收方式，以及 2026-08-19 對 `docs/site-qa`（基準 `98cb11f8`）執行的結果。因正式網址在此網路可能解析為 fake-IP，本輪以 production build、`vitepress preview` 和產物爬蟲為準。
+本頁記錄 Aster Core VitePress 文件站的可重複驗收方式，以及 2026-08-19 對 `docs/site-qa`（基準 `98cb11f8`）執行的結果。因正式網址在此網路可能解析為 fake-IP，本輪以 production build、`vitepress preview` 和產物爬蟲為準。正式站點由 Caddy `try_files {path} {path}.html {path}/index.html` 提供 clean URL fallback；`check:docs` 仍透過 `docs/worker/index.js` 模擬同樣行為。
 
 ## 執行方式
 
@@ -38,7 +38,7 @@ npm run check:docs:required
 | Local search | PASS | `docs/.vitepress/config.mts` 使用 local provider；build 產生 search index。UI 查詢 `kernel-direct` 能顯示結果，Enter 可開啟 `/deployment/openwrt#kernel-direct-設定原理`。 |
 | Built-link crawl | PASS | 爬過所有非 404 HTML 的 `href`／`src`，並核對本機檔案與 HTML anchor；無 404 或 missing anchor。Sidebar 所有設定 link 皆有 build target。 |
 | Sitemap | PASS | `docs/.vitepress/dist/sitemap.xml` 包含所有 sidebar route，也涵蓋全部 build page route。 |
-| Worker clean URLs | PASS | 以 file-backed `ASSETS` stub 對所有 build routes 執行 `docs/worker/index.js`；extensionless 與 directory-index routes、HEAD、HTML cache header 均成功，未知 route 保持 404。 |
+| Worker clean URLs | PASS | 正式站點由 Caddy `try_files {path} {path}.html {path}/index.html` 提供；本機 `check:docs` 以 file-backed `ASSETS` stub 對所有 build routes 執行 `docs/worker/index.js`；extensionless 與 directory-index routes、HEAD、HTML cache header 均成功，未知 route 保持 404。 |
 
 ## 手動桌面檢查清單
 

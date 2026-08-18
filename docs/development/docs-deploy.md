@@ -1,5 +1,7 @@
 # 文件發布流程
 
+## 本機建置
+
 `npm run build` 會依序執行：
 
 1. `scripts/prepare-assets.mjs`
@@ -11,15 +13,57 @@
    - `sitemap` 設定會自動把新頁面加入 `sitemap.xml`。
 
 3. `scripts/prepare-sites-dist.mjs`
-   - 輸出 `dist/client/`（靜態網站）與 `dist/server/index.js`（Worker 備份）。
-   - 同時把 `worker/index.js` 複製為 `dist/client/_worker.js`，讓 Cloudflare Pages 以 Functions 方式提供 SPA / clean URL fallback。
+   - 輸出 `dist/client/`（靜態網站）。
+   - 正式主機由 Caddy 以 `try_files` 提供 clean URL fallback，因此不需要輸出 `_worker.js` 或 `dist/server/`。
+
+## 實際託管方式
+
+- 主機：`root@miku.zerotwo02.net`（SSH）。
+- 靜態根目錄：`/srv/astercore-docs/current`（`ln -sfn` 指向上方 `releases/<date>-<sha8>`）。
+- Web server：Caddy，以 `try_files` 提供 clean URL fallback。
+- 前置：Cloudflare 設定為 DYNAMIC，僅做前置與 DNS，不負責靜態路由或 Functions。
+
+Caddy 站點設定範例：
+
+```caddy
+astercore.fubukishop.app {
+    root * /srv/astercore-docs/current
+    file_server
+    try_files {path} {path}.html {path}/index.html
+}
+```
+
+## 部署命令
+
+在 `docs/` 執行：
+
+```sh
+npm run build
+node scripts/deploy-site.mjs
+```
+
+或以 `--dry-run` 預覽：
+
+```sh
+node scripts/deploy-site.mjs --dry-run
+```
+
+手動 tar+SSH 範例（腳本已避免 PowerShell `$( )` 展開問題）：
+
+```sh
+dt=$(date +%Y%m%d)
+sha=$(git rev-parse --short=8 HEAD)
+name=${dt}-${sha}
+rel=/srv/astercore-docs/releases/${name}
+
+tar -czf - -C dist/client . | ssh root@miku.zerotwo02.net \
+  "mkdir -p ${rel} && tar -xzf - -C ${rel} && cd /srv/astercore-docs && ln -sfn ${name} current"
+```
 
 ## 新增路由如何生效
 
-- `/downloads`：建立 `docs/downloads.md`，VitePress 產生 `downloads.html`。
+- `/downloads`：建立 `docs/downloads.md`，VitePress 產生 `downloads.html`；Caddy `try_files` 會自動以 `{path}.html` 回應。
 - `/changelog`：建立 `docs/changelog.md`，VitePress 產生 `changelog.html`。
 - `/en/`：建立 `docs/en/index.md`，VitePress 產生 `en/index.html`。
 
-`_worker.js` 會在 Cloudflare Pages 回傳 404 時，依序嘗試 `{path}.html` 與 `{path}/index.html`（含帶斜線的版本），因此造訪 `/downloads`、`/changelog`、`/en/`、`/en` 都不會出現 `.html` 404。
-
-部署時只要上傳 `dist/client` 的內容（含 `_worker.js` 與 `sitemap.xml`）即可。
+Caddy `try_files {path} {path}.html {path}/index.html` 會同時支援 `/downloads`、`/changelog`、`/en/`、`/en` 等路徑；未知路徑仍回 404。
