@@ -6,13 +6,13 @@ import (
 	"net/netip"
 	"time"
 
+	"github.com/metacubex/sing/common/metadata"
+
 	"github.com/Miku0139oao/aster-core/common/lru"
 	N "github.com/Miku0139oao/aster-core/common/net"
 	C "github.com/Miku0139oao/aster-core/constant"
 	"github.com/Miku0139oao/aster-core/constant/sniffer"
 	"github.com/Miku0139oao/aster-core/log"
-
-	"github.com/metacubex/sing/common/metadata"
 )
 
 var (
@@ -20,6 +20,11 @@ var (
 	ErrorSniffFailed        = errors.New("all sniffer failed")
 	ErrNoClue               = errors.New("not enough information for making a decision")
 )
+
+// maxSniffBufferSize bounds the per-connection read-ahead memory used by TCP
+// sniffing. 64 KiB covers the HTTP/2 preface and several default-sized frames
+// while keeping lengths read from untrusted protocol headers bounded.
+const maxSniffBufferSize = 64 * 1024
 
 type Dispatcher struct {
 	enable          bool
@@ -202,39 +207,69 @@ func (sd *Dispatcher) sniffDomain(conn *N.BufferedConn, metadata *C.Metadata) (s
 				return "", err
 			}
 
-			bufferedLen := conn.Buffered()
-			bytes, err := conn.Peek(bufferedLen)
-			if err != nil {
-				log.Debugln("[Sniffer] [%s] [%s] the data length not enough, error: %v", metadata.DstIP, s.Protocol(), err)
-				continue
-			}
-
-			host, err := s.SniffData(bytes)
-			var e *errNeedAtLeastData
-			if errors.As(err, &e) {
-				// log.Debugln("[Sniffer] [%s] [%s] %v, got length: %d", metadata.DstIP, s.Protocol(), e, len(bytes))
-				_ = conn.SetReadDeadline(time.Now().Add(1 * time.Second))
-				bytes, err = conn.Peek(e.length)
+			// Feed the sniffer until it reaches a verdict. A sniffer that needs more
+			// data returns errNeedAtLeastData with the total length it wants;
+			// protocols like HTTP/2 discover that length incrementally (preface,
+			// then frame header, then payload), so several rounds may be required.
+			var host string // the verdict, read after the loop
+			want := conn.Buffered()
+			// one budget for all rounds, so they can't add up
+			deadline := time.Now().Add(1 * time.Second)
+			for {
+				var data []byte
+				_ = conn.SetReadDeadline(deadline)
+				data, err = conn.Peek(want)
 				_ = conn.SetReadDeadline(time.Time{})
-				// log.Debugln("[Sniffer] [%s] [%s] try again, got length: %d", metadata.DstIP, s.Protocol(), len(bytes))
 				if err != nil {
 					log.Debugln("[Sniffer] [%s] [%s] the data length not enough, error: %v", metadata.DstIP, s.Protocol(), err)
-					continue
+					break
 				}
-				host, err = s.SniffData(bytes)
+				// Peeking fills the buffer from the underlying conn, which usually
+				// yields a whole segment rather than exactly the requested bytes.
+				// Hand over everything that arrived: sniffers that can't predict how
+				// much they need (HTTP/1 headers) then make progress per segment
+				// instead of per byte.
+				if buffered := conn.Buffered(); buffered > len(data) {
+					if all, e := conn.Peek(buffered); e == nil {
+						data = all
+					}
+				}
+
+				host, err = s.SniffData(data)
+				var need *errNeedAtLeastData
+				if !errors.As(err, &need) {
+					break
+				}
+				// Only keep going while more data can actually be obtained: the
+				// request has to exceed what the sniffer already saw and fit in the
+				// budget. Since a retry always asks for more than is buffered, it
+				// waits on the conn instead of spinning on the same data.
+				if need.length <= len(data) || !time.Now().Before(deadline) {
+					break
+				}
+				// Request enough capacity for the next retry. Grow rounds capacity up
+				// geometrically, while this power-of-two limit keeps automatic allocation
+				// bounded when a protocol advertises a much larger length.
+				growTo := need.length
+				if growTo > maxSniffBufferSize {
+					growTo = maxSniffBufferSize
+				}
+				conn.Grow(growTo)
+				//log.Debugln("[Sniffer] [%s] [%s] %v, got length: %d, want: %d", metadata.DstIP, s.Protocol(), need, len(data), need.length)
+				want = need.length
 			}
 			if err != nil {
-				// log.Debugln("[Sniffer] [%s] [%s] Sniff data failed, error: %v", metadata.DstIP, s.Protocol(), err)
+				//log.Debugln("[Sniffer] [%s] [%s] Sniff data failed, error: %v", metadata.DstIP, s.Protocol(), err)
 				continue
 			}
 
 			_, err = netip.ParseAddr(host)
 			if err == nil {
-				// log.Debugln("[Sniffer] [%s] [%s] Sniff data failed, got host [%s]", metadata.DstIP, s.Protocol(), host)
+				//log.Debugln("[Sniffer] [%s] [%s] Sniff data failed, got host [%s]", metadata.DstIP, s.Protocol(), host)
 				continue
 			}
 
-			// log.Debugln("[Sniffer] [%s] [%s] Sniffed [%s]", metadata.DstIP, s.Protocol(), host)
+			//log.Debugln("[Sniffer] [%s] [%s] Sniffed [%s]", metadata.DstIP, s.Protocol(), host)
 			return host, nil
 		}
 	}
@@ -295,7 +330,7 @@ func NewSniffer(name sniffer.Type, snifferConfig SnifferConfig) (sniffer.Sniffer
 	case sniffer.HTTP:
 		return NewHTTPSniffer(snifferConfig)
 	case sniffer.QUIC:
-		return NewQuicSniffer(snifferConfig)
+		return NewQUICSniffer(snifferConfig)
 	default:
 		return nil, ErrorUnsupportedSniffer
 	}
