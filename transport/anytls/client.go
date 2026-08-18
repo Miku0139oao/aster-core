@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"fmt"
 	"net"
 	"sync/atomic"
 	"time"
@@ -71,15 +72,13 @@ func (c *Client) createOutboundTLSConnection(ctx context.Context) (net.Conn, err
 		return nil, err
 	}
 
-	b := buf.NewPacket()
-	defer b.Release()
-
-	b.Write(c.passwordSha256)
 	paddingLen := initialPaddingLength(c.padding.Load())
-	binary.BigEndian.PutUint16(b.Extend(2), uint16(paddingLen))
-	if paddingLen > 0 {
-		b.WriteZeroN(paddingLen)
+	b, err := newAuthenticationPreamble(c.passwordSha256, paddingLen)
+	if err != nil {
+		conn.Close()
+		return nil, err
 	}
+	defer b.Release()
 
 	tlsConn, err := vmess.StreamTLSConn(ctx, conn, c.tlsConfig)
 	if err != nil {
@@ -93,6 +92,26 @@ func (c *Client) createOutboundTLSConnection(ctx context.Context) (net.Conn, err
 		return nil, err
 	}
 	return tlsConn, nil
+}
+
+const maxAuthenticationPaddingLength = int(^uint16(0))
+
+func newAuthenticationPreamble(password []byte, paddingLen int) (*buf.Buffer, error) {
+	if paddingLen < 0 || paddingLen > maxAuthenticationPaddingLength {
+		return nil, fmt.Errorf("AnyTLS authentication padding too large: %d", paddingLen)
+	}
+
+	b := buf.NewSize(len(password) + 2 + paddingLen)
+	if _, err := b.Write(password); err != nil {
+		b.Release()
+		return nil, err
+	}
+	binary.BigEndian.PutUint16(b.Extend(2), uint16(paddingLen))
+	if err := b.WriteZeroN(paddingLen); err != nil {
+		b.Release()
+		return nil, err
+	}
+	return b, nil
 }
 
 func initialPaddingLength(factory *padding.PaddingFactory) int {
