@@ -447,6 +447,11 @@ func (s *Session) writeDataFrame(sid uint32, data []byte) (int, error) {
 
 func (s *Session) writeControlFrame(frame frame) (int, error) {
 	dataLen := len(frame.data)
+	if dataLen > maxFrameDataLen {
+		err := fmt.Errorf("AnyTLS control frame payload too large: %d", dataLen)
+		_ = s.Close()
+		return 0, err
+	}
 
 	buffer := pool.Get(dataLen + headerOverHeadSize)
 	buffer[0] = frame.cmd

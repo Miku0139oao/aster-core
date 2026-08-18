@@ -104,3 +104,21 @@ func TestRecvLoopStopsOnEmptyAlert(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 }
+
+func TestWriteControlFrameRejectsOversizedPayload(t *testing.T) {
+	conn := &sessionTestConn{reader: bytes.NewReader(nil)}
+	paddingFactory := padding.NewPaddingFactory(padding.DefaultPaddingScheme)
+	var paddingPtr atomic.Pointer[padding.PaddingFactory]
+	paddingPtr.Store(paddingFactory)
+	s := NewServerSession(conn, nil, &paddingPtr)
+
+	frame := newFrame(cmdAlert, 0)
+	frame.data = make([]byte, maxFrameDataLen+1)
+	_, err := s.writeControlFrame(frame)
+	require.Error(t, err)
+	require.True(t, s.IsClosed())
+
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+	require.Empty(t, conn.writes.Bytes())
+}

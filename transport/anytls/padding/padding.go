@@ -13,6 +13,8 @@ import (
 
 const CheckMark = -1
 
+const maxPaddingPayloadSize = 1<<16 - 1
+
 var DefaultPaddingScheme = []byte(`stop=8
 0=30-30
 1=100-400
@@ -45,6 +47,7 @@ func UpdatePaddingScheme(rawScheme []byte, to *atomic.Pointer[PaddingFactory]) b
 }
 
 func NewPaddingFactory(rawScheme []byte) *PaddingFactory {
+	rawScheme = append([]byte(nil), rawScheme...)
 	p := &PaddingFactory{
 		RawScheme: rawScheme,
 		Md5:       fmt.Sprintf("%x", md5.Sum(rawScheme)),
@@ -53,11 +56,11 @@ func NewPaddingFactory(rawScheme []byte) *PaddingFactory {
 	if len(scheme) == 0 {
 		return nil
 	}
-	if stop, err := strconv.Atoi(scheme["stop"]); err == nil {
-		p.Stop = uint32(stop)
-	} else {
+	stop, err := strconv.ParseUint(scheme["stop"], 10, 32)
+	if err != nil {
 		return nil
 	}
+	p.Stop = uint32(stop)
 	p.records = make(map[uint32][]recordSize, len(scheme)-1)
 	for key, value := range scheme {
 		if key == "stop" {
@@ -67,14 +70,16 @@ func NewPaddingFactory(rawScheme []byte) *PaddingFactory {
 		if err != nil {
 			continue
 		}
-		if records := parseRecordSizes(value); len(records) > 0 {
+		if records, valid := parseRecordSizes(value); !valid {
+			return nil
+		} else if len(records) > 0 {
 			p.records[uint32(pkt)] = records
 		}
 	}
 	return p
 }
 
-func parseRecordSizes(value string) []recordSize {
+func parseRecordSizes(value string) ([]recordSize, bool) {
 	records := make([]recordSize, 0, strings.Count(value, ",")+1)
 	for _, valueRange := range strings.Split(value, ",") {
 		minMax := strings.Split(valueRange, "-")
@@ -93,6 +98,9 @@ func parseRecordSizes(value string) []recordSize {
 			if min <= 0 || max <= 0 {
 				continue
 			}
+			if max > maxPaddingPayloadSize {
+				return nil, false
+			}
 			record := recordSize{min: min}
 			if min != max {
 				record.randomMax = uint64(max - min)
@@ -102,7 +110,7 @@ func parseRecordSizes(value string) []recordSize {
 			records = append(records, recordSize{checkMark: true})
 		}
 	}
-	return records
+	return records, true
 }
 
 func (p *PaddingFactory) GenerateRecordPayloadSizes(pkt uint32) []int {

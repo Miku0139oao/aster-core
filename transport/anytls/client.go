@@ -75,10 +75,7 @@ func (c *Client) createOutboundTLSConnection(ctx context.Context) (net.Conn, err
 	defer b.Release()
 
 	b.Write(c.passwordSha256)
-	var paddingLen int
-	if pad := c.padding.Load().GenerateRecordPayloadSizes(0); len(pad) > 0 {
-		paddingLen = pad[0]
-	}
+	paddingLen := initialPaddingLength(c.padding.Load())
 	binary.BigEndian.PutUint16(b.Extend(2), uint16(paddingLen))
 	if paddingLen > 0 {
 		b.WriteZeroN(paddingLen)
@@ -96,6 +93,16 @@ func (c *Client) createOutboundTLSConnection(ctx context.Context) (net.Conn, err
 		return nil, err
 	}
 	return tlsConn, nil
+}
+
+func initialPaddingLength(factory *padding.PaddingFactory) int {
+	if factory == nil {
+		return 0
+	}
+	if sizes := factory.GenerateRecordPayloadSizes(0); len(sizes) > 0 && sizes[0] > 0 {
+		return sizes[0]
+	}
+	return 0
 }
 
 func (h *Client) Close() error {
