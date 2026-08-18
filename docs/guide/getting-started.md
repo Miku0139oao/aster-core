@@ -23,7 +23,7 @@ chmod +x aster-core
 ./aster-core -v
 ```
 
-Windows asset 是 `.zip`；解壓後執行 `aster-core-<os>-<arch>.exe -v`。Asset 後綴以 release 內的 `version.txt` 為準，不要自行改成 `vX.Y.Z`。
+Windows asset 是 `.zip`；解壓後執行 `aster-core-<os>-<arch>.exe -v`。Asset 後綴以 release 內的 `version.txt` 為準，不要自行改成未在該 release 頁存在的 tag。
 
 ### 從原始碼建置
 

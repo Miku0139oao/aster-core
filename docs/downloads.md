@@ -95,7 +95,7 @@ x86-64 資產用 Go 的 `GOAMD64` 等級。等級愈高，指令集要求愈新�
 | 資產後綴 | 意義 | 什麼時候選 |
 | --- | --- | --- |
 | `amd64-v1` | 基準 x86-64，相容範圍最廣 | **預設。** 不確定 CPU、舊款主機、多數 OpenWrt x86 |
-| `amd64-compatible` | 與 `amd64-v1` 相同（`GOAMD64=v1`） | 舊名稱，預計移除；新下載請改用 `amd64-v1` |
+| `amd64-compatible` | 與 `amd64-v1` 相同（`GOAMD64=v1`） | 目前仍會產生；新下載優先使用較明確的 `amd64-v1` |
 | `amd64-v2` | 需要 SSE4.2、POPCNT 等 | 已確認 CPU 支援時 |
 | `amd64-v3` | 需要 AVX／AVX2／BMI 等 | 已確認較新桌面或伺服器 CPU 時 |
 | 不帶後綴的 `amd64` | **同樣是 v3，不是通用 x86-64** | 只有確定要 v3 時才選 |
@@ -129,7 +129,7 @@ aster-core.service
 aster-core@.service
 ```
 
-套件與 systemd 細節見 [Linux 套件與 systemd](/deployment/linux)；從 binary 做到正式服務見 [Linux VPS 部署](/tutorials/linux-production)。目前沒有官方 `v*` tag，該教學裡的 `vX.Y.Z` 檔名請改成 `Prerelease-main` 頁上實際存在的 `alpha-main-<sha>` 資產。
+套件與 systemd 細節見 [Linux 套件與 systemd](/deployment/linux)；從 binary 做到正式服務見 [Linux VPS 部署](/tutorials/linux-production)。目前沒有官方編號版；該教學使用 `Prerelease-main` 與其 `version.txt` 所列的 `alpha-main-<sha>` 資產 build ID。
 
 ## Windows
 
