@@ -63,6 +63,7 @@ type Hysteria2Option struct {
 	CWND              int        `proxy:"cwnd,omitempty"`
 	BBRProfile        string     `proxy:"bbr-profile,omitempty"`
 	UdpMTU            int        `proxy:"udp-mtu,omitempty"`
+	HandshakeTimeout  int        `proxy:"handshake-timeout,omitempty"`
 
 	RealmOpts Hysteria2RealmOption `proxy:"realm-opts,omitempty"`
 
@@ -128,6 +129,9 @@ func (h *Hysteria2) ProxyInfo() C.ProxyInfo {
 }
 
 func NewHysteria2(option Hysteria2Option) (*Hysteria2, error) {
+	if option.HandshakeTimeout < 0 {
+		return nil, errors.New("hysteria2 handshake timeout must be non-negative")
+	}
 	addr := net.JoinHostPort(option.Server, strconv.Itoa(option.Port))
 	outbound := &Hysteria2{
 		Base: NewBase(BaseOption{
@@ -232,6 +236,7 @@ func NewHysteria2(option Hysteria2Option) (*Hysteria2, error) {
 		SetBBRCongestion: func(quicConn *quic.Conn) {
 			common.SetCongestionController(quicConn, "bbr", option.CWND, option.BBRProfile)
 		},
+		HandshakeTimeout: time.Duration(option.HandshakeTimeout) * time.Second,
 	}
 
 	var serverPorts []uint16
