@@ -65,10 +65,10 @@ func createOrGetLocalConn(rAddr, lAddr netip.AddrPort, tunnel C.Tunnel, addition
 			cond.Wait()
 			// we should get localConn here
 			localConn = natTable.GetForLocalConn(local, remote)
+			cond.L.Unlock()
 			if localConn == nil {
 				return nil, fmt.Errorf("localConn is nil, nat entry not exist")
 			}
-			cond.L.Unlock()
 		} else {
 			if cond == nil {
 				return nil, fmt.Errorf("cond is nil, nat entry not exist")
@@ -102,11 +102,12 @@ func listenLocalConn(rAddr, lAddr netip.AddrPort, tunnel C.Tunnel, additions ...
 			buf := pool.Get(pool.UDPBufferSize)
 			br, err := lc.Read(buf)
 			if err != nil {
+				pool.Put(buf)
 				if errors.Is(err, net.ErrClosed) {
 					log.Debugln("TProxy local conn listener exit.. rAddr=%s lAddr=%s", rAddr, lAddr)
-					pool.Put(buf)
 					return
 				}
+				continue
 			}
 			// since following localPackets are pass through this socket which listen rAddr
 			// I choose current listener as packet's packet conn
