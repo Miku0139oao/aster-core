@@ -154,7 +154,11 @@ func testQUICSniffer(data []string, async, staleInitialKeys bool) (string, strin
 		if err != nil {
 			return "", "", err
 		}
-		packetSender.initialKeys = append(packetSender.initialKeys, newQUICInitialKey([]byte("stale initial dcid"), structure))
+		staleKey, err := newQUICInitialKey([]byte("stale initial dcid"), structure)
+		if err != nil {
+			return "", "", err
+		}
+		packetSender.initialKeys = append(packetSender.initialKeys, staleKey)
 	}
 
 	go func() {
@@ -408,7 +412,8 @@ func TestQUICPacketNumbers(t *testing.T) {
 
 	t.Run("uses reconstructed packet number in nonce", func(t *testing.T) {
 		destConnID := []byte("initial dcid")
-		labels := expandLabels(destConnID, &quicV1)
+		labels, err := expandLabels(destConnID, &quicV1)
+		require.NoError(t, err)
 		plaintext := []byte("initial payload")
 		packet, packetNumberOffset := makeProtectedQUICInitialPacket(t, destConnID, labels, 256, 1, plaintext)
 
@@ -423,8 +428,10 @@ func TestQUICPacketNumbers(t *testing.T) {
 	t.Run("retains retry epoch across header dcid changes", func(t *testing.T) {
 		originalDestConnID := []byte("original dcid")
 		retryDestConnID := []byte("retry dcid")
-		retryKey := newQUICInitialKey(retryDestConnID, &quicV1)
-		originalKey := newQUICInitialKey(originalDestConnID, &quicV1)
+		retryKey, err := newQUICInitialKey(retryDestConnID, &quicV1)
+		require.NoError(t, err)
+		originalKey, err := newQUICInitialKey(originalDestConnID, &quicV1)
+		require.NoError(t, err)
 		originalKey.largestPacketNumber = 200
 		packetSender := quicPacketSender{
 			initialKeys: []quicInitialKey{originalKey},
@@ -450,7 +457,8 @@ func TestQUICPacketNumbers(t *testing.T) {
 
 	t.Run("continues after a delayed packet outside the reconstruction window", func(t *testing.T) {
 		destConnID := []byte("initial dcid")
-		initialKey := newQUICInitialKey(destConnID, &quicV1)
+		initialKey, err := newQUICInitialKey(destConnID, &quicV1)
+		require.NoError(t, err)
 		initialKey.largestPacketNumber = 200
 		packetSender := quicPacketSender{
 			initialKeys: []quicInitialKey{initialKey},

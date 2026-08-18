@@ -368,7 +368,11 @@ func (q *quicPacketSender) decryptQUICInitialPacket(b []byte, hdrLen, packetEnd 
 	defer q.lock.Unlock()
 
 	if len(q.initialKeys) == 0 {
-		q.initialKeys = append(q.initialKeys, newQUICInitialKey(destConnID, s))
+		key, err := newQUICInitialKey(destConnID, s)
+		if err != nil {
+			return nil, err
+		}
+		q.initialKeys = append(q.initialKeys, key)
 	}
 
 	var decryptErr error
@@ -400,7 +404,10 @@ func (q *quicPacketSender) decryptQUICInitialPacket(b []byte, hdrLen, packetEnd 
 	// packet number. Add it only after authentication, preventing a corrupt
 	// packet from replacing working keys. QUIC permits at most one accepted
 	// Retry, keeping two epochs sufficient for a connection.
-	candidate := newQUICInitialKey(destConnID, s)
+	candidate, err := newQUICInitialKey(destConnID, s)
+	if err != nil {
+		return nil, err
+	}
 	candidate.largestPacketNumber = largestPacketNumber
 	decrypted, packetNumber, err := decryptQUICInitialPacket(b, hdrLen, packetEnd, candidate.labels, candidate.largestPacketNumber, cache)
 	if err != nil {
@@ -727,28 +734,43 @@ func (q *quicPacketSender) getQUICStructure(vb []byte) (*quicStructure, error) {
 	return nil, errNotQUIC
 }
 
-func newQUICInitialKey(destConnID []byte, s *quicStructure) quicInitialKey {
+func newQUICInitialKey(destConnID []byte, s *quicStructure) (quicInitialKey, error) {
+	labels, err := expandLabels(destConnID, s)
+	if err != nil {
+		return quicInitialKey{}, err
+	}
 	return quicInitialKey{
 		destConnID:          bytes.Clone(destConnID),
-		labels:              expandLabels(destConnID, s),
+		labels:              labels,
 		largestPacketNumber: -1,
-	}
+	}, nil
 }
 
-func expandLabels(destConnID []byte, s *quicStructure) quicLabels {
+func expandLabels(destConnID []byte, s *quicStructure) (quicLabels, error) {
 	initialSecret := hkdf.Extract(crypto.SHA256.New, destConnID, s.initialSalt)
-	secret := hkdfExpandLabel(initialSecret, "client in", crypto.SHA256.Size())
+	secret, err := hkdfExpandLabel(initialSecret, "client in", crypto.SHA256.Size())
+	if err != nil {
+		return quicLabels{}, err
+	}
 
 	lp := s.labelPrefix
 
-	return quicLabels{
-		hp:  hkdfExpandLabel(secret, lp+" hp", 16),
-		key: hkdfExpandLabel(secret, lp+" key", 16),
-		iv:  hkdfExpandLabel(secret, lp+" iv", 12),
+	hp, err := hkdfExpandLabel(secret, lp+" hp", 16)
+	if err != nil {
+		return quicLabels{}, err
 	}
+	key, err := hkdfExpandLabel(secret, lp+" key", 16)
+	if err != nil {
+		return quicLabels{}, err
+	}
+	iv, err := hkdfExpandLabel(secret, lp+" iv", 12)
+	if err != nil {
+		return quicLabels{}, err
+	}
+	return quicLabels{hp: hp, key: key, iv: iv}, nil
 }
 
-func hkdfExpandLabel(secret []byte, label string, length int) []byte {
+func hkdfExpandLabel(secret []byte, label string, length int) ([]byte, error) {
 	b := make([]byte, 0, 2+1+6+len(label)+1)
 	b = binary.BigEndian.AppendUint16(b, uint16(length))
 	b = append(b, byte(6+len(label)))
@@ -759,7 +781,7 @@ func hkdfExpandLabel(secret []byte, label string, length int) []byte {
 	out := make([]byte, length)
 	n, err := hkdf.Expand(crypto.SHA256.New, secret, b).Read(out)
 	if err != nil || n != length {
-		panic("quic: HKDF-Expand-Label invocation failed unexpectedly")
+		return nil, errors.New("quic: HKDF-Expand-Label invocation failed")
 	}
-	return out
+	return out, nil
 }
