@@ -160,6 +160,6 @@ func parseDSCP(m *unix.SocketControlMessage) (uint8, error) {
 		return dscp, nil
 
 	default:
-		return 0, nil
+		return 0, fmt.Errorf("not a DSCP control message")
 	}
 }
