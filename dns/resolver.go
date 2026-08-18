@@ -87,6 +87,16 @@ func (r *Resolver) LookupIP(ctx context.Context, host string) (ips []netip.Addr,
 	}()
 
 	ips, err = r.lookupIP(ctx, host, D.TypeA)
+	if err != nil {
+		// A failed: ipv6Timeout is a happy-eyeballs cap after A succeeds,
+		// not a deadline for AAAA-only hosts. Wait for AAAA fully.
+		ip, open := <-ch
+		if !open {
+			return nil, resolver.ErrIPNotFound
+		}
+		return ip, nil
+	}
+
 	var waitIPv6 *time.Timer
 	if r != nil && r.ipv6Timeout > 0 {
 		waitIPv6 = time.NewTimer(r.ipv6Timeout)
@@ -96,10 +106,9 @@ func (r *Resolver) LookupIP(ctx context.Context, host string) (ips []netip.Addr,
 	defer waitIPv6.Stop()
 	select {
 	case ipv6s, open := <-ch:
-		if !open && err != nil {
-			return nil, resolver.ErrIPNotFound
+		if open {
+			ips = append(ips, ipv6s...)
 		}
-		ips = append(ips, ipv6s...)
 	case <-waitIPv6.C:
 		// wait ipv6 result
 	}
