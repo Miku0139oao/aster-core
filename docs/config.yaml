@@ -2046,6 +2046,7 @@ listeners:
     #   restls-script: ""
     #   min-record-len: 0
     #   proxy: ""
+    #   rate-limit: 0 # fallback 双向转发限速，单位 bit/s；0 表示不限速
     # jls-config: # 仅封装 TCP；JLS 认证失败或普通 TLS 连接会透明回落到 dest
     #   enable: false
     #   users:
@@ -2107,6 +2108,7 @@ listeners:
     #   enable: false
     #   dest: test.com:443
     #   password: restls-password
+    #   rate-limit: 0 # fallback 双向转发限速，单位 bit/s；0 表示不限速
     # jls-config:
     #   enable: false
     #   users:
@@ -2199,6 +2201,7 @@ listeners:
     #   # restls-script: ""
     #   # min-record-len: 0
     #   # proxy: ""
+    #   # rate-limit: 0 # fallback 双向转发限速，单位 bit/s；0 表示不限速
     # 如果填写reality-config则开启reality（注意不可与certificate和private-key同时填写）
     # reality-config:
     #   dest: test.com:443
@@ -2414,6 +2417,7 @@ listeners:
     #   # restls-script: ""
     #   # min-record-len: 0
     #   # proxy: ""
+    #   # rate-limit: 0 # fallback 双向转发限速，单位 bit/s；0 表示不限速
     ### 注意，对于vless listener, 如果 "allow-insecure" 不为 true, 至少需要填写 “certificate和private-key” 或 “shadow-tls” 或 “res-tls” 或 “jls-config” 或 “reality-config” 或 “decryption” 的其中一项 ###
     # allow-insecure: false # 是否允许不开启tls加密（注意：仅用于有 nginx, caddy 前置的情况）
 
@@ -2455,6 +2459,7 @@ listeners:
     #   # restls-script: ""
     #   # min-record-len: 0
     #   # proxy: ""
+    #   # rate-limit: 0 # fallback 双向转发限速，单位 bit/s；0 表示不限速
     # jls-config: # JLS 替代普通 TLS；未认证连接回落到 dest
     #   enable: true
     #   users:
@@ -2558,6 +2563,7 @@ listeners:
     #   # restls-script: ""
     #   # min-record-len: 0
     #   # proxy: ""
+    #   # rate-limit: 0 # fallback 双向转发限速，单位 bit/s；0 表示不限速
     # jls-config: # JLS 替代普通 TLS；未认证连接回落到 dest
     #   enable: true
     #   users:
