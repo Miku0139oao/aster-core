@@ -138,6 +138,7 @@ export default defineConfig({
         items: [
           { text: "架構", link: "/development/architecture" },
           { text: "建置與測試", link: "/development/build-test" },
+          { text: "文件正確性稽核", link: "/development/docs-accuracy" },
           { text: "疑難排解", link: "/troubleshooting" },
         ],
       },

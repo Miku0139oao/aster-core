@@ -18,7 +18,7 @@ Aster OpenWrt package：
 - Packages feed。
 - `golang/host`
 - `upx/host`
-- Target dependencies：CA bundle、`ip-full`、`kmod-inet-diag`、`kmod-tun`
+- Target dependencies：CA bundle、`ip-full`、`kmod-inet-diag`、`kmod-tun`、`kmod-sched-bpf`
 
 ## Build
 
@@ -98,7 +98,7 @@ Mihomo Meta ...
 
 Aster 可以像 dae 一樣，讓判定安全的 DIRECT 連線留在 Linux kernel forwarding/NAT path；代理流量仍由 TUN 處理。推薦組合是 **Kernel DIRECT + nftables + OpenWrt flow offload**。TC eBPF 是另一層實驗性 classifier，不是啟用 Kernel DIRECT 的必要條件，也不保證更快。
 
-在 Nikki 的 TUN mixin 開啟 Kernel DIRECT，關閉 Nikki 自己的 transparent proxy，讓 Aster 單獨管理 TUN route/auto-redirect：
+下列 `tun_kernel_direct*` UCI 鍵只適用於已安裝對應 mixin 的自訂 Nikki build；`openwrt/aster-core` recipe 與公開的原版 Nikki 不會建立或讀取這些鍵。原版 Nikki 請透過它支援的 profile/mixin 方式寫入本頁後面的 `tun.kernel-direct` YAML，並以 `/etc/nikki/run/config.yaml` 的實際產物驗證。自訂 build 才可以用下列指令開啟 Kernel DIRECT、關閉 Nikki 自己的 transparent proxy，讓 Aster 單獨管理 TUN route/auto-redirect：
 
 ```sh
 uci set nikki.proxy.enabled='0'
@@ -167,7 +167,7 @@ uci commit nikki
 
 有些 OpenWrt WAN6 只有 `default from <delegated-prefix> via <gateway>`，而代理 core 建立的 IPv6 socket 尚未選定 source，route lookup 可能掉回 TUN，或 auto-detect 誤選 IPv4 WAN device。症狀通常是路由器 IPv6 正常，但 IPv6 literal／IPv6-only 節點 timeout。
 
-Nikki 的「Split-WAN IPv6 Outbound Fix」預設關閉。只在上述拓撲啟用，它會從選定 WAN6 取得實際 device、補一條 generic IPv6 default route，並把 IPv6-only proxy endpoint 綁到該 device：
+「Split-WAN IPv6 Outbound Fix」同樣是本 repository 沒有提供的自訂 Nikki 擴充，原版 Nikki 不讀取下列 UCI 鍵。只在已安裝該擴充且確實遇到上述拓撲時啟用；它會從選定 WAN6 取得實際 device、補一條 generic IPv6 default route，並把 IPv6-only proxy endpoint 綁到該 device：
 
 ```sh
 uci set nikki.mixin.ipv6_outbound_fix='1'

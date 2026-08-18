@@ -1,6 +1,6 @@
 # Aster 與 Mihomo
 
-Aster Core 以 Mihomo `v1.19.29` 為基線。設定格式、規則引擎、DNS、TUN、代理群組和 Clash-compatible API 都沿用自 Mihomo；Aster 的改動主要集中在 AnyTLS + REALITY、問題修正、執行效率，以及選用的服務端管理功能。
+Aster Core 以 Mihomo `v1.19.29` 為基線。設定格式、規則引擎、DNS、TUN、代理群組和 Clash-compatible API 都沿用自 Mihomo；Aster 的改動包含 AnyTLS + REALITY、AmneziaWG v3/v3.1、H2C/HTTP2 與 QUIC v2 嗅探改善、Linux/OpenWrt Kernel DIRECT、問題修正、執行效率，以及選用的服務端管理功能。
 
 ## AnyTLS + REALITY
 

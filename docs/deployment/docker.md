@@ -1,12 +1,14 @@
 # Docker
 
-## 使用官方映像
+## 映像發布狀態
 
-映像發布到：
+CI 預定發布到：
 
 ```text
 docker.io/miku0139oao/aster-core
 ```
+
+但目前 Build workflow 沒有 Docker Hub credentials，最新 `main` run 略過了 push；該 repository 的 `main` 與 `latest` 都無法匿名拉取。在真正發布前，請先依本頁「從 repository 建 image」建立 `aster-core:local`。下列範例也使用這個本機 tag。
 
 包含：
 
@@ -50,7 +52,7 @@ docker run -d \
   --restart unless-stopped \
   -p 127.0.0.1:7890:7890 \
   -v "$PWD/config:/root/.config/mihomo" \
-  miku0139oao/aster-core:latest
+  aster-core:local
 ```
 
 即使 host 只 publish 到 loopback，container 內仍需 `allow-lan: true`，否則 Aster 只綁 container 自己的 `127.0.0.1`，Docker port forwarding 無法到達。
@@ -67,7 +69,7 @@ docker run -d \
   --cap-add NET_ADMIN \
   --device /dev/net/tun \
   -v "$PWD/config:/root/.config/mihomo" \
-  miku0139oao/aster-core:latest
+  aster-core:local
 ```
 
 視設定可能還需要 `NET_RAW` 或 host routing/iptables 調整。不要直接使用 `--privileged`，除非已確認最小 capabilities 無法滿足且接受其風險。
@@ -177,4 +179,4 @@ Docker Desktop 的 host networking、TUN device 與 route 能力和原生 Linux 
 3. 先用新 image 執行 `-t`。
 4. 保留舊 image digest 以便 rollback。
 
-不要只追蹤 mutable `latest` 而沒有 rollback 記錄；正式環境建議 pin release tag 或 digest。
+不要只覆寫 mutable local tag 而沒有 rollback 記錄；正式環境應保留舊 image ID。日後 registry 實際發布後，則 pin 已驗證的 digest。

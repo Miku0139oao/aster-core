@@ -22,7 +22,7 @@ Repository 目前的 `.github/release/aster-core.service` 沒有 `User=` 或 `Gr
 準備以下資訊：
 
 - VPS 的 Debian 或 Ubuntu 版本與 CPU 架構。
-- 要安裝的 release tag，例如 `v1.2.3`。
+- Release tag `Prerelease-main`，以及該 release 的 `version.txt` 所列 asset build ID。
 - AnyTLS 公開連接埠；範例使用 TCP `443`。
 - 指向 VPS 的 DNS A／AAAA record。
 - REALITY `dest`、允許的 SNI、server key pair、short ID。
@@ -52,16 +52,17 @@ lscpu
 | ARM64 | `arm64` | `uname -m` 通常是 `aarch64` |
 | 32-bit ARMv7 | `armv7` | `dpkg --print-architecture` 通常是 `armhf` |
 
-Release workflow 中不帶版本尾碼的 `amd64` 目前是 GOAMD64 v3，不是通用 x86-64。舊名稱 `amd64-compatible` 預計移除；新部署優先使用明確的 `amd64-v1`。
+Release workflow 中不帶版本尾碼的 `amd64` 目前是 GOAMD64 v3，不是通用 x86-64。`amd64-compatible` 與 `amd64-v1` 目前都對應 GOAMD64 v1；新部署優先使用較明確的 `amd64-v1`。
 
 ## 2. 下載並驗證 release
 
-以下三個值都必須換成 Release 頁面實際存在的 tag 與 asset。檔名格式來自 repository 的 release workflow：
+目前沒有 Aster `v*` 正式 release；公開 asset 位於會隨 `main` 更新的 `Prerelease-main`。先讀取同一 release 的 `version.txt`，把下列 `SHA7` 改成其中的七碼 commit 後綴。檔名格式來自 repository 的 release workflow：
 
 ```sh
-ASTER_RELEASE_TAG='vX.Y.Z'
+ASTER_RELEASE_TAG='Prerelease-main'
+ASTER_BUILD_ID='alpha-main-SHA7'
 ASTER_ASSET_FLAVOR='amd64-v1'
-ASTER_ASSET_NAME="aster-core-linux-${ASTER_ASSET_FLAVOR}-${ASTER_RELEASE_TAG}.gz"
+ASTER_ASSET_NAME="aster-core-linux-${ASTER_ASSET_FLAVOR}-${ASTER_BUILD_ID}.gz"
 ASTER_DOWNLOAD_DIR="$(mktemp -d)"
 ```
 
@@ -100,7 +101,7 @@ chmod 0755 "${ASTER_DOWNLOAD_DIR}/aster-core"
 "${ASTER_DOWNLOAD_DIR}/aster-core" -v
 ```
 
-輸出的版本應符合所選 release。若 tag、版本或架構不符，回到 Release 頁重新選擇 asset。
+輸出的版本應與 `version.txt` 及 asset 檔名中的 `${ASTER_BUILD_ID}` 相同；它不會顯示可變的 release tag `Prerelease-main`。若 build ID 或架構不符，回到 Release 頁重新選擇 asset。
 
 ## 3. 以版本目錄安裝 binary
 
@@ -110,12 +111,12 @@ chmod 0755 "${ASTER_DOWNLOAD_DIR}/aster-core"
 sudo install -d -o root -g root -m 0755 /opt/aster-core
 sudo install -d -o root -g root -m 0755 /opt/aster-core/releases
 sudo install -d -o root -g root -m 0755 \
-  "/opt/aster-core/releases/${ASTER_RELEASE_TAG}"
+  "/opt/aster-core/releases/${ASTER_BUILD_ID}"
 sudo install -o root -g root -m 0755 \
   "${ASTER_DOWNLOAD_DIR}/aster-core" \
-  "/opt/aster-core/releases/${ASTER_RELEASE_TAG}/aster-core"
+  "/opt/aster-core/releases/${ASTER_BUILD_ID}/aster-core"
 sudo ln -sfn \
-  "/opt/aster-core/releases/${ASTER_RELEASE_TAG}" \
+  "/opt/aster-core/releases/${ASTER_BUILD_ID}" \
   /opt/aster-core/current
 ```
 
@@ -417,12 +418,12 @@ unset ASTER_ADMIN_TOKEN
 先把新 binary 安裝到新版本目錄，但暫時不要切換 `current`：
 
 ```sh
-ASTER_NEW_RELEASE='vX.Y.Z'
+ASTER_NEW_BUILD_ID='alpha-main-NEW_SHA7'
 sudo install -d -o root -g root -m 0755 \
-  "/opt/aster-core/releases/${ASTER_NEW_RELEASE}"
+  "/opt/aster-core/releases/${ASTER_NEW_BUILD_ID}"
 sudo install -o root -g root -m 0755 \
   "${ASTER_DOWNLOAD_DIR}/aster-core" \
-  "/opt/aster-core/releases/${ASTER_NEW_RELEASE}/aster-core"
+  "/opt/aster-core/releases/${ASTER_NEW_BUILD_ID}/aster-core"
 ```
 
 用新 binary、正式 service account 與正式設定做靜態驗證：
@@ -430,7 +431,7 @@ sudo install -o root -g root -m 0755 \
 ```sh
 sudo -u aster-core \
   env SAFE_PATHS=/etc/aster-core \
-  "/opt/aster-core/releases/${ASTER_NEW_RELEASE}/aster-core" \
+  "/opt/aster-core/releases/${ASTER_NEW_BUILD_ID}/aster-core" \
   -d /var/lib/aster-core \
   -f /etc/aster-core/config.yaml \
   -t
@@ -454,7 +455,7 @@ sudo cp -a /var/lib/aster-core \
 
 ```sh
 sudo ln -sfn \
-  "/opt/aster-core/releases/${ASTER_NEW_RELEASE}" \
+  "/opt/aster-core/releases/${ASTER_NEW_BUILD_ID}" \
   /opt/aster-core/current
 sudo systemctl start aster-core.service
 sudo systemctl status aster-core.service --no-pager
@@ -492,8 +493,8 @@ sudo systemctl status aster-core.service --no-pager
 若要使用 Release 中的 Debian package，下載與驗證方式相同，只把 asset 名稱改成 Release 頁實際存在的 `.deb`：
 
 ```sh
-ASTER_DEB_NAME='aster-core-linux-amd64-v1-vX.Y.Z.deb'
-sudo apt install "./${ASTER_DEB_NAME}"
+ASTER_DEB_NAME='aster-core-linux-amd64-v1-alpha-main-SHA7.deb'
+sudo apt install "${ASTER_DOWNLOAD_DIR}/${ASTER_DEB_NAME}"
 ```
 
 目前 package 會安裝：

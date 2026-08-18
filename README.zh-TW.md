@@ -142,7 +142,7 @@ npm run dev
 
 ### 1. 安裝
 
-可從 [GitHub Releases](https://github.com/Miku0139oao/aster-core/releases) 下載 binary 或原生套件，也可自行建置：
+可從目前的 [`Prerelease-main`](https://github.com/Miku0139oao/aster-core/releases/tag/Prerelease-main) 下載 binary 或原生套件，也可自行建置。Aster 尚未發布 `v*` 正式版；Mihomo `v1.19.29` 是上游基線，不是 Aster 版本。
 
 ```sh
 git clone https://github.com/Miku0139oao/aster-core.git
@@ -295,7 +295,10 @@ Authorization: Bearer <aster-secret>
 
 ### Docker
 
+目前沒有可公開拉取的 Docker image：workflow 預定使用 `docker.io/miku0139oao/aster-core:main`，但現行 CI 因未設定 Docker Hub credentials 而略過 push。準備 `bin/version.txt` 與對應的 `bin/*.gz` release artifact 後，先建立本機 image：
+
 ```sh
+docker buildx build --load --platform linux/amd64 -t aster-core:local .
 docker run -d \
   --name aster-core \
   --restart unless-stopped \
@@ -303,7 +306,7 @@ docker run -d \
   --cap-add NET_ADMIN \
   --device /dev/net/tun \
   -v "$PWD/config:/root/.config/mihomo" \
-  miku0139oao/aster-core:latest
+  aster-core:local
 ```
 
 掛載目錄必須包含 `config.yaml`。一般 HTTP/SOCKS 不需要 `NET_ADMIN` 或 `/dev/net/tun`。使用 `-p` 時要設定 `allow-lan: true`，否則代理只會綁定容器 loopback。

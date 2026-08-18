@@ -14,7 +14,7 @@
 | `trojan` | Trojan |
 | `hysteria` | Hysteria 1 |
 | `hysteria2` | Hysteria 2 |
-| `wireguard` | WireGuard |
+| `wireguard` | WireGuard；AmneziaWG 使用同一 `type` 的 `amnezia-wg-option` |
 | `tuic` | TUIC |
 | `shadowquic` | ShadowQUIC |
 | `gost-relay` | Gost relay |

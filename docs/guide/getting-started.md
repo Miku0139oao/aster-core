@@ -15,14 +15,17 @@
 
 ### GitHub Releases
 
-從 [Releases](https://github.com/Miku0139oao/aster-core/releases) 選擇作業系統與 CPU 架構。舊款 x86-64 CPU 優先使用 `amd64-v1` 或 `amd64-compatible`。
+目前公開下載只有會隨 `main` 更新的 [Prerelease-main](https://github.com/Miku0139oao/aster-core/releases/tag/Prerelease-main)。Aster 尚未發布 `v*` 正式版；Mihomo `v1.19.29` 是上游基線，不是 Aster 版本。請依作業系統與 CPU 架構選擇 asset，舊款 x86-64 CPU 優先使用 `amd64-v1` 或 `amd64-compatible`。
 
-下載後先檢查 release 中的 checksum，再賦予執行權限：
+Unix-like 的 binary asset 是 `.gz`，檔名格式為 `aster-core-<os>-<arch>-alpha-main-<sha7>.gz`。先以同一 release 的 `checksums.txt` 驗證壓縮檔，再解壓、賦予執行權限：
 
 ```sh
+gzip -dc ./aster-core-OS-ARCH-alpha-main-SHA7.gz > ./aster-core
 chmod +x aster-core
 ./aster-core -v
 ```
+
+Windows asset 是 `.zip`；解壓後執行 `aster-core-<os>-<arch>.exe -v`。Asset 後綴以 release 內的 `version.txt` 為準，不要自行改成 `vX.Y.Z`。
 
 ### 從原始碼建置
 
