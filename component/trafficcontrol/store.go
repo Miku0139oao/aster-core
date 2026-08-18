@@ -439,6 +439,7 @@ func cloneCountersMap(source map[int64]Counters) map[int64]Counters {
 	}
 	return result
 }
+
 func cloneBoolMap(source map[int64]bool) map[int64]bool {
 	result := make(map[int64]bool, len(source))
 	for key, value := range source {
@@ -446,6 +447,7 @@ func cloneBoolMap(source map[int64]bool) map[int64]bool {
 	}
 	return result
 }
+
 func uint64Bytes(value uint64) []byte {
 	result := make([]byte, 8)
 	binary.BigEndian.PutUint64(result, value)

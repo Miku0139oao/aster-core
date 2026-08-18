@@ -341,8 +341,10 @@ func parseReports(raw RawReportsConfig) (ReportsConfig, error) {
 		name, raw string
 		target    *time.Duration
 	}{
-		{"hourly-retention", raw.HourlyRetention, &reports.HourlyRetention}, {"daily-retention", raw.DailyRetention, &reports.DailyRetention},
-		{"monthly-retention", raw.MonthlyRetention, &reports.MonthlyRetention}, {"orphan-retention", raw.OrphanRetention, &reports.OrphanRetention},
+		{"hourly-retention", raw.HourlyRetention, &reports.HourlyRetention},
+		{"daily-retention", raw.DailyRetention, &reports.DailyRetention},
+		{"monthly-retention", raw.MonthlyRetention, &reports.MonthlyRetention},
+		{"orphan-retention", raw.OrphanRetention, &reports.OrphanRetention},
 	}
 	for _, value := range values {
 		if value.raw == "" {

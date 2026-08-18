@@ -104,8 +104,10 @@ type quicInitialKey struct {
 	largestPacketNumber int64
 }
 
-var _ sniffer.Sniffer = (*QUICSniffer)(nil)
-var _ sniffer.MultiPacketSniffer = (*QUICSniffer)(nil)
+var (
+	_ sniffer.Sniffer            = (*QUICSniffer)(nil)
+	_ sniffer.MultiPacketSniffer = (*QUICSniffer)(nil)
+)
 
 type QUICSniffer struct {
 	*BaseSniffer
