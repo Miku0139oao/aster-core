@@ -39,7 +39,12 @@ export default {
       !url.pathname.split("/").at(-1)?.includes(".")
     ) {
       const candidates = url.pathname.endsWith("/")
-        ? [`${url.pathname}index.html`]
+        ? url.pathname === "/"
+          ? ["index.html"]
+          : [
+              `${url.pathname}index.html`,
+              `${url.pathname.replace(/\/$/, "")}.html`,
+            ]
         : [`${url.pathname}.html`, `${url.pathname}/index.html`];
 
       for (const candidate of candidates) {
