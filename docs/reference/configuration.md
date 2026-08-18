@@ -20,7 +20,7 @@ rules:
   - MATCH,DIRECT
 ```
 
-完整帶註解範例：[`config.yaml`](/config.yaml)。
+大型帶註解範例：[`config.yaml`](/config.yaml)。它保留上游風格的廣泛範例，但不保證列出每個 Aster 新增欄位；Aster 的 TUN 欄位以本頁下方清單為準。
 
 ## General
 
@@ -208,7 +208,7 @@ Map 更新先發布奇數 generation，使 classifier 暫時 fail-open，再同�
 - `kernel-direct-ebpf-interfaces`：必填，OpenWrt 通常填 `br-lan`；多個 LAN/guest bridge 應全部列出。狀態 API 的 `requested-interfaces` 是設定值，`interfaces` 是實際掛載的 bridge ports。
 - `kernel-direct-ebpf-mark`：預設 `0x40000000`。Aster 使用 bit mask 比對，不覆寫其他 mark bits。
 - `kernel-direct-max-entries`：learned address set 容量上限，預設 4096，最大 65536；`0` 代表使用預設值，YAML 解析與 `PATCH /configs` 都會把 `0` 寫成 4096，超過上限則拒絕（PATCH 回 400）。
-- `kernel-direct-ebpf-max-entries`：IPv4/IPv6 LPM prefix 總安全上限，預設 65536。
+- `kernel-direct-ebpf-max-entries`：IPv4 與 IPv6 各自 LPM map 的 entry 容量，預設每個 map 65536。
 - `kernel-direct-ebpf-proxy`：啟用雙向 DIRECT/PROXY steering 與安全的 PROXY `/0` fallback；預設關閉。
 - `kernel-direct-ebpf-proxy-redirect`：把 PROXY 決策由 TC 直接送入目前的 Aster TUN，移除 PROXY nftables shim；需要 `kernel-direct-ebpf-proxy`，預設關閉。
 - `kernel-direct-ebpf-proxy-mark`：PROXY classifier bit，預設 `0x20000000`，不可與 DIRECT 或 auto-redirect marks 重疊。

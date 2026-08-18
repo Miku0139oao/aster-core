@@ -36,7 +36,7 @@ GET /api/admin/status
 
 ```json
 {
-  "version": "v1.0.0",
+  "version": "alpha-main-<sha7>",
   "api_version": 1,
   "status": "running",
   "started_at": 1785312000000,
@@ -66,6 +66,8 @@ GET /api/admin/status
   "inbounds": []
 }
 ```
+
+`version` 是 build 注入的 `constant.Version`，應與下載 asset 的 `version.txt` 一致。Aster 目前沒有 `v*` 正式 release；這裡不使用虛構的 SemVer。
 
 ## Protocols
 

@@ -32,7 +32,7 @@ anytls://<password>@<server>:<port>?security=reality&sni=<sni>&fp=chrome&pbk=<pu
 
 ## 1. 下載與安裝 Aster Core
 
-依[下載](/downloads)選擇作業系統與 CPU 架構。目前請用 [`Prerelease-main`](https://github.com/Miku0139oao/aster-core/releases/tag/Prerelease-main)；官方編號 `v*` 尚未發布。舊款 x86-64 優先 `amd64-v1`。
+依[下載](/downloads)選擇作業系統與 CPU 架構。目前請用 [`Prerelease-main`](https://github.com/Miku0139oao/aster-core/releases/tag/Prerelease-main)；這是會隨 `main` 更新的 prerelease，官方編號 `v*` 尚未發布。舊款 x86-64 優先 `amd64-v1` 或 `amd64-compatible`。
 
 下載後，把檔案的 SHA-256 與同一個 release 公布的 checksum 比對：
 
@@ -67,7 +67,7 @@ PowerShell：
 .\aster-core.exe -v
 ```
 
-如果使用 `.deb`、`.rpm`、Arch package 或 OpenWrt package，執行檔通常已安裝為 `/usr/bin/aster-core`。Linux 套件的完整操作方式見[Linux 套件與 systemd](/deployment/linux)。
+如果使用 `.deb`、`.rpm` 或 Arch package，執行檔安裝為 `/usr/bin/aster-core`。OpenWrt package 的實際 binary 是 `/usr/libexec/aster-core`，Nikki 透過 `/usr/bin/mihomo` alternative 呼叫它。Linux 套件的完整操作方式見[Linux 套件與 systemd](/deployment/linux)。
 
 ### 從原始碼建置
 

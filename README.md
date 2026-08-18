@@ -142,7 +142,7 @@ Build the production site with `npm run build`. The original fully annotated YAM
 
 ### 1. Install
 
-Download a binary or native package from [GitHub Releases](https://github.com/Miku0139oao/aster-core/releases), or build from source:
+Download a binary or native package from the current [`Prerelease-main`](https://github.com/Miku0139oao/aster-core/releases/tag/Prerelease-main), or build from source. Aster does not yet have a stable `v*` release; Mihomo `v1.19.29` is the upstream baseline, not an Aster version.
 
 ```sh
 git clone https://github.com/Miku0139oao/aster-core.git
@@ -312,9 +312,10 @@ Every mutation uses optimistic concurrency. Read the current listener `revision`
 
 ### Docker
 
-The published image contains the release binary and GeoIP/GeoSite data. On Linux, host networking is the simplest option for TUN, transparent proxying, and multi-protocol listeners:
+No public Docker image is currently available: the workflow targets `docker.io/miku0139oao/aster-core:main`, but current CI skips the push because Docker Hub credentials are unset. After preparing `bin/version.txt` and the matching `bin/*.gz` release artifact, build a local image; on Linux, host networking is the simplest option for TUN, transparent proxying, and multi-protocol listeners:
 
 ```sh
+docker buildx build --load --platform linux/amd64 -t aster-core:local .
 docker run -d \
   --name aster-core \
   --restart unless-stopped \
@@ -322,7 +323,7 @@ docker run -d \
   --cap-add NET_ADMIN \
   --device /dev/net/tun \
   -v "$PWD/config:/root/.config/mihomo" \
-  miku0139oao/aster-core:latest
+  aster-core:local
 ```
 
 The mounted directory must contain `config.yaml`. Add only the privileges required by your configuration; ordinary HTTP/SOCKS use requires neither `NET_ADMIN` nor `/dev/net/tun`. Docker Desktop users should publish the configured TCP and UDP ports instead of relying on Linux host networking. When using `-p`, set `allow-lan: true` so the proxy listens beyond the container's loopback interface.

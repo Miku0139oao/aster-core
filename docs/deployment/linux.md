@@ -27,8 +27,10 @@ aster-core@.service
 ## 安裝前驗證
 
 ```sh
-sha256sum -c checksums.txt
+sha256sum --check --ignore-missing checksums.txt
 ```
+
+請在已下載的目標 asset 與 `checksums.txt` 所在目錄執行。Checksum 清單包含該 release 的所有 assets；只下載一個套件時，不加 `--ignore-missing` 會把其他未下載檔案報成失敗。
 
 套件安裝後：
 
