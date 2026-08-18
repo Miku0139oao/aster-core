@@ -139,6 +139,7 @@ func (s *packetSender) processPacket(pc C.PacketConn, packet C.PacketAdapter) {
 }
 
 func (s *packetSender) Process(pc C.PacketConn, proxy C.WriteBackProxy) {
+	defer s.dropAll()
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -173,7 +174,13 @@ func (s *packetSender) Send(packet C.PacketAdapter) {
 
 	select {
 	case s.ch <- packet:
-		// put ok, so don't drop packet, will process by other side of chan
+		// Close may drain the channel between enqueue and now. Re-drain so a
+		// packet that landed after dropAll is not stranded without Drop().
+		select {
+		case <-s.ctx.Done():
+			s.dropAll()
+		default:
+		}
 	case <-s.ctx.Done():
 		packet.Drop() // sender closed when putting data to chan
 	default:
