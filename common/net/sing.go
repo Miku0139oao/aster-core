@@ -106,19 +106,19 @@ func copyConn(destination io.Writer, source io.Reader) (n int64, err error) {
 			if writeN != readN && writeErr == nil {
 				writeErr = io.ErrShortWrite
 			}
-			if writeErr != nil {
-				if firstWrite {
-					writeErr = network.ReportHandshakeFailure(originSource, writeErr)
-				}
-				return n, writeErr
-			}
-			transferred := int64(readN)
+			transferred := int64(writeN)
 			n += transferred
 			for _, counter := range readCounters {
 				counter(transferred)
 			}
 			for _, counter := range writeCounters {
 				counter(transferred)
+			}
+			if writeErr != nil {
+				if firstWrite {
+					writeErr = network.ReportHandshakeFailure(originSource, writeErr)
+				}
+				return n, writeErr
 			}
 			firstWrite = false
 		}
