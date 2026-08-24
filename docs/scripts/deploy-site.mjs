@@ -57,7 +57,7 @@ if (!clientStat.isDirectory()) {
 
 const remoteCommand = noSymlink
   ? `mkdir -p "${releaseDirectory}" && tar -xzf - -C "${releaseDirectory}"`
-  : `set -e; mkdir -p "${releaseDirectory}" && tar -xzf - -C "${releaseDirectory}" && ln -sfn "${releaseName}" "${currentSymlink}"`;
+  : `set -e; mkdir -p "${releaseDirectory}" && tar -xzf - -C "${releaseDirectory}" && ln -sfn "${releaseDirectory}" "${currentSymlink}"`;
 
 if (dryRun) {
   console.log("[DRY-RUN] client:", clientDirectory);

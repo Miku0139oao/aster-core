@@ -57,7 +57,7 @@ name=${dt}-${sha}
 rel=/srv/astercore-docs/releases/${name}
 
 tar -czf - -C dist/client . | ssh root@miku.zerotwo02.net \
-  "mkdir -p ${rel} && tar -xzf - -C ${rel} && cd /srv/astercore-docs && ln -sfn ${name} current"
+  "mkdir -p ${rel} && tar -xzf - -C ${rel} && ln -sfn ${rel} /srv/astercore-docs/current"
 ```
 
 ## 新增路由如何生效
