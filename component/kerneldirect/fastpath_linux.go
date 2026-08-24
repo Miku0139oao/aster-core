@@ -125,6 +125,7 @@ type tcFastPath struct {
 	generationValue        uint32
 	updatedAt              time.Time
 	lastError              string
+	markRulesInstalled     bool
 	closed                 bool
 }
 
@@ -180,6 +181,24 @@ func NewFastPath(options FastPathOptions) (FastPath, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Remove owned leftovers before allocating any maps/programs. Early map or
+	// verifier failures must not leave a classifier from a prior crashed run
+	// active indefinitely.
+	cleanupInterfaces := append(append([]string(nil), requested...), interfaces...)
+	sort.Strings(cleanupInterfaces)
+	cleanupInterfaces = compactStrings(cleanupInterfaces)
+	for _, interfaceName := range cleanupInterfaces {
+		link, linkErr := netlink.LinkByName(interfaceName)
+		if linkErr != nil {
+			return nil, fmt.Errorf("find TC interface %s: %w", interfaceName, linkErr)
+		}
+		if err := removeStaleTCFilters(link, interfaceName); err != nil {
+			return nil, err
+		}
+	}
+	if err := removeMarkRules(options.TableName); err != nil {
+		return nil, fmt.Errorf("remove stale nftables eBPF decision rules: %w", err)
+	}
 
 	// Kernels since 5.11 account BPF memory with memcg, while older OpenWrt
 	// builds still need RLIMIT_MEMLOCK raised.
@@ -204,8 +223,8 @@ func NewFastPath(options FastPathOptions) (FastPath, error) {
 		entries6:               make(map[lpmKey6]uint32),
 	}
 	if err := f.open(); err != nil {
-		_ = f.Close()
-		return nil, err
+		cleanupErr := f.Close()
+		return nil, errors.Join(err, cleanupErr)
 	}
 	registerFastPath(f)
 	return f, nil
@@ -291,18 +310,6 @@ func (f *tcFastPath) open() error {
 		return fmt.Errorf("load TC LPM/LRU classifier: %w", err)
 	}
 
-	cleanupInterfaces := append(append([]string(nil), f.requested...), f.interfaces...)
-	sort.Strings(cleanupInterfaces)
-	cleanupInterfaces = compactStrings(cleanupInterfaces)
-	for _, interfaceName := range cleanupInterfaces {
-		link, linkErr := netlink.LinkByName(interfaceName)
-		if linkErr != nil {
-			return fmt.Errorf("find TC interface %s: %w", interfaceName, linkErr)
-		}
-		if err := removeStaleTCFilters(link, interfaceName); err != nil {
-			return err
-		}
-	}
 	for _, interfaceName := range f.interfaces {
 		if err := f.attach(interfaceName); err != nil {
 			return err
@@ -311,6 +318,7 @@ func (f *tcFastPath) open() error {
 	if err := installMarkRules(f.tableName, f.mark, f.proxyMark, f.inputMark, f.proxySteering && f.proxyRedirectIfIndex == 0); err != nil {
 		return fmt.Errorf("install nftables eBPF decision rules: %w", err)
 	}
+	f.markRulesInstalled = true
 	f.updatedAt = time.Now()
 	return nil
 }
@@ -929,8 +937,21 @@ func (f *tcFastPath) replaceLocked(sets DecisionSets) error {
 }
 
 func buildLPMEntries(sets DecisionSets, staticDirect, staticProxy, staticBypass []netip.Prefix, proxySteering bool, maxEntries uint32) (map[lpmKey4]uint32, map[lpmKey6]uint32, error) {
+	// FastPathOverhead counts whatever slices it is given, including static
+	// PROXY prefixes when steering is off. Only reserve prefixes this packer
+	// will actually write so learned destinations are not dropped extra.
+	reservedProxy := staticProxy
+	if !proxySteering {
+		reservedProxy = nil
+	}
+	overhead := FastPathOverhead(proxySteering, staticDirect, reservedProxy, staticBypass)
+	if overhead > maxEntries {
+		return nil, nil, fmt.Errorf("decision LPM maps exceed %d prefixes", maxEntries)
+	}
+	learnedBudget := maxEntries - overhead
 	entries4 := make(map[lpmKey4]uint32)
 	entries6 := make(map[lpmKey6]uint32)
+	learned := uint32(0)
 	add := func(prefix netip.Prefix, decision uint32) {
 		prefix, ok := normalizePrefix(prefix)
 		if !ok {
@@ -942,27 +963,57 @@ func buildLPMEntries(sets DecisionSets, staticDirect, staticProxy, staticBypass 
 			entries6[lpmKey6{PrefixLen: uint32(prefix.Bits()), Address: prefix.Addr().As16()}] = decision
 		}
 	}
+	decisionFor := func(prefix netip.Prefix) (uint32, bool) {
+		prefix, ok := normalizePrefix(prefix)
+		if !ok {
+			return 0, false
+		}
+		if prefix.Addr().Is4() {
+			decision, exists := entries4[lpmKey4{PrefixLen: uint32(prefix.Bits()), Address: prefix.Addr().As4()}]
+			return decision, exists
+		}
+		decision, exists := entries6[lpmKey6{PrefixLen: uint32(prefix.Bits()), Address: prefix.Addr().As16()}]
+		return decision, exists
+	}
+	// Budget applies only to new learned keys. Existing keys can be updated
+	// without consuming capacity; DIRECT never overwrites an exact PROXY key.
+	addLearned := func(prefix netip.Prefix, decision uint32) {
+		normalized, ok := normalizePrefix(prefix)
+		if !ok {
+			return
+		}
+		current, exists := decisionFor(normalized)
+		if decision == decisionDirect && exists && current == decisionProxy {
+			return
+		}
+		if !exists && learned >= learnedBudget {
+			return
+		}
+		add(normalized, decision)
+		if !exists {
+			learned++
+		}
+	}
 	for _, prefix := range staticDirect {
 		add(prefix, decisionDirect)
-	}
-	if sets.Direct != nil {
-		for _, prefix := range sets.Direct.Prefixes() {
-			add(prefix, decisionDirect)
-		}
 	}
 	if proxySteering {
 		add(netip.MustParsePrefix("0.0.0.0/0"), decisionProxy)
 		add(netip.MustParsePrefix("::/0"), decisionProxy)
-		// Add PROXY last so it wins an exact-prefix collision. A
-		// more-specific DIRECT prefix still wins naturally through LPM
-		// longest-prefix matching.
 		for _, prefix := range staticProxy {
 			add(prefix, decisionProxy)
 		}
+		// Fail closed under capacity pressure: reserve learned slots for PROXY
+		// before DIRECT so a nested static DIRECT prefix cannot bypass Aster.
 		if sets.Proxy != nil {
 			for _, prefix := range sets.Proxy.Prefixes() {
-				add(prefix, decisionProxy)
+				addLearned(prefix, decisionProxy)
 			}
+		}
+	}
+	if sets.Direct != nil {
+		for _, prefix := range sets.Direct.Prefixes() {
+			addLearned(prefix, decisionDirect)
 		}
 	}
 	// Host addresses are added last and at full prefix length. This prevents a
@@ -988,22 +1039,6 @@ func normalizePrefixes(prefixes []netip.Prefix) []netip.Prefix {
 		return netipx.ComparePrefix(result[i], result[j]) < 0
 	})
 	return result
-}
-
-func normalizePrefix(prefix netip.Prefix) (netip.Prefix, bool) {
-	if !prefix.IsValid() {
-		return netip.Prefix{}, false
-	}
-	addr := prefix.Addr()
-	bits := prefix.Bits()
-	if addr.Is4In6() {
-		addr = addr.Unmap()
-		bits -= 96
-	}
-	if bits < 0 || bits > addr.BitLen() {
-		return netip.Prefix{}, false
-	}
-	return netip.PrefixFrom(addr, bits).Masked(), true
 }
 
 type bpfMapWriter interface {
@@ -1120,32 +1155,62 @@ func (f *tcFastPath) Status() FastPathStatus {
 func (f *tcFastPath) Close() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.closed {
-		return nil
+	if !f.closed {
+		f.closed = true
+		unregisterFastPath(f)
 	}
-	f.closed = true
-	unregisterFastPath(f)
+	// Close remains retryable: resources are cleared from the struct only
+	// after their cleanup succeeds. A transient netlink/nftables failure on the
+	// first call can therefore be repaired by a later call.
 	result := f.detachFiltersLocked()
-	if err := removeMarkRules(f.tableName); err != nil {
-		result = errors.Join(result, fmt.Errorf("remove nftables eBPF decision rules: %w", err))
+	if f.markRulesInstalled {
+		if err := removeMarkRules(f.tableName); err != nil {
+			result = errors.Join(result, fmt.Errorf("remove nftables eBPF decision rules: %w", err))
+		} else {
+			f.markRulesInstalled = false
+		}
 	}
 	if f.program != nil {
-		result = errors.Join(result, f.program.Close())
+		if err := f.program.Close(); err != nil {
+			result = errors.Join(result, err)
+		} else {
+			f.program = nil
+		}
 	}
 	if f.tcStats != nil {
-		result = errors.Join(result, f.tcStats.Close())
+		if err := f.tcStats.Close(); err != nil {
+			result = errors.Join(result, err)
+		} else {
+			f.tcStats = nil
+		}
 	}
 	if f.generation != nil {
-		result = errors.Join(result, f.generation.Close())
+		if err := f.generation.Close(); err != nil {
+			result = errors.Join(result, err)
+		} else {
+			f.generation = nil
+		}
 	}
 	if f.flows != nil {
-		result = errors.Join(result, f.flows.Close())
+		if err := f.flows.Close(); err != nil {
+			result = errors.Join(result, err)
+		} else {
+			f.flows = nil
+		}
 	}
 	if f.ipv6 != nil {
-		result = errors.Join(result, f.ipv6.Close())
+		if err := f.ipv6.Close(); err != nil {
+			result = errors.Join(result, err)
+		} else {
+			f.ipv6 = nil
+		}
 	}
 	if f.ipv4 != nil {
-		result = errors.Join(result, f.ipv4.Close())
+		if err := f.ipv4.Close(); err != nil {
+			result = errors.Join(result, err)
+		} else {
+			f.ipv4 = nil
+		}
 	}
 	return result
 }

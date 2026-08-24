@@ -54,6 +54,7 @@ func (c *wrappedPacketConn) addSession(session *serverSession) error {
 }
 
 func (c *wrappedPacketConn) readSession(session *serverSession) {
+	defer session.Close()
 	buf := make([]byte, 2000)
 	for {
 		n, err := session.Read(buf)
@@ -67,6 +68,17 @@ func (c *wrappedPacketConn) readSession(session *serverSession) {
 		case c.readChan <- packet{addr: session, data: payload}:
 		}
 	}
+}
+
+func (c *wrappedPacketConn) removeSession(session *serverSession) {
+	c.mu.Lock()
+	if c.sessions != nil {
+		key := string(session.sessionID)
+		if c.sessions[key] == session {
+			delete(c.sessions, key)
+		}
+	}
+	c.mu.Unlock()
 }
 
 func (c *wrappedPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {

@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	C "github.com/Miku0139oao/aster-core/constant"
+	P "github.com/Miku0139oao/aster-core/constant/provider"
 	"github.com/Miku0139oao/aster-core/rules/common"
 )
 
@@ -63,6 +64,27 @@ func NewAND(payload string, adapter string, parseRule common.ParseRuleFunc) (*Lo
 		return nil, err
 	}
 	return logic, nil
+}
+
+// BindRuleProviders recursively pins nested RULE-SET rules to the provider
+// generation that was validated with this logic rule.
+func (logic *Logic) BindRuleProviders(providers map[string]P.RuleProvider) {
+	for _, rule := range logic.rules {
+		if binder, ok := rule.(interface {
+			BindRuleProviders(map[string]P.RuleProvider)
+		}); ok {
+			binder.BindRuleProviders(providers)
+		}
+	}
+	for _, rules := range logic.subRules {
+		for _, rule := range rules {
+			if binder, ok := rule.(interface {
+				BindRuleProviders(map[string]P.RuleProvider)
+			}); ok {
+				binder.BindRuleProviders(providers)
+			}
+		}
+	}
 }
 
 type Range struct {

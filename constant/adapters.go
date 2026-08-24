@@ -289,8 +289,12 @@ type PacketAdapter interface {
 // packets from the same transparent-proxy flow on the same worker and NAT
 // entry. Non-IP/custom addresses fall back to Raw.
 type UDPNatKey struct {
-	AddrPort netip.AddrPort
-	Raw      string
+	AddrPort        netip.AddrPort
+	Raw             string
+	IngressAddrPort netip.AddrPort
+	IngressRaw      string
+	IngressType     Type
+	IngressName     string
 }
 
 func NewUDPNatKey(addr net.Addr) UDPNatKey {
@@ -303,6 +307,28 @@ func NewUDPNatKey(addr net.Addr) UDPNatKey {
 		return UDPNatKey{}
 	}
 	return UDPNatKey{Raw: addr.String()}
+}
+
+// NewUDPNatKeyForPacket adds a stable ingress namespace to the client source
+// tuple. The global NAT table must not merge equal source ports received by
+// different listeners or inbound protocols.
+func NewUDPNatKeyForPacket(packet UDPPacket, metadata *Metadata) UDPNatKey {
+	key := NewUDPNatKey(packet.LocalAddr())
+	if metadata != nil {
+		key.IngressType = metadata.Type
+		key.IngressName = metadata.InName
+		if metadata.InIP.IsValid() {
+			key.IngressAddrPort = netip.AddrPortFrom(metadata.InIP.Unmap(), metadata.InPort)
+		}
+	}
+	if !key.IngressAddrPort.IsValid() {
+		if packetWithIngress, ok := packet.(UDPPacketInAddr); ok {
+			ingress := NewUDPNatKey(packetWithIngress.InAddr())
+			key.IngressAddrPort = ingress.AddrPort
+			key.IngressRaw = ingress.Raw
+		}
+	}
+	return key
 }
 
 func ParseUDPNatKey(raw string) UDPNatKey {
@@ -342,6 +368,12 @@ func (s *packetAdapter) Key() UDPNatKey {
 }
 
 func (s *packetAdapter) WriteBackTarget() WriteBack {
+	// Deprecated UDPIn callers can hand an already wrapped PacketAdapter back
+	// to Tunnel.HandleUDPPacket. Return the stable packet beneath every pooled
+	// wrapper so dropping the outer adapter cannot recycle the write-back target.
+	if nested, ok := s.UDPPacket.(PacketAdapter); ok {
+		return nested.WriteBackTarget()
+	}
 	return s.UDPPacket
 }
 
@@ -356,7 +388,7 @@ func NewPacketAdapter(packet UDPPacket, metadata *Metadata) PacketAdapter {
 	adapter := packetAdapterPool.Get().(*packetAdapter)
 	adapter.UDPPacket = packet
 	adapter.metadata = metadata
-	adapter.key = NewUDPNatKey(packet.LocalAddr())
+	adapter.key = NewUDPNatKeyForPacket(packet, metadata)
 	return adapter
 }
 
@@ -381,28 +413,21 @@ type PacketSender interface {
 	DoSniff(*Metadata) error
 	// AddMapping add a destination NAT record
 	AddMapping(originMetadata *Metadata, metadata *Metadata)
-	// RestoreReadFrom restore destination NAT for ReadFrom
-	// the implement must ensure returned netip.Add is valid (or just return input addr)
-	RestoreReadFrom(addr netip.Addr) netip.Addr
+	// RestoreReadFrom restores destination NAT for ReadFrom. Including the port
+	// avoids collapsing distinct aliases that resolve to one IP on different
+	// services. The implementation returns the input when no mapping exists.
+	RestoreReadFrom(addr netip.AddrPort) netip.AddrPort
 	// RefreshReadDeadline keeps the UDP association alive without resetting the
 	// underlying socket deadline for every packet.
 	RefreshReadDeadline(PacketConn)
 }
 
 type NatTable interface {
-	GetOrCreate(key UDPNatKey, maker func() PacketSender) (PacketSender, bool)
+	GetOrCreate(key UDPNatKey, maker func() PacketSender) (sender PacketSender, loaded bool, admitted bool)
 
 	Delete(key UDPNatKey)
 
-	GetForLocalConn(lAddr, rAddr string) *net.UDPConn
+	GetOrCreateLocalConn(flow UDPNatKey, remote string, maker func() (*net.UDPConn, error)) (*net.UDPConn, error)
 
-	AddForLocalConn(lAddr, rAddr string, conn *net.UDPConn) bool
-
-	RangeForLocalConn(lAddr string, f func(key string, value *net.UDPConn) bool)
-
-	GetOrCreateLockForLocalConn(lAddr string, key string) (*sync.Cond, bool)
-
-	DeleteForLocalConn(lAddr, key string)
-
-	DeleteLockForLocalConn(lAddr, key string)
+	RangeForLocalConn(flow UDPNatKey, f func(key string, value *net.UDPConn) bool)
 }

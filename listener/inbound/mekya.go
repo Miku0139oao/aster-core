@@ -13,6 +13,7 @@ type MekyaConfig struct {
 	MaxWriteDurationMs             int        `inbound:"max-write-duration-ms,omitempty"`
 	MaxSimultaneousWriteConnection int        `inbound:"max-simultaneous-write-connection,omitempty"`
 	PacketWritingBuffer            int        `inbound:"packet-writing-buffer,omitempty"`
+	MaxSessions                    int        `inbound:"max-sessions,omitempty"`
 	KCP                            MKCPConfig `inbound:"kcp,omitempty"`
 }
 
@@ -28,6 +29,7 @@ func (c MekyaConfig) Build() LC.MekyaConfig {
 		MaxWriteDurationMs:             c.MaxWriteDurationMs,
 		MaxSimultaneousWriteConnection: c.MaxSimultaneousWriteConnection,
 		PacketWritingBuffer:            c.PacketWritingBuffer,
+		MaxSessions:                    c.MaxSessions,
 		KCP:                            c.KCP.Build(),
 	}
 }

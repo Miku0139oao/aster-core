@@ -14,6 +14,7 @@ type RuleSet struct {
 	adapter          string
 	isSrc            bool
 	noResolveIP      bool
+	provider         P.RuleProvider
 }
 
 func (rs *RuleSet) RuleType() C.RuleType {
@@ -70,17 +71,30 @@ func (rs *RuleSet) KernelDirectMatchSafe() bool {
 }
 
 func (rs *RuleSet) getProvider() (P.RuleProvider, bool) {
+	if rs.provider != nil {
+		return rs.provider, true
+	}
 	pp, ok := tunnel.RuleProviders()[rs.ruleProviderName]
 	return pp, ok
 }
 
-func NewRuleSet(ruleProviderName string, adapter string, isSrc bool, noResolveIP bool) (*RuleSet, error) {
+// BindRuleProviders pins this rule to the provider generation parsed with its
+// configuration. Old in-flight routing snapshots therefore cannot observe a
+// replacement provider from a newer reload.
+func (rs *RuleSet) BindRuleProviders(providers map[string]P.RuleProvider) {
+	rs.provider = providers[rs.ruleProviderName]
+}
+
+func NewRuleSet(ruleProviderName string, adapter string, isSrc bool, noResolveIP bool, providers ...P.RuleProvider) (*RuleSet, error) {
 	rs := &RuleSet{
 		Base:             common.Base{},
 		ruleProviderName: ruleProviderName,
 		adapter:          adapter,
 		isSrc:            isSrc,
 		noResolveIP:      noResolveIP,
+	}
+	if len(providers) > 0 {
+		rs.provider = providers[0]
 	}
 	return rs, nil
 }

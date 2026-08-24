@@ -71,3 +71,33 @@ func TestPool_MaxAge(t *testing.T) {
 	elm, _ = pool.Get()
 	assert.Equal(t, 1, elm)
 }
+
+func TestRecycleDrainsWithoutWaitingForChannelClose(t *testing.T) {
+	evicted := make(chan int, 2)
+	p := &Pool[int]{pool: &pool[int]{
+		ch: make(chan *entry[int], 2),
+		evict: func(value int) {
+			evicted <- value
+		},
+	}}
+	p.pool.ch <- &entry[int]{elm: 1}
+	p.pool.ch <- &entry[int]{elm: 2}
+
+	done := make(chan struct{})
+	go func() {
+		recycle(p)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("recycle blocked on an open, empty pool channel")
+	}
+	close(evicted)
+	var got []int
+	for value := range evicted {
+		got = append(got, value)
+	}
+	assert.ElementsMatch(t, []int{1, 2}, got)
+}

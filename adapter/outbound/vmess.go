@@ -124,6 +124,7 @@ type MekyaOptions struct {
 	MaxWriteDurationMs             int         `proxy:"max-write-duration-ms,omitempty"`
 	MaxSimultaneousWriteConnection int         `proxy:"max-simultaneous-write-connection,omitempty"`
 	PacketWritingBuffer            int         `proxy:"packet-writing-buffer,omitempty"`
+	MaxSessions                    int         `proxy:"max-sessions,omitempty"`
 	KCP                            MKCPOptions `proxy:"kcp,omitempty"`
 }
 
@@ -139,6 +140,7 @@ func (o MekyaOptions) Build() mekya.Config {
 		MaxWriteDurationMs:             o.MaxWriteDurationMs,
 		MaxSimultaneousWriteConnection: o.MaxSimultaneousWriteConnection,
 		PacketWritingBuffer:            o.PacketWritingBuffer,
+		MaxSessions:                    o.MaxSessions,
 	}
 }
 

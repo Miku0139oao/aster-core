@@ -3,6 +3,7 @@ package cidr
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"net/netip"
 
@@ -35,6 +36,8 @@ func (ss *IpCidrSet) WriteBin(w io.Writer) (err error) {
 	return nil
 }
 
+const maxBinaryIPRanges = 1 << 20
+
 func ReadIpCidrSet(r io.Reader) (ss *IpCidrSet, err error) {
 	// version
 	version := make([]byte, 1)
@@ -57,7 +60,10 @@ func ReadIpCidrSet(r io.Reader) (ss *IpCidrSet, err error) {
 	if length < 1 {
 		return nil, errors.New("length is invalid")
 	}
-	ss.rr = make([]netipx.IPRange, length)
+	if length > maxBinaryIPRanges {
+		return nil, fmt.Errorf("IP range count %d exceeds maximum %d", length, maxBinaryIPRanges)
+	}
+	ss.rr = make([]netipx.IPRange, int(length))
 	for i := int64(0); i < length; i++ {
 		var a16 [16]byte
 		err = binary.Read(r, binary.BigEndian, &a16)
@@ -70,8 +76,14 @@ func ReadIpCidrSet(r io.Reader) (ss *IpCidrSet, err error) {
 			return nil, err
 		}
 		to := netip.AddrFrom16(a16).Unmap()
-		ss.rr[i] = netipx.IPRangeFrom(from, to)
+		rangeValue := netipx.IPRangeFrom(from, to)
+		if !rangeValue.IsValid() {
+			return nil, fmt.Errorf("IP range %d is invalid", i)
+		}
+		ss.rr[i] = rangeValue
 	}
-
+	if err := ss.Merge(); err != nil {
+		return nil, fmt.Errorf("normalize IP ranges: %w", err)
+	}
 	return ss, nil
 }

@@ -43,9 +43,34 @@ Padding 規則在載入設定時就先解析好。真正傳資料時，Aster 只
 
 ## 以下是完整測試數據
 
+## 2026-08-24 review wave 本機驗證
+
+這一輪以 `8462a265` 為基底的未發布工作樹，對 Mihomo `v1.19.30`（`ac017cdd`）重新建立獨立 Windows amd64 test binary。每個樣本都是新程序，固定 `GOMAXPROCS=1`、`-test.cpu=1`、`GOAMD64=v1`、Go 1.26.3、每輪 2 秒；Aster／Mihomo 交錯 7 輪。這是 5900X 開發機的 regression validation，不取代下方 OpenWrt 主要結果，也不是 WAN 吞吐量。
+
+| 核心工作 | Mihomo 1.19.30 中位數（範圍） | Aster 中位數（範圍） | 配置量 |
+| --- | ---: | ---: | ---: |
+| UDP metadata | 54.44 ns（49.80–71.77） | 12.22 ns（11.76–12.48），**4.45×** | 416 B／1 → 0 B／0 |
+| 停用 debug log | 206.3 ns（204.3–245.5） | 2.132 ns（2.096–3.063），**96.8×** | 24 B／1 → 0 B／0 |
+| AnyTLS frame 1 KiB | 72.55 ns（66.80–82.65） | 31.67 ns（30.93–33.76），**2.29×** | 64 B／1 → 0 B／0 |
+| AnyTLS frame 16 KiB | 322.8 ns（320.4–354.0） | 244.3 ns（218.4–277.3），**1.32×** | 64 B／1 → 0 B／0 |
+| 共用 relay 32 KiB | 4.038 µs（4.005–4.157） | 3.916 µs（3.763–4.477） | 64 B／1 → 0 B／0 |
+| tunnel TCP relay 32 KiB | 4.079 µs（3.892–4.666） | 4.016 µs（3.840–4.198） | 64 B／1 → 0 B／0 |
+
+兩個 TCP relay 的範圍重疊，所以這輪只確認 **Aster 維持零配置，沒有宣稱桌面 TCP 顯著加速**。UDP、log 與 AnyTLS 的配置量和方向則與 OpenWrt 結果一致。
+
+同一工作樹內、同一台機器的 review 前後回歸 benchmark 顯示：
+
+| Aster-only hot path | Review 前 | Review 後 | 結果 |
+| --- | ---: | ---: | ---: |
+| Kernel DIRECT 既有 flow refresh | 15.286 µs；64 B／1 alloc | 270.8 ns；0 B／0 alloc | **56.4×**；未到期時不再全表掃描 |
+| 合併後 100k 個不連續 CIDR 的 miss | 2.385 ms；0 alloc | 114.7 ns；0 alloc | **約 20,790×**；恢復二分搜尋 |
+| UDP association 新增 1,000 個 mapping | 41.31 ms；46.37 MB | 486.3 µs；542.6 KiB | **84.9×**；移除每次完整 map copy |
+
+Windows 完整核心、相同最小設定、啟動後 15 秒的五輪中位數：Aster working set 19.00 MiB、Mihomo 18.07 MiB（Aster +0.93 MiB／+5.2%）；private bytes 52.52 MiB 對 51.29 MiB（+1.23 MiB／+2.4%）。這些是 Windows 指標，不能與 Linux RSS/PSS 混用；也再次證明不能宣稱 Aster 空載一定比較省 RAM。
+
 ## OpenWrt 實機比較（主要結果）
 
-比較基線為 Mihomo `v1.19.30`、commit `ac017cdd246ce8bd547653d927e7bf77d7ee73d5`。Aster 為 `0590d3a4` 當時的 `main`（含這波 review／修正與 128 KiB frame pool）。兩個版本使用同一組 `go test -c` Linux amd64 測試程式與參數，依序執行三輪，每輪至少 2 秒；表格採三輪中位數。2026-08-19 在同一台 OpenWrt 軟路由、於修正落地後重跑。
+比較基線為 Mihomo `v1.19.30`、commit `ac017cdd246ce8bd547653d927e7bf77d7ee73d5`。Aster 為 `0590d3a4` 當時的 `main`（含這波 review／修正與 128 KiB frame pool）。兩個版本各自以相同 Go 版本、target、flags 與 benchmark harness 建立 `go test -c` Linux amd64 binary，依序執行三輪，每輪至少 2 秒；表格採三輪中位數。2026-08-19 在同一台 OpenWrt 軟路由、於修正落地後重跑。
 
 | 環境項目 | 實際值 |
 | --- | --- |
@@ -64,7 +89,7 @@ Padding 規則在載入設定時就先解析好。真正傳資料時，Aster 只
 | 停用的 debug log | 228.0 ns；24 B／1 alloc | 2.254 ns；0 B／0 alloc | **101× faster**；消除 event 配置 |
 | AnyTLS frame（1 KiB） | 71.54 ns；64 B／1 alloc | 35.98 ns；0 B／0 alloc | **1.99× faster**；延遲降低 50% |
 | AnyTLS frame（16 KiB） | 267.1 ns；64 B／1 alloc | 196.8 ns；0 B／0 alloc | **1.36× faster**；延遲降低 26% |
-| AnyTLS frame（64 KiB） | 無同名 bench | 1.148 µs；0 B／0 alloc | 128 KiB pool 後常見 64 KiB frame 已零配置 |
+| AnyTLS frame（64 KiB） | 無同名 bench | 1.148 µs；0 B／0 alloc | 獨立 `WriteDataFrame/65536` fixture 在 128 KiB pool 後為零配置 |
 | TCP relay（32 KiB） | 4.546 µs；7.21 GB/s；64 B／1 alloc | 4.449 µs；7.37 GB/s；0 B／0 alloc | 延遲降低 **2.1%**；吞吐提高 **2.2%** |
 
 ### 三輪測量範圍
@@ -146,7 +171,7 @@ Padding 規則在載入設定時就先解析好。真正傳資料時，Aster 只
 | AnyTLS frame（16 KiB） | 1.075–1.092 µs/op | 772.3–801.6 ns/op |
 | TCP relay（32 KiB） | 17.598–17.756 µs/op | 16.771–16.841 µs/op |
 
-受限後的絕對處理時間約變成原本的四倍，證明 CPU quota 確實生效；Aster 在五項延遲工作中仍全部較快。人話來說，**硬體越弱，Aster 省掉的 CPU 工作通常越有感**：TCP 改善由未限速的 2.1% 增至 4.7%，AnyTLS 1 KiB 由 1.99 倍增至 2.37 倍。UDP 倍率由 5.43 倍略降到 5.24 倍，所以不能保證每項優化都會隨硬體變弱而等比例放大。首頁仍採用未限速 OpenWrt 對 Mihomo 1.19.30 的 **TCP 約 2%**，不使用這組較好看的 4.7% 當主要宣傳數字。
+受限後的絕對處理時間約變成原本的四倍，證明 CPU quota 確實生效；Aster 在五項延遲工作中仍全部較快。**在這個相同 x86 VM 的 CPU quota 實驗裡**，TCP 改善由未限速的 2.1% 增至 4.7%，AnyTLS 1 KiB 由 1.99 倍增至 2.37 倍。UDP 倍率則由 5.43 倍略降到 5.24 倍；這不能外推成「所有較弱硬體都會有更大提升」，ARM／MIPS、cache 與記憶體頻寬仍須實機重測。首頁仍採用未限速 OpenWrt 對 Mihomo 1.19.30 的 **TCP 約 2%**，不使用這組較好看的 4.7% 當主要宣傳數字。
 
 ## 各協議 loopback 測試
 
@@ -203,7 +228,7 @@ Padding 規則在載入設定時就先解析好。真正傳資料時，Aster 只
 | 停用的 debug log | 455.3 ns；24 B／1 alloc | 2.268 ns；0 B／0 alloc | **201× faster**；消除 event 配置 |
 | AnyTLS frame（1 KiB） | 74.99 ns；64 B／1 alloc | 34.70 ns；0 B／0 alloc | **2.16× faster** |
 | AnyTLS frame（16 KiB） | 260.0 ns；64 B／1 alloc | 184.0 ns；0 B／0 alloc | **1.41× faster** |
-| AnyTLS frame（64 KiB） | 無同名 bench | 1.056 µs；0 B／0 alloc | 128 KiB pool 後零配置 |
+| AnyTLS frame（64 KiB） | 無同名 bench | 1.056 µs；0 B／0 alloc | 獨立 `WriteDataFrame/65536` fixture 為零配置 |
 | TCP relay（32 KiB） | 10.044 µs；3.26 GB/s；64 B／1 alloc | 11.436 µs；2.87 GB/s；0 B／0 alloc | 範圍重疊；此輪 Aster 中位數較慢，**不以 5900X TCP 下加速結論** |
 
 三輪範圍：UDP Mihomo 145.8–155.1 ns、Aster pool 11.69–12.21 ns；log Mihomo 442.9–456.5 ns、Aster 2.227–2.352 ns；AnyTLS 1 KiB Mihomo 74.12–77.73 ns、Aster 33.21–36.36 ns；AnyTLS 16 KiB Mihomo 257.9–271.6 ns、Aster 182.9–200.4 ns；TCP Mihomo 9.963–11.705 µs、Aster 10.394–11.947 µs。32 KiB `Relay32KiBComparison` 中位數 Aster 9.332 µs 對 Mihomo 10.775 µs。桌面 TCP 在背景負載下波動大，首頁仍用 OpenWrt。
@@ -214,7 +239,7 @@ Padding 規則在載入設定時就先解析好。真正傳資料時，Aster 只
 
 ```sh
 go test \
-  ./component/nat ./constant ./listener/sing ./log \
+  ./common/net ./component/nat ./constant ./listener/sing ./log \
   ./transport/anytls/padding ./transport/anytls/session \
   ./tunnel ./tunnel/statistic \
   -run '^$' \
@@ -230,7 +255,7 @@ go test \
 - 這些是 in-process microbenchmarks，主要量測 Aster Core 自身的額外開銷。
 - TCP 與 AnyTLS 的 GB/s 是記憶體／`net.Pipe` 路徑，不是 WAN 實際吞吐量。
 - 真實代理速度還會受到加密、RTT、丟包、MTU、NIC、作業系統、CPU 架構與服務端影響。
-- 常見的 1 KiB、16 KiB 與 64 KiB AnyTLS frame 路徑已達零配置（64 KiB 靠 128 KiB 物件池）。更大或不對齊的 buffer 仍可能配置。
+- 獨立 `WriteDataFrame` fixture 的 1 KiB、16 KiB 與 64 KiB case 為零配置（64 KiB 靠 128 KiB 物件池）；這不代表完整 AnyTLS session 的所有路徑都零配置。更大或不對齊的 buffer 仍可能配置。
 - 微基準最適合防止效能回退，而不是承諾任何裝置都會得到相同網速。
 
 ## TC eBPF 的實機反例

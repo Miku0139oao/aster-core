@@ -42,6 +42,7 @@ type ClientOptions struct {
 
 type Client struct {
 	ctx              context.Context
+	cancel           context.CancelFunc
 	dialer           C.Dialer
 	dialOptions      DialOptionsFunc
 	server           string
@@ -50,17 +51,27 @@ type Client struct {
 	startOnce        sync.Once
 	healthCheck      bool
 	healthCheckTimer *time.Timer
+	healthCheckDone  chan struct{}
+	healthCheckMu    sync.Mutex
+	closed           atomic.Bool
 	count            atomic.Int64
 }
 
 func NewClient(ctx context.Context, options ClientOptions) (client *Client, err error) {
+	clientCtx, cancel := context.WithCancel(ctx)
 	client = &Client{
-		ctx:         ctx,
+		ctx:         clientCtx,
+		cancel:      cancel,
 		dialer:      options.Dialer,
 		dialOptions: options.DialOptions,
 		server:      options.Server,
 		auth:        buildAuth(options.Username, options.Password),
 	}
+	defer func() {
+		if err != nil {
+			cancel()
+		}
+	}()
 	if options.QUIC {
 		if len(options.TLSConfig.NextProtos) == 0 {
 			options.TLSConfig.NextProtos = []string{"h3"}
@@ -112,13 +123,23 @@ func (c *Client) h2RoundTripper(tlsConfig *vmess.TLSConfig) {
 }
 
 func (c *Client) start() {
-	if c.healthCheck {
+	if c.healthCheck && !c.closed.Load() {
+		c.healthCheckMu.Lock()
 		c.healthCheckTimer = time.NewTimer(DefaultHealthCheckTimeout)
+		c.healthCheckDone = make(chan struct{})
+		c.healthCheckMu.Unlock()
 		go c.loopHealthCheck()
 	}
 }
 
 func (c *Client) loopHealthCheck() {
+	defer func() {
+		c.healthCheckMu.Lock()
+		if c.healthCheckDone != nil {
+			close(c.healthCheckDone)
+		}
+		c.healthCheckMu.Unlock()
+	}()
 	for {
 		select {
 		case <-c.healthCheckTimer.C:
@@ -133,20 +154,34 @@ func (c *Client) loopHealthCheck() {
 }
 
 func (c *Client) resetHealthCheckTimer() {
-	if c.healthCheckTimer == nil {
+	c.healthCheckMu.Lock()
+	defer c.healthCheckMu.Unlock()
+	if c.healthCheckTimer == nil || c.ctx.Err() != nil {
 		return
+	}
+	if !c.healthCheckTimer.Stop() {
+		select {
+		case <-c.healthCheckTimer.C:
+		default:
+		}
 	}
 	c.healthCheckTimer.Reset(DefaultHealthCheckTimeout)
 }
 
 func (c *Client) roundTrip(request *http.Request, conn *httpConn) {
-	c.startOnce.Do(c.start)
 	pipeReader, pipeWriter := io.Pipe()
 	request.Body = pipeReader
 	*conn = httpConn{
 		writer:  pipeWriter,
 		created: make(chan struct{}),
 	}
+	if c.closed.Load() {
+		_ = pipeReader.CloseWithError(net.ErrClosed)
+		_ = pipeWriter.CloseWithError(net.ErrClosed)
+		conn.setup(nil, net.ErrClosed)
+		return
+	}
+	c.startOnce.Do(c.start)
 	c.count.Add(1)
 	conn.closeFn = once.OnceFunc(func() {
 		c.count.Add(-1)
@@ -212,9 +247,17 @@ func (c *Client) ListenICMP(ctx context.Context) (*IcmpConn, error) {
 }
 
 func (c *Client) Close() error {
+	c.closed.Store(true)
+	c.cancel()
 	httputils.CloseTransport(c.roundTripper)
+	c.healthCheckMu.Lock()
 	if c.healthCheckTimer != nil {
 		c.healthCheckTimer.Stop()
+	}
+	done := c.healthCheckDone
+	c.healthCheckMu.Unlock()
+	if done != nil {
+		<-done
 	}
 	return nil
 }
@@ -225,6 +268,9 @@ func (c *Client) ResetConnections() {
 }
 
 func (c *Client) HealthCheck(ctx context.Context) error {
+	if c.closed.Load() {
+		return net.ErrClosed
+	}
 	defer c.resetHealthCheckTimer()
 	request := c.newConnectRequest(HealthCheckMagicAddress, HealthCheckUserAgent)
 	response, err := c.roundTripper.RoundTrip(request.WithContext(ctx))
@@ -240,6 +286,7 @@ func (c *Client) HealthCheck(ctx context.Context) error {
 
 type PoolClient struct {
 	mutex          sync.Mutex
+	closed         bool
 	maxConnections int
 	minStreams     int
 	maxStreams     int
@@ -297,6 +344,10 @@ func (c *PoolClient) ListenICMP(ctx context.Context) (*IcmpConn, error) {
 func (c *PoolClient) Close() error {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
+	if c.closed {
+		return nil
+	}
+	c.closed = true
 	var errs []error
 	for _, t := range c.clients {
 		if err := t.Close(); err != nil {
@@ -310,6 +361,9 @@ func (c *PoolClient) Close() error {
 func (c *PoolClient) getClient() (*Client, error) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
+	if c.closed {
+		return nil, net.ErrClosed
+	}
 	var transport *Client
 	for _, t := range c.clients {
 		if transport == nil || t.count.Load() < transport.count.Load() {
@@ -336,6 +390,9 @@ func (c *PoolClient) getClient() (*Client, error) {
 }
 
 func (c *PoolClient) newTransportLocked() (*Client, error) {
+	if c.closed {
+		return nil, net.ErrClosed
+	}
 	transport, err := NewClient(c.ctx, c.options)
 	if err != nil {
 		return nil, err

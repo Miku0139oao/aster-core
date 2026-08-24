@@ -18,7 +18,7 @@ Nikki therefore does not need init-script or LuCI code changes.
 - Packages feed.
 - `golang/host`
 - `upx/host`
-- Target dependencies: CA bundle, `ip-full`, `kmod-inet-diag`, `kmod-tun`
+- Target dependencies: CA bundle, `ip-full`, `kmod-inet-diag`, `kmod-tun`, `kmod-sched-bpf`
 
 ## Build
 
@@ -98,7 +98,7 @@ Mihomo Meta ...
 
 Aster can keep safely classified DIRECT connections on the Linux kernel forwarding/NAT path, like dae. Proxied traffic still goes through TUN. The recommended combination is **Kernel DIRECT + nftables + OpenWrt flow offload**. TC eBPF is a separate experimental classifier. It is not required to enable Kernel DIRECT, and it does not guarantee more speed.
 
-Enable Kernel DIRECT in Nikki’s TUN mixin, turn off Nikki’s own transparent proxy, and let Aster manage TUN route/auto-redirect alone:
+The following `tun_kernel_direct*` UCI keys work only in a custom Nikki build with the matching mixin. The public stock Nikki package and `openwrt/aster-core` recipe do not create or consume these keys. With stock Nikki, inject the `tun.kernel-direct` YAML through a supported profile/mixin path and verify the generated `/etc/nikki/run/config.yaml`. Only a custom build should use the commands below to disable Nikki's own transparent proxy and let Aster manage TUN route/auto-redirect:
 
 ```sh
 uci set nikki.proxy.enabled='0'
@@ -130,8 +130,8 @@ Every client that uses Kernel DIRECT must send DNS through Aster. Unobserved DoH
 `auto-redirect` can send Aster’s own outgoing DIRECT SYN back into REDIR / TUN. At that point only one copy of the packet remains:
 
 - **Do not** return immediately in `handleTCPConn` just because a REDIR / TUN SYN came from a local source. That blackholes DIRECT and nodes that are not bound to an interface (every delay test fails, web pages do not open).
-- Loop protection lives in three places: `DIRECT.CheckConn` rejects only **registered outbound AddrPorts** (connMap); `ObserveFlow` writes safely classified DIRECT destinations into the nftables exclude before dial; the 30-second zero-byte TCP reaper clears leftover trackers with no payload.
-- The reaper **only closes TCP**. UDP (including ePDG / Wi‑Fi calling `500` / `4500`) and connections that still have upload/download are left alone. Do not use `DELETE /connections` as daily cleanup; that tears down IKE.
+- Loop protection lives in three places: `DIRECT.CheckConn` rejects only **registered outbound AddrPorts** (connMap); `ObserveFlow` writes safely classified DIRECT destinations into the nftables exclude before dial; a five-second scan reaps transparent-path (REDIR / TPROXY / TUN) TCP trackers that remain at zero bytes for 30 seconds.
+- The reaper **only closes transparent-proxy TCP**. Ordinary HTTP / SOCKS / VLESS server-first connections, UDP (including ePDG / Wi‑Fi calling `500` / `4500`), and connections with traffic are left alone. Bulk `DELETE /connections` has been removed; do not replace normal idle cleanup with controller mass-close.
 
 For games or port-level traffic that must stay on one WAN, a mark itself cannot stop auto-redirect. Either learn the destination into the exclude set, or do identity DNAT / `exclude-dst-port` before Aster’s `dstnat + 1` so the packet never enters TUN.
 
@@ -167,7 +167,7 @@ For an emergency A/B you can run `tc filter del dev <interface> ingress` on each
 
 Some OpenWrt WAN6 setups only have `default from <delegated-prefix> via <gateway>`. An IPv6 socket created by the proxy core has not chosen a source yet, so route lookup can fall back to TUN, or auto-detect can pick the IPv4 WAN device. The usual symptom is that router IPv6 works, but IPv6 literals / IPv6-only nodes time out.
 
-Nikki’s “Split-WAN IPv6 Outbound Fix” is off by default. Enable it only on that topology. It takes the real device from the selected WAN6, adds a generic IPv6 default route, and binds IPv6-only proxy endpoints to that device:
+“Split-WAN IPv6 Outbound Fix” is also a custom Nikki extension that this repository does not ship; stock Nikki does not consume the UCI keys below. Enable it only when that extension is installed and this topology is confirmed. It takes the real device from the selected WAN6, adds a generic IPv6 default route, and binds IPv6-only proxy endpoints to that device:
 
 ```sh
 uci set nikki.mixin.ipv6_outbound_fix='1'

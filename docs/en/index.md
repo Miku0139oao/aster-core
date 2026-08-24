@@ -66,7 +66,7 @@ In plain terms: Aster removes core work that used to be redone for every packet.
 | New UDP packet setup | **about 5.4× faster** | Games, voice, and QUIC create less throwaway memory |
 | Disabled debug logs | **about 101× faster** | Unused logs are skipped before the string is built |
 
-In a constrained single-core 25% CPU / 512 MiB RAM environment, the isolated test programs for disabled log and AnyTLS used about **27–31%** less peak memory than Mihomo 1.19.30. UDP was even, and the isolated TCP test process peaked higher for Aster. A full core with a minimal idle profile is a different story: Aster is about 39.3 MiB, Mihomo about 34.7 MiB, so Aster is about **4.6 MiB** larger. Some busy paths allocate less temporary memory; the idle footprint is slightly larger because Aster ships more features.
+Memory needs separate claims. These hot paths remove per-operation heap allocations, but the complete core with a minimal idle profile measured about 39.3 MiB for Aster and 34.7 MiB for Mihomo on OpenWrt, so Aster was about **4.6 MiB** larger. The five-run Windows validation on 2026-08-24 likewise put Aster's working set about 0.93 MiB higher. Aster does not claim universally lower idle RAM; the benefit is less temporary garbage on busy paths plus explicit cache, mapping, and pool bounds.
 
 ### What changed?
 
@@ -78,7 +78,7 @@ In a constrained single-core 25% CPU / 512 MiB RAM environment, the isolated tes
 - **Cheaper traffic stats:** upload and download counters increment in place instead of scanning every connection.
 
 > [!IMPORTANT]
-> This does not mean Speedtest becomes 5.4× faster. That 5.4× figure is one small core step: preparing a UDP packet. The closest whole-path number is the TCP test, about 2% faster. The Ryzen 7 5825U soft router used for these runs is still stronger than many home routers. Lower-end hardware will have lower absolute speeds; do not copy these numbers onto a different device. A separate run that simulated weaker hardware (single-core 25% CPU time, 512 MiB RAM) still showed all five optimizations. Weaker hardware usually feels the saved CPU and allocations more. The homepage keeps the more conservative unrestricted results.
+> This does not mean Speedtest becomes 5.4× faster. That figure is one small core step: preparing UDP metadata. The closest whole-path number is the TCP test, about 2%. The Ryzen 7 5825U soft router is still stronger than many home routers, so do not copy these figures to another device. The single-core 25% CPU-quota / 512 MiB run only shows that the gains persisted under throttling on the same x86 VM; it does not simulate ARM, MIPS, cache, or memory bandwidth. The homepage keeps the conservative unrestricted result.
 
 > [!WARNING]
 > “Closer to dae” is not the same as faster. On one real OpenWrt router, the experimental TC eBPF classifier dropped same-server speedtest from about 1,647 Mbps to 692 Mbps. The recommended setup is still Kernel DIRECT with the nftables backend and OpenWrt flow offload. See [OpenWrt and Nikki](/en/deployment/openwrt).

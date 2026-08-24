@@ -1228,6 +1228,11 @@ func parseRules(rulesConfig []string, proxies map[string]C.Proxy, ruleProviders 
 				return nil, fmt.Errorf("%s[%d] [%s] error: rule set [%s] not found", format, idx, line, name)
 			}
 		}
+		if binder, ok := parsed.(interface {
+			BindRuleProviders(map[string]P.RuleProvider)
+		}); ok {
+			binder.BindRuleProviders(ruleProviders)
+		}
 
 		if format == "rules" { // only wrap top level rules
 			parsed = RW.NewRuleWrapper(parsed)
@@ -1518,6 +1523,9 @@ func parseDNS(rawCfg *RawConfig, ruleProviders map[string]P.RuleProvider) (*DNS,
 	if cfg.RespectRules && len(cfg.ProxyServerNameserver) == 0 {
 		return nil, fmt.Errorf("if “respect-rules” is turned on, “proxy-server-nameserver” cannot be empty")
 	}
+	if cfg.CacheMaxSize < 0 {
+		return nil, errors.New("DNS cache-max-size cannot be negative")
+	}
 
 	dnsCfg := &DNS{
 		Enable:            cfg.Enable,
@@ -1779,27 +1787,54 @@ func parseIPV6(rawCfg *RawConfig) {
 	}
 }
 
-func parseTun(rawTun RawTun, dns *DNS, general *General) error {
-	if rawTun.KernelDirect && (!rawTun.AutoRoute || !rawTun.AutoRedirect) {
+// ValidateKernelDirectTun enforces the kernel-direct dependency graph shared
+// by YAML parseTun and PATCH /configs. Call it on the merged listener.Tun.
+func ValidateKernelDirectTun(tun LC.Tun) error {
+	if tun.KernelDirect && (!tun.AutoRoute || !tun.AutoRedirect) {
 		return errors.New("tun kernel-direct requires auto-route and auto-redirect")
 	}
-	if rawTun.KernelDirectEBPF && !rawTun.KernelDirect {
+	if tun.KernelDirectEBPF && !tun.KernelDirect {
 		return errors.New("tun kernel-direct-ebpf requires kernel-direct")
 	}
-	if rawTun.KernelDirectEBPFRequired && !rawTun.KernelDirectEBPF {
+	if tun.KernelDirectEBPFRequired && !tun.KernelDirectEBPF {
 		return errors.New("tun kernel-direct-ebpf-required requires kernel-direct-ebpf")
 	}
-	if rawTun.KernelDirectEBPF && len(rawTun.KernelDirectEBPFInterfaces) == 0 {
+	if tun.KernelDirectEBPF && len(tun.KernelDirectEBPFInterfaces) == 0 {
 		return errors.New("tun kernel-direct-ebpf requires kernel-direct-ebpf-interfaces")
 	}
-	if rawTun.KernelDirectEBPFProxy && !rawTun.KernelDirectEBPF {
+	if tun.KernelDirectEBPFProxy && !tun.KernelDirectEBPF {
 		return errors.New("tun kernel-direct-ebpf-proxy requires kernel-direct-ebpf")
 	}
-	if rawTun.KernelDirectEBPFProxyRedirect && !rawTun.KernelDirectEBPFProxy {
+	if tun.KernelDirectEBPFProxyRedirect && !tun.KernelDirectEBPFProxy {
 		return errors.New("tun kernel-direct-ebpf-proxy-redirect requires kernel-direct-ebpf-proxy")
 	}
-	if len(rawTun.KernelDirectEBPFProxyPrefixes) > 0 && !rawTun.KernelDirectEBPFProxy {
+	if len(tun.KernelDirectEBPFDirectPrefixes) > 0 && !tun.KernelDirectEBPF {
+		return errors.New("tun kernel-direct-ebpf-direct-prefixes requires kernel-direct-ebpf")
+	}
+	if len(tun.KernelDirectEBPFProxyPrefixes) > 0 && !tun.KernelDirectEBPFProxy {
 		return errors.New("tun kernel-direct-ebpf-proxy-prefixes requires kernel-direct-ebpf-proxy")
+	}
+	if _, err := kerneldirect.NormalizeMaxEntries(tun.KernelDirectMaxEntries); err != nil {
+		return err
+	}
+	return nil
+}
+
+func parseTun(rawTun RawTun, dns *DNS, general *General) error {
+	if err := ValidateKernelDirectTun(LC.Tun{
+		KernelDirect:                   rawTun.KernelDirect,
+		AutoRoute:                      rawTun.AutoRoute,
+		AutoRedirect:                   rawTun.AutoRedirect,
+		KernelDirectMaxEntries:         rawTun.KernelDirectMaxEntries,
+		KernelDirectEBPF:               rawTun.KernelDirectEBPF,
+		KernelDirectEBPFRequired:       rawTun.KernelDirectEBPFRequired,
+		KernelDirectEBPFInterfaces:     rawTun.KernelDirectEBPFInterfaces,
+		KernelDirectEBPFProxy:          rawTun.KernelDirectEBPFProxy,
+		KernelDirectEBPFProxyRedirect:  rawTun.KernelDirectEBPFProxyRedirect,
+		KernelDirectEBPFDirectPrefixes: rawTun.KernelDirectEBPFDirectPrefixes,
+		KernelDirectEBPFProxyPrefixes:  rawTun.KernelDirectEBPFProxyPrefixes,
+	}); err != nil {
+		return err
 	}
 	maxEntries, err := kerneldirect.NormalizeMaxEntries(rawTun.KernelDirectMaxEntries)
 	if err != nil {
@@ -2081,31 +2116,29 @@ func parseDomain(domains []string, domainTrie *trie.DomainTrie[struct{}], adapte
 }
 
 func parseIPRuleSet(domainSetName string, adapterName string, ruleProviders map[string]P.RuleProvider) (C.IpMatcher, error) {
-	if rp, ok := ruleProviders[domainSetName]; !ok {
+	rp, ok := ruleProviders[domainSetName]
+	if !ok {
 		return nil, fmt.Errorf("not found rule-set: %s", domainSetName)
-	} else {
-		switch rp.Behavior() {
-		case P.Domain:
-			return nil, fmt.Errorf("rule provider type error, except ipcidr,actual %s", rp.Behavior())
-		case P.Classical:
-			log.Warnln("%s provider is %s, only matching it contain ip rule", rp.Name(), rp.Behavior())
-		default:
-		}
 	}
-	return RP.NewRuleSet(domainSetName, adapterName, false, true)
+	switch rp.Behavior() {
+	case P.Domain:
+		return nil, fmt.Errorf("rule provider type error, except ipcidr,actual %s", rp.Behavior())
+	case P.Classical:
+		log.Warnln("%s provider is %s, only matching it contain ip rule", rp.Name(), rp.Behavior())
+	}
+	return RP.NewRuleSet(domainSetName, adapterName, false, true, rp)
 }
 
 func parseDomainRuleSet(domainSetName string, adapterName string, ruleProviders map[string]P.RuleProvider) (C.DomainMatcher, error) {
-	if rp, ok := ruleProviders[domainSetName]; !ok {
+	rp, ok := ruleProviders[domainSetName]
+	if !ok {
 		return nil, fmt.Errorf("not found rule-set: %s", domainSetName)
-	} else {
-		switch rp.Behavior() {
-		case P.IPCIDR:
-			return nil, fmt.Errorf("rule provider type error, except domain,actual %s", rp.Behavior())
-		case P.Classical:
-			log.Warnln("%s provider is %s, only matching it contain domain rule", rp.Name(), rp.Behavior())
-		default:
-		}
 	}
-	return RP.NewRuleSet(domainSetName, adapterName, false, true)
+	switch rp.Behavior() {
+	case P.IPCIDR:
+		return nil, fmt.Errorf("rule provider type error, except domain,actual %s", rp.Behavior())
+	case P.Classical:
+		log.Warnln("%s provider is %s, only matching it contain domain rule", rp.Name(), rp.Behavior())
+	}
+	return RP.NewRuleSet(domainSetName, adapterName, false, true, rp)
 }

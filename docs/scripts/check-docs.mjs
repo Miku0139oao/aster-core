@@ -180,6 +180,9 @@ async function main() {
   for (const locale of Object.values(themeConfig.locales ?? {})) {
     collectLinks(locale?.sidebar, sidebarLinks);
   }
+  for (const locale of Object.values(userConfig.locales ?? {})) {
+    collectLinks(locale?.themeConfig?.sidebar, sidebarLinks);
+  }
   const sidebarIssues = [];
   for (const link of sidebarLinks) {
     const issue = await referenceIssue(link, "/");

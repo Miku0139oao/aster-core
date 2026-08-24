@@ -159,7 +159,7 @@ type quicPacketSender struct {
 	lock                sync.RWMutex
 	initialKeys         []quicInitialKey
 	buffer              []byte
-	ranges              utils.IntRanges[uint64]
+	receivedCryptoData  bitmap
 	contiguousCryptoEnd uint64
 	result              string
 
@@ -223,7 +223,7 @@ func (q *quicPacketSender) close() {
 			_ = pool.Put(q.buffer)
 			q.buffer = nil
 		}
-		q.ranges = nil
+		q.receivedCryptoData = bitmap{}
 		q.contiguousCryptoEnd = 0
 	}
 }
@@ -630,51 +630,13 @@ func (q *quicPacketSender) addCryptoData(offset uint64, data []byte) error {
 	}
 	copy(q.buffer[offset:end], data)
 
-	// IntRanges are inclusive, whereas CRYPTO offsets are half-open. Store
-	// [offset, end-1] so a one-byte hole cannot be merged away as adjacency.
-	q.ranges = addCryptoCoverage(q.ranges, offset, end-1)
-	q.contiguousCryptoEnd = 0
-	if len(q.ranges) > 0 && q.ranges[0].Start() == 0 {
-		q.contiguousCryptoEnd = q.ranges[0].End() + 1
+	q.receivedCryptoData.setRange(int(offset), int(end))
+	// The contiguous prefix only moves forward, allowing the bitmap to skip
+	// complete words without retaining one range object per sparse fragment.
+	if offset <= q.contiguousCryptoEnd && end > q.contiguousCryptoEnd {
+		q.contiguousCryptoEnd = uint64(q.receivedCryptoData.firstUnset(int(q.contiguousCryptoEnd), len(q.buffer)))
 	}
 	return nil
-}
-
-// addCryptoCoverage inserts an inclusive range into an already sorted set.
-// It avoids sorting the complete set for every sparse or retransmitted frame.
-func addCryptoCoverage(ranges utils.IntRanges[uint64], start, end uint64) utils.IntRanges[uint64] {
-	i := 0
-	for i < len(ranges) && ranges[i].End()+1 < start {
-		i++
-	}
-
-	if i == len(ranges) {
-		return append(ranges, utils.NewRange(start, end))
-	}
-	if end+1 < ranges[i].Start() {
-		ranges = append(ranges, utils.NewRange(start, end))
-		copy(ranges[i+1:], ranges[i:])
-		ranges[i] = utils.NewRange(start, end)
-		return ranges
-	}
-
-	if ranges[i].Start() < start {
-		start = ranges[i].Start()
-	}
-	if ranges[i].End() > end {
-		end = ranges[i].End()
-	}
-	j := i + 1
-	for j < len(ranges) && ranges[j].Start() <= end+1 {
-		if ranges[j].End() > end {
-			end = ranges[j].End()
-		}
-		j++
-	}
-
-	ranges[i] = utils.NewRange(start, end)
-	copy(ranges[i+1:], ranges[j:])
-	return ranges[:len(ranges)-(j-i-1)]
 }
 
 func (q *quicPacketSender) tryAssemble() (string, error) {

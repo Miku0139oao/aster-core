@@ -43,9 +43,34 @@ Upload, download, and connection counts use cheap incremental stats. Each traffi
 
 ## Full test data
 
+## 2026-08-24 review-wave validation
+
+The unreleased working tree based on `8462a265` was rebuilt against Mihomo `v1.19.30` (`ac017cdd`) as separate Windows amd64 test binaries. Every sample used a fresh process, `GOMAXPROCS=1`, `-test.cpu=1`, `GOAMD64=v1`, Go 1.26.3, and a two-second run; Aster and Mihomo were interleaved for seven rounds. This is regression validation on the 5900X development machine. It does not replace the OpenWrt primary result below and is not WAN throughput.
+
+| Core work | Mihomo 1.19.30 median (range) | Aster median (range) | Allocations |
+| --- | ---: | ---: | ---: |
+| UDP metadata | 54.44 ns (49.80–71.77) | 12.22 ns (11.76–12.48), **4.45×** | 416 B／1 → 0 B／0 |
+| Disabled debug log | 206.3 ns (204.3–245.5) | 2.132 ns (2.096–3.063), **96.8×** | 24 B／1 → 0 B／0 |
+| AnyTLS frame, 1 KiB | 72.55 ns (66.80–82.65) | 31.67 ns (30.93–33.76), **2.29×** | 64 B／1 → 0 B／0 |
+| AnyTLS frame, 16 KiB | 322.8 ns (320.4–354.0) | 244.3 ns (218.4–277.3), **1.32×** | 64 B／1 → 0 B／0 |
+| Shared 32 KiB relay | 4.038 µs (4.005–4.157) | 3.916 µs (3.763–4.477) | 64 B／1 → 0 B／0 |
+| Tunnel 32 KiB TCP relay | 4.079 µs (3.892–4.666) | 4.016 µs (3.840–4.198) | 64 B／1 → 0 B／0 |
+
+The two TCP relay ranges overlap, so this run establishes that **Aster stayed zero-allocation, not a statistically significant desktop TCP speedup**. UDP, logging, and AnyTLS allocation classes and direction agree with the OpenWrt result.
+
+Same-host before/after regression benchmarks for this review wave showed:
+
+| Aster-only hot path | Before review | After review | Result |
+| --- | ---: | ---: | ---: |
+| Existing Kernel DIRECT flow refresh | 15.286 µs; 64 B／1 alloc | 270.8 ns; 0 B／0 alloc | **56.4×**; no full scan before the next expiry |
+| Miss in 100k merged, disjoint CIDRs | 2.385 ms; 0 alloc | 114.7 ns; 0 alloc | **about 20,790×**; restored binary search |
+| Insert 1,000 UDP-association mappings | 41.31 ms; 46.37 MB | 486.3 µs; 542.6 KiB | **84.9×**; removed whole-map copying |
+
+For five full-core runs with the same minimal config, sampled 15 seconds after startup, Windows working-set medians were 19.00 MiB for Aster and 18.07 MiB for Mihomo (Aster +0.93 MiB / +5.2%). Private bytes were 52.52 MiB versus 51.29 MiB (+1.23 MiB / +2.4%). These Windows counters cannot be mixed with Linux RSS/PSS and again do not support a general claim that Aster uses less RAM when idle.
+
 ## OpenWrt on real hardware (primary result)
 
-The comparison baseline is Mihomo `v1.19.30`, commit `ac017cdd246ce8bd547653d927e7bf77d7ee73d5`. Aster was `main` at `0590d3a4` (this review/fix wave plus the 128 KiB frame pool). Both sides used the same `go test -c` Linux amd64 binaries and parameters, three sequential rounds, at least 2 seconds each. The table uses the three-round median. Rerun on 2026-08-19 on the same OpenWrt soft router after the fixes landed.
+The comparison baseline is Mihomo `v1.19.30`, commit `ac017cdd246ce8bd547653d927e7bf77d7ee73d5`. Aster was `main` at `0590d3a4` (this review/fix wave plus the 128 KiB frame pool). Each side was built separately with the same Go version, target, flags, and benchmark harness as a Linux amd64 `go test -c` binary, then run for three sequential rounds, at least 2 seconds each. The table uses the three-round median. Rerun on 2026-08-19 on the same OpenWrt soft router after the fixes landed.
 
 | Environment | Actual value |
 | --- | --- |
@@ -64,7 +89,7 @@ The comparison baseline is Mihomo `v1.19.30`, commit `ac017cdd246ce8bd547653d927
 | Disabled debug log | 228.0 ns; 24 B／1 alloc | 2.254 ns; 0 B／0 alloc | **101× faster**; removed the event allocation |
 | AnyTLS frame (1 KiB) | 71.54 ns; 64 B／1 alloc | 35.98 ns; 0 B／0 alloc | **1.99× faster**; latency down 50% |
 | AnyTLS frame (16 KiB) | 267.1 ns; 64 B／1 alloc | 196.8 ns; 0 B／0 alloc | **1.36× faster**; latency down 26% |
-| AnyTLS frame (64 KiB) | no matching bench | 1.148 µs; 0 B／0 alloc | Common 64 KiB frames are zero-alloc after the 128 KiB pool |
+| AnyTLS frame (64 KiB) | no matching bench | 1.148 µs; 0 B／0 alloc | The isolated `WriteDataFrame/65536` fixture is zero-alloc with the 128 KiB pool |
 | TCP relay (32 KiB) | 4.546 µs; 7.21 GB/s; 64 B／1 alloc | 4.449 µs; 7.37 GB/s; 0 B／0 alloc | Latency down **2.1%**; throughput up **2.2%** |
 
 ### Three-round ranges
@@ -146,7 +171,7 @@ Three-round ranges: TCP Mihomo 39.5–40.5 MiB, Aster 51.5–52.0 MiB; log Mihom
 | AnyTLS frame (16 KiB) | 1.075–1.092 µs/op | 772.3–801.6 ns/op |
 | TCP relay (32 KiB) | 17.598–17.756 µs/op | 16.771–16.841 µs/op |
 
-Absolute processing time became about four times the unrestricted run, which shows the CPU quota was real. Aster was still faster on all five latency jobs. In plain language, **weaker hardware usually feels the saved CPU work more**: TCP improved from 2.1% unrestricted to 4.7%, and AnyTLS 1 KiB from 1.99× to 2.37×. The UDP ratio eased from 5.43× to 5.24×, so you cannot assume every optimization scales the same way as hardware gets weaker. The homepage still uses the unrestricted OpenWrt **TCP about 2%** versus Mihomo 1.19.30, not this more flattering 4.7%, as the main advertised number.
+Absolute processing time became about four times the unrestricted run, which shows the CPU quota was real. Aster was still faster on all five latency jobs. **In this CPU-quota experiment on the same x86 VM**, TCP improved from 2.1% unrestricted to 4.7%, and AnyTLS 1 KiB from 1.99× to 2.37×. The UDP ratio eased from 5.43× to 5.24×. This cannot be generalized into “every weaker machine improves more”; ARM/MIPS, cache, and memory-bandwidth effects still require native testing. The homepage still uses the unrestricted OpenWrt **TCP about 2%** versus Mihomo 1.19.30, not this more flattering 4.7%, as the main advertised number.
 
 ## Per-protocol loopback tests
 
@@ -203,7 +228,7 @@ Background load is still not low, so the 5900X run is **not** the homepage’s p
 | Disabled debug log | 455.3 ns; 24 B／1 alloc | 2.268 ns; 0 B／0 alloc | **201× faster**; removed the event allocation |
 | AnyTLS frame (1 KiB) | 74.99 ns; 64 B／1 alloc | 34.70 ns; 0 B／0 alloc | **2.16× faster** |
 | AnyTLS frame (16 KiB) | 260.0 ns; 64 B／1 alloc | 184.0 ns; 0 B／0 alloc | **1.41× faster** |
-| AnyTLS frame (64 KiB) | no matching bench | 1.056 µs; 0 B／0 alloc | Zero-alloc after the 128 KiB pool |
+| AnyTLS frame (64 KiB) | no matching bench | 1.056 µs; 0 B／0 alloc | The isolated `WriteDataFrame/65536` fixture is zero-alloc |
 | TCP relay (32 KiB) | 10.044 µs; 3.26 GB/s; 64 B／1 alloc | 11.436 µs; 2.87 GB/s; 0 B／0 alloc | Ranges overlap; Aster’s median was slower this pass, **no 5900X TCP speedup claim** |
 
 Three-round ranges: UDP Mihomo 145.8–155.1 ns, Aster pool 11.69–12.21 ns; log Mihomo 442.9–456.5 ns, Aster 2.227–2.352 ns; AnyTLS 1 KiB Mihomo 74.12–77.73 ns, Aster 33.21–36.36 ns; AnyTLS 16 KiB Mihomo 257.9–271.6 ns, Aster 182.9–200.4 ns; TCP Mihomo 9.963–11.705 µs, Aster 10.394–11.947 µs. The 32 KiB `Relay32KiBComparison` median was Aster 9.332 µs versus Mihomo 10.775 µs. Desktop TCP is noisy under background load; the homepage still uses OpenWrt.
@@ -214,7 +239,7 @@ From the repository root:
 
 ```sh
 go test \
-  ./component/nat ./constant ./listener/sing ./log \
+  ./common/net ./component/nat ./constant ./listener/sing ./log \
   ./transport/anytls/padding ./transport/anytls/session \
   ./tunnel ./tunnel/statistic \
   -run '^$' \
@@ -230,7 +255,7 @@ When comparing against Mihomo, build the same Linux amd64 test binaries from tag
 - These are in-process microbenchmarks. They mainly measure Aster Core’s own extra cost.
 - TCP and AnyTLS GB/s numbers are memory / `net.Pipe` paths, not real WAN throughput.
 - Real proxy speed is still limited by encryption, RTT, loss, MTU, NIC, OS, CPU architecture, and the server.
-- Common 1 KiB, 16 KiB, and 64 KiB AnyTLS frames are zero-alloc (64 KiB uses the 128 KiB pool). Larger or misaligned buffers may still allocate.
+- The isolated `WriteDataFrame` fixture is zero-allocation for its 1 KiB, 16 KiB, and 64 KiB cases (64 KiB uses the 128 KiB pool). This does not mean every complete AnyTLS-session path is zero-allocation. Larger or misaligned buffers may still allocate.
 - Microbenchmarks are best at catching regressions. They do not promise the same network speed on every device.
 
 ## A real-hardware counter-example for TC eBPF

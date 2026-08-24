@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Miku0139oao/aster-core/component/resolver"
@@ -30,7 +31,11 @@ type DNSAnswer struct {
 // Classifier returns true only when the destination can safely bypass Aster.
 type Classifier func(host string, addr netip.Addr) bool
 
-// Sink replaces the dynamic kernel DIRECT and PROXY decision sets.
+// Sink replaces the dynamic kernel DIRECT and PROXY decision sets. It must
+// return and must not synchronously call ObserveDNS, ObserveFlow, or Flush;
+// publication is deliberately serialized and those mutating calls wait for the
+// current generation to finish. Read-only Statuses and asynchronous mutation
+// are safe.
 type Sink func(DecisionSets)
 
 type record struct {
@@ -58,24 +63,31 @@ type ControllerStatus struct {
 }
 
 type controller struct {
-	mu          sync.Mutex
-	classifier  Classifier
-	sink        Sink
-	records     map[netip.Addr]*addressRecords
-	maxEntries  uint32
-	maxRecords  uint64
-	recordsLen  uint64
-	sequence    uint64
-	evictions   uint64
-	lastDirect  []netip.Prefix
-	lastProxy   []netip.Prefix
-	generation  uint64
-	closed      bool
-	stop        chan struct{}
-	done        chan struct{}
-	publishReqs chan publishRequest
-	closeOnce   sync.Once
+	mu           sync.Mutex
+	classifierMu sync.Mutex
+	classifier   Classifier
+	sink         Sink
+	records      map[netip.Addr]*addressRecords
+	maxEntries   uint32
+	maxRecords   uint64
+	recordsLen   uint64
+	sequence     uint64
+	evictions    uint64
+	lastDirect   []netip.Prefix
+	lastProxy    []netip.Prefix
+	nextExpiry   time.Time
+	generation   uint64
+	applied      uint64
+	flushSeq     uint64
+	applyWaiters map[uint64]chan struct{}
+	closed       bool
+	stop         chan struct{}
+	done         chan struct{}
+	publishReqs  chan publishRequest
+	closeOnce    sync.Once
 }
+
+var activeControllers atomic.Int64
 
 var registry = struct {
 	sync.RWMutex
@@ -98,16 +110,24 @@ func Register(classifier Classifier, sink Sink, options ...ControllerOptions) io
 		records:     make(map[netip.Addr]*addressRecords),
 		maxEntries:  maxEntries,
 		maxRecords:  uint64(maxEntries) * 4,
-		publishReqs: make(chan publishRequest, 1),
+		publishReqs: make(chan publishRequest),
 		stop:        make(chan struct{}),
 		done:        make(chan struct{}),
 	}
 	registry.Lock()
 	registry.controllers[c] = struct{}{}
 	registry.Unlock()
+	activeControllers.Add(1)
 	go c.expireLoop()
 	go c.publishLoop()
 	return c
+}
+
+// HasConsumers reports whether DNS observation work can affect an active
+// controller. A false-negative during concurrent registration is fail-closed:
+// that single response simply remains in userspace.
+func HasConsumers() bool {
+	return activeControllers.Load() > 0
 }
 
 // Statuses returns a control-plane snapshot of all active consumers.
@@ -176,13 +196,29 @@ func Flush() {
 }
 
 func (c *controller) observe(host string, answers []DNSAnswer) {
-	now := time.Now()
+	// Classifier used to run under c.mu. Preserve its serialized and
+	// quiescent-on-Close contract without holding the state mutex across a
+	// potentially expensive routing callback.
+	c.classifierMu.Lock()
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
+		c.classifierMu.Unlock()
 		return
 	}
-	c.removeExpiredLocked(now)
+	c.mu.Unlock()
+	observedAt := time.Now()
+	flushSeq := atomic.LoadUint64(&c.flushSeq)
+	type classified struct {
+		addr    netip.Addr
+		expires time.Time
+		direct  bool
+	}
+	var inlineItems [4]classified
+	items := inlineItems[:0]
+	if len(answers) > len(inlineItems) {
+		items = make([]classified, 0, len(answers))
+	}
 	for _, answer := range answers {
 		addr := answer.Addr.Unmap()
 		if isUnsafeAddress(addr) {
@@ -194,47 +230,101 @@ func (c *controller) observe(host string, answers []DNSAnswer) {
 		} else if ttl > maximumTTL {
 			ttl = maximumTTL
 		}
-		isDirect := c.classifier(host, addr)
-		address := c.records[addr]
+		direct := false
+		if c.classifier != nil {
+			direct = c.classifier(host, addr)
+		}
+		items = append(items, classified{addr: addr, expires: observedAt.Add(ttl), direct: direct})
+	}
+	c.classifierMu.Unlock()
+
+	c.mu.Lock()
+	if c.closed || atomic.LoadUint64(&c.flushSeq) != flushSeq {
+		c.mu.Unlock()
+		return
+	}
+	now := time.Now()
+	dirty := c.removeExpiredLocked(now)
+	for _, item := range items {
+		if !item.expires.After(now) {
+			continue
+		}
+		address := c.records[item.addr]
 		hostExists := false
 		if address != nil {
 			_, hostExists = address.byHost[host]
 		}
 		if !hostExists && c.recordsLen >= c.maxRecords {
 			if address != nil {
-				if isDirect {
+				if item.direct {
 					// Keep the existing decision rather than dropping a prior
 					// PROXY observation to make room for another DIRECT host.
 					continue
 				}
 				// A new PROXY host must be recorded, but still-valid PROXY
 				// observations stay. Drop DIRECT hosts on this address first.
+				before := c.recordsLen
 				c.dropDirectHostsLocked(address)
-				if c.recordsLen >= c.maxRecords {
-					c.dropOldestHostLocked(address)
+				if len(address.byHost) == 0 {
+					delete(c.records, item.addr)
+					address = nil
 				}
-			} else {
-				c.evictOldestLocked()
+				if c.recordsLen != before {
+					dirty = true
+				}
+				if address != nil && c.recordsLen >= c.maxRecords {
+					if !c.dropOldestHostLocked(address, item.expires) {
+						continue
+					}
+					dirty = true
+				}
+			}
+			if address == nil && c.recordsLen >= c.maxRecords {
+				if !c.evictOldestLocked() {
+					c.healRecordsLenLocked()
+					if c.recordsLen >= c.maxRecords {
+						continue
+					}
+				} else {
+					dirty = true
+				}
 			}
 		}
 		if address == nil {
 			if uint32(len(c.records)) >= c.maxEntries {
-				c.evictOldestLocked()
+				if !c.evictOldestLocked() {
+					continue
+				}
+				dirty = true
+			}
+			if uint32(len(c.records)) >= c.maxEntries {
+				continue
 			}
 			address = &addressRecords{byHost: make(map[string]record)}
-			c.records[addr] = address
+			c.records[item.addr] = address
 		}
 		c.touchLocked(address)
-		if _, exists := address.byHost[host]; !exists {
+		if prev, exists := address.byHost[host]; !exists {
 			c.recordsLen++
+			dirty = true
+		} else if prev.direct != item.direct {
+			dirty = true
 		}
-		address.byHost[host] = record{direct: isDirect, expires: now.Add(ttl)}
+		address.byHost[host] = record{direct: item.direct, expires: item.expires}
+		if c.nextExpiry.IsZero() || item.expires.Before(c.nextExpiry) {
+			c.nextExpiry = item.expires
+		}
 	}
-	sets, generation, changed := c.changedSetsLocked()
+	var sets DecisionSets
+	var generation uint64
+	var changed bool
+	if dirty {
+		sets, generation, changed = c.changedSetsLocked()
+	} else {
+		generation = c.generation
+	}
 	c.mu.Unlock()
-	if changed {
-		<-c.publish(sets, generation)
-	}
+	c.commitPublish(sets, generation, changed)
 }
 
 var (
@@ -286,19 +376,33 @@ func (c *controller) expireLoop() {
 }
 
 func (c *controller) removeExpiredLocked(now time.Time) bool {
+	if len(c.records) == 0 {
+		c.nextExpiry = time.Time{}
+		return false
+	}
+	if !c.nextExpiry.IsZero() && now.Before(c.nextExpiry) {
+		return false
+	}
+
 	changed := false
+	nextExpiry := time.Time{}
 	for addr, address := range c.records {
 		for host, item := range address.byHost {
 			if !item.expires.After(now) {
 				delete(address.byHost, host)
-				c.recordsLen--
+				c.decRecordsLenLocked(1)
 				changed = true
+				continue
+			}
+			if nextExpiry.IsZero() || item.expires.Before(nextExpiry) {
+				nextExpiry = item.expires
 			}
 		}
 		if len(address.byHost) == 0 {
 			delete(c.records, addr)
 		}
 	}
+	c.nextExpiry = nextExpiry
 	return changed
 }
 
@@ -324,12 +428,12 @@ func (c *controller) dropDirectHostsLocked(address *addressRecords) {
 	for host, item := range address.byHost {
 		if item.direct {
 			delete(address.byHost, host)
-			c.recordsLen--
+			c.decRecordsLenLocked(1)
 		}
 	}
 }
 
-func (c *controller) dropOldestHostLocked(address *addressRecords) {
+func (c *controller) dropOldestHostLocked(address *addressRecords, incomingExpires time.Time) bool {
 	var oldestHost string
 	var oldestExpires time.Time
 	found := false
@@ -340,13 +444,20 @@ func (c *controller) dropOldestHostLocked(address *addressRecords) {
 			found = true
 		}
 	}
-	if found {
-		delete(address.byHost, oldestHost)
-		c.recordsLen--
+	if !found {
+		return false
 	}
+	// Keep a longer-lived PROXY record instead of replacing it with a
+	// shorter incoming observation that would forget the address early.
+	if oldestExpires.After(incomingExpires) {
+		return false
+	}
+	delete(address.byHost, oldestHost)
+	c.decRecordsLenLocked(1)
+	return true
 }
 
-func (c *controller) evictOldestLocked() {
+func (c *controller) evictOldestLocked() bool {
 	var oldestAddr netip.Addr
 	var oldestSequence uint64
 	for addr, address := range c.records {
@@ -355,10 +466,30 @@ func (c *controller) evictOldestLocked() {
 			oldestSequence = address.lastSeen
 		}
 	}
-	if oldestAddr.IsValid() {
-		c.recordsLen -= uint64(len(c.records[oldestAddr].byHost))
-		delete(c.records, oldestAddr)
-		c.evictions++
+	if !oldestAddr.IsValid() {
+		c.healRecordsLenLocked()
+		return false
+	}
+	c.decRecordsLenLocked(uint64(len(c.records[oldestAddr].byHost)))
+	delete(c.records, oldestAddr)
+	c.evictions++
+	return true
+}
+
+func (c *controller) decRecordsLenLocked(n uint64) {
+	if n == 0 {
+		return
+	}
+	if c.recordsLen >= n {
+		c.recordsLen -= n
+		return
+	}
+	c.recordsLen = 0
+}
+
+func (c *controller) healRecordsLenLocked() {
+	if len(c.records) == 0 {
+		c.recordsLen = 0
 	}
 }
 
@@ -457,9 +588,61 @@ func (c *controller) applyPublish(req publishRequest) {
 	apply := !c.closed && req.generation == c.generation
 	c.mu.Unlock()
 	if apply {
-		c.sink(req.sets)
+		if c.sink != nil {
+			c.sink(req.sets)
+		}
+		c.mu.Lock()
+		if !c.closed && req.generation == c.generation {
+			c.applied = req.generation
+			c.releaseWaitersLocked()
+		}
+		c.mu.Unlock()
 	}
 	close(req.done)
+}
+
+func (c *controller) releaseWaitersLocked() {
+	for generation, done := range c.applyWaiters {
+		if generation <= c.applied || c.closed {
+			close(done)
+			delete(c.applyWaiters, generation)
+		}
+	}
+	if len(c.applyWaiters) == 0 {
+		c.applyWaiters = nil
+	}
+}
+
+func (c *controller) waitStop(done <-chan struct{}) {
+	select {
+	case <-done:
+	case <-c.stop:
+	}
+}
+
+func (c *controller) waitApplied(generation uint64) {
+	c.mu.Lock()
+	if c.closed || generation <= c.applied {
+		c.mu.Unlock()
+		return
+	}
+	done := c.applyWaiters[generation]
+	if done == nil {
+		if c.applyWaiters == nil {
+			c.applyWaiters = make(map[uint64]chan struct{})
+		}
+		done = make(chan struct{})
+		c.applyWaiters[generation] = done
+	}
+	c.mu.Unlock()
+	c.waitStop(done)
+}
+
+func (c *controller) commitPublish(sets DecisionSets, generation uint64, changed bool) {
+	if changed {
+		c.waitStop(c.publish(sets, generation))
+	}
+	c.waitApplied(generation)
 }
 
 func (c *controller) drainPublishReqs() {
@@ -491,6 +674,7 @@ func (c *controller) publish(sets DecisionSets, generation uint64) <-chan struct
 }
 
 func (c *controller) flush() {
+	atomic.AddUint64(&c.flushSeq, 1)
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -498,6 +682,7 @@ func (c *controller) flush() {
 	}
 	c.records = make(map[netip.Addr]*addressRecords)
 	c.recordsLen = 0
+	c.nextExpiry = time.Time{}
 	changed := len(c.lastDirect) != 0 || len(c.lastProxy) != 0
 	c.lastDirect = nil
 	c.lastProxy = nil
@@ -506,9 +691,7 @@ func (c *controller) flush() {
 	}
 	generation := c.generation
 	c.mu.Unlock()
-	if changed {
-		<-c.publish(DecisionSets{Direct: &netipx.IPSet{}, Proxy: &netipx.IPSet{}}, generation)
-	}
+	c.commitPublish(DecisionSets{Direct: &netipx.IPSet{}, Proxy: &netipx.IPSet{}}, generation, changed)
 }
 
 func (c *controller) Close() error {
@@ -516,11 +699,20 @@ func (c *controller) Close() error {
 		registry.Lock()
 		delete(registry.controllers, c)
 		registry.Unlock()
+		activeControllers.Add(-1)
+		atomic.AddUint64(&c.flushSeq, 1)
+		c.classifierMu.Lock()
 		c.mu.Lock()
 		c.closed = true
 		c.generation++
+		waiters := c.applyWaiters
+		c.applyWaiters = nil
 		c.mu.Unlock()
+		c.classifierMu.Unlock()
 		close(c.stop)
+		for _, done := range waiters {
+			close(done)
+		}
 		<-c.done
 	})
 	return nil

@@ -94,6 +94,7 @@ type RawTargetPolicy struct {
 type Config struct {
 	Enabled            bool
 	StorePath          string
+	requestedStore     string
 	CheckpointInterval time.Duration
 	MaxStoreSize       int64
 	Portal             PortalConfig
@@ -115,6 +116,8 @@ type ReportsConfig struct {
 }
 
 type PolicyKind string
+
+const maxTrafficControlPolicies = 256
 
 const (
 	PolicyGlobal PolicyKind = "global"
@@ -179,10 +182,11 @@ func ParseConfig(raw *RawConfig, resolvePath func(string) (string, error)) (*Con
 	if resolvePath == nil {
 		return nil, errors.New("traffic-control path resolver is required")
 	}
-	store := strings.TrimSpace(raw.Store)
-	if store == "" {
-		store = "traffic-control.db"
+	requestedStore := strings.TrimSpace(raw.Store)
+	if requestedStore == "" {
+		requestedStore = "traffic-control.db"
 	}
+	store := requestedStore
 	store, err := resolvePath(store)
 	if err != nil {
 		return nil, fmt.Errorf("traffic-control store: %w", err)
@@ -202,8 +206,15 @@ func ParseConfig(raw *RawConfig, resolvePath func(string) (string, error)) (*Con
 	if err != nil {
 		return nil, err
 	}
+	policyCount := len(raw.Devices) + len(raw.Rules) + len(raw.Targets)
+	if raw.Global != nil {
+		policyCount++
+	}
+	if policyCount > maxTrafficControlPolicies {
+		return nil, fmt.Errorf("traffic-control policy count %d exceeds maximum %d", policyCount, maxTrafficControlPolicies)
+	}
 	result := &Config{
-		Enabled: true, StorePath: filepath.Clean(store), CheckpointInterval: checkpoint,
+		Enabled: true, StorePath: filepath.Clean(store), requestedStore: requestedStore, CheckpointInterval: checkpoint,
 		MaxStoreSize: maxStoreSize, Portal: PortalConfig(raw.Portal), Reports: reports,
 	}
 	ids := make(map[string]struct{})
@@ -241,8 +252,11 @@ func ParseConfig(raw *RawConfig, resolvePath func(string) (string, error)) (*Con
 			}
 			policy.SourceCIDRs = append(policy.SourceCIDRs, prefix.Masked())
 		}
-		if len(policy.SourceCIDRs) == 0 && policy.MAC == "" {
-			return nil, fmt.Errorf("traffic-control device %q requires mac or source-cidrs", policy.ID)
+		if len(policy.SourceCIDRs) == 0 {
+			if policy.MAC != "" {
+				return nil, fmt.Errorf("traffic-control device %q MAC matching is not available; source-cidrs is required", policy.ID)
+			}
+			return nil, fmt.Errorf("traffic-control device %q requires source-cidrs", policy.ID)
 		}
 		if err := addPolicy(&result.Policies, ids, policy); err != nil {
 			return nil, err
@@ -452,7 +466,11 @@ func parseFlexibleDuration(value string) (time.Duration, error) {
 		if n > int64((1<<63-1)/multiplier) {
 			return 0, errors.New("duration overflows")
 		}
-		total += time.Duration(n) * multiplier
+		term := time.Duration(n) * multiplier
+		if total > time.Duration(1<<63-1)-term {
+			return 0, errors.New("duration overflows")
+		}
+		total += term
 		value = value[j:]
 	}
 	return total, nil
@@ -468,6 +486,93 @@ func (c *Config) Clone() *Config {
 		clone.Policies[i].SourceCIDRs = append([]netip.Prefix(nil), c.Policies[i].SourceCIDRs...)
 	}
 	return &clone
+}
+
+// Raw returns the kebab-case document that PUT /policies and YAML parse.
+// GET must emit this shape so a client can round-trip GET → PUT.
+func (c *Config) Raw() RawConfig {
+	if c == nil || !c.Enabled {
+		return RawConfig{Enabled: false}
+	}
+	store := c.requestedStore
+	if store == "" {
+		store = c.StorePath
+	}
+	raw := RawConfig{
+		Enabled:            true,
+		Store:              store,
+		CheckpointInterval: formatFlexibleDuration(c.CheckpointInterval),
+		MaxStoreSize:       c.MaxStoreSize,
+		Portal:             RawPortalConfig{Listen: c.Portal.Listen, URL: c.Portal.URL},
+		Reports: RawReportsConfig{
+			HourlyRetention:  formatFlexibleDuration(c.Reports.HourlyRetention),
+			DailyRetention:   formatFlexibleDuration(c.Reports.DailyRetention),
+			MonthlyRetention: formatFlexibleDuration(c.Reports.MonthlyRetention),
+			OrphanRetention:  formatFlexibleDuration(c.Reports.OrphanRetention),
+		},
+	}
+	reportsEnabled := c.Reports.Enabled
+	raw.Reports.Enabled = &reportsEnabled
+	for _, policy := range c.Policies {
+		enabled := policy.Enabled
+		base := RawPolicy{
+			ID:          policy.ID,
+			Name:        policy.Name,
+			Enabled:     &enabled,
+			UploadBPS:   policy.UploadBPS,
+			DownloadBPS: policy.DownloadBPS,
+			Quota: RawQuotaConfig{
+				TotalBytes:         policy.Quota.TotalBytes,
+				UploadBytes:        policy.Quota.UploadBytes,
+				DownloadBytes:      policy.Quota.DownloadBytes,
+				Window:             formatFlexibleDuration(policy.Quota.Window),
+				OverageUploadBPS:   policy.Quota.OverageUploadBPS,
+				OverageDownloadBPS: policy.Quota.OverageDownloadBPS,
+			},
+		}
+		portal := policy.Quota.Portal
+		base.Quota.Portal = &portal
+		switch policy.Kind {
+		case PolicyGlobal:
+			copied := base
+			raw.Global = &copied
+		case PolicyDevice:
+			cidrs := make([]string, 0, len(policy.SourceCIDRs))
+			for _, prefix := range policy.SourceCIDRs {
+				cidrs = append(cidrs, prefix.String())
+			}
+			raw.Devices = append(raw.Devices, RawDevicePolicy{RawPolicy: base, MAC: policy.MAC, SourceCIDRs: cidrs})
+		case PolicyRule:
+			raw.Rules = append(raw.Rules, RawRulePolicy{RawPolicy: base, Type: policy.Rule.Type, Payload: policy.Rule.Payload, Target: policy.Rule.Target})
+		case PolicyTarget:
+			raw.Targets = append(raw.Targets, RawTargetPolicy{RawPolicy: base, Kind: policy.Target.Kind, Target: policy.Target.Name})
+		}
+	}
+	return raw
+}
+
+func formatFlexibleDuration(d time.Duration) string {
+	if d <= 0 {
+		return ""
+	}
+	if d%(24*time.Hour) == 0 {
+		return strconv.FormatInt(int64(d/(24*time.Hour)), 10) + "d"
+	}
+	if d%time.Hour == 0 {
+		return strconv.FormatInt(int64(d/time.Hour), 10) + "h"
+	}
+	if d%time.Minute == 0 {
+		return strconv.FormatInt(int64(d/time.Minute), 10) + "m"
+	}
+	// parseFlexibleDuration has no second unit; round up so GET → PUT cannot emit "0m".
+	minutes := d / time.Minute
+	if d%time.Minute != 0 {
+		minutes++
+	}
+	if minutes < 1 {
+		minutes = 1
+	}
+	return strconv.FormatInt(int64(minutes), 10) + "m"
 }
 
 func (c *Config) SortedPolicyIDs() []string {

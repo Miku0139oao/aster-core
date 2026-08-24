@@ -12,6 +12,7 @@ import (
 
 	"github.com/Miku0139oao/aster-core/component/kerneldirect"
 	trafficControl "github.com/Miku0139oao/aster-core/component/trafficcontrol"
+	"github.com/Miku0139oao/aster-core/listener"
 	LC "github.com/Miku0139oao/aster-core/listener/config"
 
 	"github.com/metacubex/http/httptest"
@@ -188,6 +189,87 @@ func TestTrafficControlKernelDirectPatchMaxEntriesContract(t *testing.T) {
 	})
 }
 
+func TestPatchConfigsRejectsKernelDirectWithoutAutoRedirect(t *testing.T) {
+	previous := listener.LastTunConf
+	t.Cleanup(func() { listener.LastTunConf = previous })
+	listener.LastTunConf = LC.Tun{Enable: true, AutoRoute: true, AutoRedirect: false, KernelDirect: false}
+
+	request := httptest.NewRequest("PATCH", "http://controller/configs", strings.NewReader(`{"tun":{"kernel-direct":true}}`))
+	response := httptest.NewRecorder()
+	patchConfigs(response, request)
+	require.Equal(t, 400, response.Code, "PATCH must reject kernel-direct without auto-route and auto-redirect")
+	require.Contains(t, response.Body.String(), "tun kernel-direct requires auto-route and auto-redirect")
+	require.False(t, listener.LastTunConf.KernelDirect, "failed PATCH must not persist kernel-direct")
+	require.True(t, listener.LastTunConf.Enable, "failed PATCH must not disable TUN")
+}
+
+func TestPatchConfigsReportsTunStartFailure(t *testing.T) {
+	previous := listener.LastTunConf
+	previousAllowLan := listener.AllowLan()
+	t.Cleanup(func() {
+		listener.LastTunConf = previous
+		listener.SetAllowLan(previousAllowLan)
+	})
+	listener.LastTunConf = LC.Tun{Enable: true, AutoRoute: true, DNSHijack: []string{"8.8.8.8:53"}}
+	listener.SetAllowLan(false)
+
+	request := httptest.NewRequest("PATCH", "http://controller/configs", strings.NewReader(`{"allow-lan":true,"tun":{"dns-hijack":["not-an-addrport"]}}`))
+	response := httptest.NewRecorder()
+	patchConfigs(response, request)
+	require.NotEqual(t, 204, response.Code, "PATCH must not report success after sing_tun.New fails")
+	require.Equal(t, 500, response.Code)
+	require.Contains(t, response.Body.String(), "dns-hijack")
+	require.True(t, listener.LastTunConf.Enable, "failed recreate must keep the previous Enable")
+	require.Equal(t, []string{"8.8.8.8:53"}, listener.LastTunConf.DNSHijack)
+	require.True(t, listener.GetTunConf().Enable)
+	require.False(t, listener.AllowLan(), "failed TUN activation must not commit unrelated PATCH fields")
+}
+
+func TestUpdateConfigsReportsTunStartFailureFromApplyConfig(t *testing.T) {
+	previous := listener.LastTunConf
+	t.Cleanup(func() { listener.LastTunConf = previous })
+	listener.LastTunConf = LC.Tun{}
+
+	body, err := json.Marshal(map[string]string{
+		"payload": "tun:\n  enable: true\n  dns-hijack:\n    - not-an-addrport\ndns:\n  enable: false\n",
+	})
+	require.NoError(t, err)
+	request := httptest.NewRequest("PUT", "http://controller/configs", strings.NewReader(string(body)))
+	response := httptest.NewRecorder()
+
+	updateConfigs(response, request)
+
+	require.Equal(t, 500, response.Code)
+	require.Contains(t, response.Body.String(), "dns-hijack")
+	require.False(t, listener.LastTunConf.Enable, "failed ApplyConfig must not persist the requested TUN config")
+}
+
+func TestPatchConfigsRejectsKernelDirectEBPFWithoutInterfaces(t *testing.T) {
+	previous := listener.LastTunConf
+	t.Cleanup(func() { listener.LastTunConf = previous })
+	listener.LastTunConf = LC.Tun{Enable: true, AutoRoute: true, AutoRedirect: true, KernelDirect: true}
+
+	request := httptest.NewRequest("PATCH", "http://controller/configs", strings.NewReader(`{"tun":{"kernel-direct-ebpf":true}}`))
+	response := httptest.NewRecorder()
+	patchConfigs(response, request)
+	require.Equal(t, 400, response.Code)
+	require.Contains(t, response.Body.String(), "tun kernel-direct-ebpf requires kernel-direct-ebpf-interfaces")
+	require.False(t, listener.LastTunConf.KernelDirectEBPF)
+}
+
+func TestPatchConfigsRejectsKernelDirectEBPFDirectPrefixesWithoutEBPF(t *testing.T) {
+	previous := listener.LastTunConf
+	t.Cleanup(func() { listener.LastTunConf = previous })
+	listener.LastTunConf = LC.Tun{Enable: true, AutoRoute: true, AutoRedirect: true, KernelDirect: true}
+
+	request := httptest.NewRequest("PATCH", "http://controller/configs", strings.NewReader(`{"tun":{"kernel-direct-ebpf-direct-prefixes":["8.8.8.0/24"]}}`))
+	response := httptest.NewRecorder()
+	patchConfigs(response, request)
+	require.Equal(t, 400, response.Code)
+	require.Contains(t, response.Body.String(), "tun kernel-direct-ebpf-direct-prefixes requires kernel-direct-ebpf")
+	require.Empty(t, listener.LastTunConf.KernelDirectEBPFDirectPrefixes)
+}
+
 func TestPatchTuicEnablePreservesOmittedValue(t *testing.T) {
 	listen := "127.0.0.1:8443"
 	patched := pointerOrDefaultTuicServer(&tuicServerSchema{Listen: &listen}, LC.TuicServer{Enable: true, Listen: "127.0.0.1:443"})
@@ -197,6 +279,55 @@ func TestPatchTuicEnablePreservesOmittedValue(t *testing.T) {
 	disabled := false
 	patched = pointerOrDefaultTuicServer(&tuicServerSchema{Enable: &disabled}, LC.TuicServer{Enable: true})
 	require.False(t, patched.Enable)
+}
+
+func TestTrafficControlPoliciesGetPutRoundTripKeepsEnabled(t *testing.T) {
+	setupTrafficControlRouteTest(t)
+	handler := router(false, "", "", Cors{}, asterRoutePolicy{})
+
+	getRequest := httptest.NewRequest("GET", "http://controller/api/aster/traffic-control/policies", nil)
+	getResponse := httptest.NewRecorder()
+	handler.ServeHTTP(getResponse, getRequest)
+	require.Equal(t, 200, getResponse.Code)
+
+	var got struct {
+		Revision uint64          `json:"revision"`
+		Config   json.RawMessage `json:"config"`
+	}
+	require.NoError(t, json.NewDecoder(getResponse.Body).Decode(&got))
+	var raw map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(got.Config, &raw))
+	require.Contains(t, raw, "enabled", "GET must emit kebab-case RawConfig so PUT can round-trip")
+	require.NotContains(t, raw, "Enabled")
+	require.Equal(t, "true", strings.TrimSpace(string(raw["enabled"])))
+	require.Contains(t, raw, "store", "GET must emit store so PUT can keep the same database")
+
+	before, _ := trafficControl.Default.Config()
+	putBody, err := json.Marshal(map[string]interface{}{"revision": got.Revision, "config": got.Config})
+	require.NoError(t, err)
+	putRequest := httptest.NewRequest("PUT", "http://controller/api/aster/traffic-control/policies", strings.NewReader(string(putBody)))
+	putRequest.Header.Set("Content-Type", "application/json")
+	putResponse := httptest.NewRecorder()
+	handler.ServeHTTP(putResponse, putRequest)
+	require.Equal(t, 200, putResponse.Code, "PUT of GET body must succeed: %s", putResponse.Body.String())
+	require.True(t, trafficControl.Default.Enabled(), "GET→PUT must not disable traffic-control")
+	after, _ := trafficControl.Default.Config()
+	require.Equal(t, before.StorePath, after.StorePath, "GET→PUT must keep the same store path")
+}
+
+func TestTrafficControlReportsUnknownKeyUsesEmptyArray(t *testing.T) {
+	setupTrafficControlRouteTest(t)
+	handler := router(false, "", "", Cors{}, asterRoutePolicy{})
+	request := httptest.NewRequest("GET", "http://controller/api/aster/traffic-control/reports?key=missing:key", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	require.Equal(t, 200, response.Code)
+
+	var payload struct {
+		Buckets json.RawMessage `json:"buckets"`
+	}
+	require.NoError(t, json.NewDecoder(response.Body).Decode(&payload))
+	require.Equal(t, "[]", string(payload.Buckets), "missing report series must encode buckets as [] not null")
 }
 
 func TestTrafficControlPolicyUpdateRejectsStaleRevision(t *testing.T) {

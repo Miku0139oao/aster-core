@@ -35,6 +35,11 @@ type Client struct {
 }
 
 func NewClient(ctx context.Context, dial DialFunc, cfg Config) (*Client, error) {
+	var err error
+	cfg, err = normalizeConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	roundTripURL, err := normalizeURL(cfg.URL)
 	if err != nil {
@@ -321,6 +326,7 @@ func (c *Client) newSession() (*requestClientSession, error) {
 		writerChan:             make(chan []byte, 256),
 		readerChan:             make(chan []byte, 256),
 		deadlines:              newPipeDeadlines(),
+		roundTripSlots:         make(chan struct{}, c.cfg.MaxSimultaneousWriteConnection),
 		rt:                     c.rt,
 	}
 	go session.keepRunning()
@@ -367,6 +373,7 @@ type requestClientSession struct {
 	readerChan             chan []byte
 	nextWrite              []byte
 	deadlines              pipeDeadlines
+	roundTripSlots         chan struct{}
 	addrMu                 sync.RWMutex
 	localAddr              net.Addr
 	remoteAddr             net.Addr
@@ -423,7 +430,19 @@ copyFromChan:
 		}
 	}
 
-	go s.roundTrip(requestBody.Bytes())
+	s.startRoundTrip(requestBody.Bytes())
+}
+
+func (s *requestClientSession) startRoundTrip(body []byte) {
+	select {
+	case <-s.ctx.Done():
+		return
+	case s.roundTripSlots <- struct{}{}:
+	}
+	go func() {
+		defer func() { <-s.roundTripSlots }()
+		s.roundTrip(body)
+	}()
 }
 
 func (s *requestClientSession) writePacket(requestBody *bytes.Buffer, packet []byte) bool {

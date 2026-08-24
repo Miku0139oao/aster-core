@@ -63,9 +63,11 @@ traffic-control:
 
 規則以類型、正規化 matcher 與目標策略產生內容簽名，因此重排規則不會丟失歷史。修改規則內容或配額窗口會建立新的 generation。
 
+`mac` 可作為 Nikki／管理端的穩定裝置識別，但核心目前不會在每條 flow 執行 neighbor lookup，也沒有 ingress MAC attribution。每個 device policy 都必須帶 `source-cidrs`；MAC-only 設定會被拒絕，避免看似成功卻永遠不命中。
+
 ## 持久化與壓縮
 
-治理狀態與報表保存在 bbolt。一般流量每五分鐘 checkpoint；超額、重置、設定變更與正常關閉會立即提交。封存時間桶使用 Zstandard 分區壓縮，每個區塊有原始長度與 CRC32C，查詢時只解壓需要的區段。
+治理狀態與報表保存在 bbolt。一般流量每五分鐘 checkpoint；超額、重置、設定變更與正常關閉會立即提交。每個 policy／report series 以帶原始長度與 CRC32C 的 Zstandard blob 保存；啟動時會載入並解碼目前資料，報表查詢再從記憶體中的 hour/day/month map 篩選。這不是 query-time lazy segment storage。
 
 主資料庫會建立驗證備份；損壞時可自動恢復。Nikki package 會把資料庫與備份加入 sysupgrade 保留清單。
 
@@ -83,7 +85,7 @@ traffic-control:
 - `GET /api/aster/traffic-control/reports/summary`
 - `GET /api/aster/traffic-control/reports/export.csv`
 
-`GET /api/aster/capabilities` 的 `kernel_direct` 物件為 version `4`（v4 未發布過，此次直接採用，沒有跳到 5）。`deprecated_fields` 含 `proxy_traffic`。
+`GET /api/aster/capabilities` 的 `kernel_direct` 目前 schema version 為 `4`；`deprecated_fields` 含 `proxy_traffic`。
 
 `GET /api/aster/kernel-direct/status` 除既有的 `backend`／`fast_paths` 外還回傳：
 
@@ -94,4 +96,6 @@ traffic-control:
 
 `learned_sets[].evictions` 是行程啟動以來 address LRU 因容量上限淘汰的次數；TTL 到期、規則 reload flush 或 set collapse 不計入。
 
-報表查詢接受 `key`、`granularity=hour|day|month`、`from` 與 `to` Unix timestamp。交叉維度 key 使用 `|` 連接，例如 `device:phone|rule:video-rule`。
+`GET /api/aster/traffic-control/policies` 回傳 `{revision, config}`；PUT 必須把同一 envelope 送回，revision 過期時回 409。Controller JSON body 上限為 1 MiB。失敗的 Configure／PUT 會保留先前的 runtime、revision、store、flusher 與 portal；相同 store path 與 portal listen 會被重用，活躍 session 會切到新 generation。政策數量上限 256，每個 session 最多 128 個 report key，全域 report series 上限 4,096。
+
+報表查詢接受 `key`、`granularity=hour|day|month`、`from` 與 `to` Unix timestamp；範圍必須為正且最多 400 天。未知 key 回傳 `buckets: []`，無效 granularity 即使 key 不存在也會回 400。交叉維度 key 使用 `|` 連接，例如 `device:phone|rule:video-rule`。

@@ -324,7 +324,8 @@ func (c Packet) WriteTo(writer BufferedWriter) (err error) {
 }
 
 func (c Packet) BytesLen() int {
-	return c.CommandHead.BytesLen() + 4 + 2 + c.ADDR.BytesLen() + len(c.DATA)
+	// ASSOC_ID(2) + PKT_ID(2) + FRAG_TOTAL(1) + FRAG_ID(1) + SIZE(2).
+	return c.CommandHead.BytesLen() + 8 + c.ADDR.BytesLen() + len(c.DATA)
 }
 
 var PacketOverHead = NewPacket(0, 0, 0, 0, 0, NewAddressAddrPort(netip.AddrPortFrom(netip.IPv6Unspecified(), 0)), nil).BytesLen()
@@ -375,7 +376,7 @@ func (c Dissociate) WriteTo(writer BufferedWriter) (err error) {
 }
 
 func (c Dissociate) BytesLen() int {
-	return c.CommandHead.BytesLen() + 4
+	return c.CommandHead.BytesLen() + 2
 }
 
 type Heartbeat struct {

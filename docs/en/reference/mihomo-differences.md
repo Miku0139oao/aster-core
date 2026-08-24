@@ -1,6 +1,6 @@
 # How Aster differs from Mihomo
 
-Aster Core is based on Mihomo `v1.19.29`. Configuration format, the rule engine, DNS, TUN, proxy groups, and the Clash-compatible API all come from Mihomo. Aster’s own work is concentrated on AnyTLS + REALITY, bug fixes, runtime efficiency, and optional server management.
+Aster Core is based on Mihomo `v1.19.29`. Configuration format, the rule engine, DNS, TUN, proxy groups, and the Clash-compatible API all come from Mihomo. Aster’s work includes AnyTLS + REALITY, AmneziaWG v3/v3.1, H2C/HTTP2 and QUIC v2 sniffing improvements, Linux/OpenWrt Kernel DIRECT, correctness fixes, runtime efficiency, and optional server management.
 
 ## AnyTLS + REALITY
 
@@ -32,12 +32,14 @@ These fixes matter most on long-running hosts, frequent configuration updates, U
 ## Performance work
 
 - TCP relay reuses buffers; UDP adapters and metadata use object pools
-- UDP NAT uses typed keys, immutable mapping snapshots, and batched deadline refresh
+- UDP NAT uses typed keys, bounded incremental reverse mappings, and batched deadline refresh; it no longer copies the whole map for every new destination
 - Rules and proxy lists are published as atomic snapshots, so packet matching does not hold a global configuration read lock
 - AnyTLS pre-parses the padding scheme and assembles data/control frames directly
 - Disabled debug logs return before formatting and creating an event
 - Users and subscription tokens are looked up by index; traffic uses atomic increments and batched writes
 - Updating one listener copies only the related data; Aster state uses leaner JSON
+- Finalized IP-CIDR / GeoIP ranges use binary lookup, and Kernel DIRECT skips full cache scans before the next TTL
+- QUIC sniffing tracks CRYPTO coverage in a bounded bitmap instead of retaining attacker-shaped sparse range lists
 
 In the latest microbenchmarks, steady-state UDP, 32 KiB TCP relay, and common-size AnyTLS uploads reach zero allocations per operation. Full numbers, test environment, and how to rerun are in [Performance and benchmarks](/en/reference/performance). Real differences still vary with configuration, connection count, protocol, OS, and hardware.
 

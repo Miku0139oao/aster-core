@@ -15,6 +15,13 @@ func (*benchmarkUDPPacket) WriteBack([]byte, net.Addr) (int, error) { return 0, 
 func (*benchmarkUDPPacket) Drop()                                   {}
 func (p *benchmarkUDPPacket) LocalAddr() net.Addr                   { return p.addr }
 
+type namespacedUDPPacket struct {
+	benchmarkUDPPacket
+	in net.Addr
+}
+
+func (p *namespacedUDPPacket) InAddr() net.Addr { return p.in }
+
 type packetAdapterLifecycleProbe struct {
 	benchmarkUDPPacket
 	drops  int
@@ -46,6 +53,29 @@ func TestUDPNatKeyRoundTrip(t *testing.T) {
 	}
 }
 
+func TestUDPNatKeyIncludesIngressNamespace(t *testing.T) {
+	source := net.UDPAddrFromAddrPort(netip.MustParseAddrPort("192.0.2.10:12345"))
+	packetA := &namespacedUDPPacket{
+		benchmarkUDPPacket: benchmarkUDPPacket{addr: source},
+		in:                 net.UDPAddrFromAddrPort(netip.MustParseAddrPort("127.0.0.1:1080")),
+	}
+	packetB := &namespacedUDPPacket{
+		benchmarkUDPPacket: benchmarkUDPPacket{addr: source},
+		in:                 net.UDPAddrFromAddrPort(netip.MustParseAddrPort("127.0.0.1:1081")),
+	}
+	keyA := NewUDPNatKeyForPacket(packetA, &Metadata{Type: SOCKS5, InName: "socks-a"})
+	keyB := NewUDPNatKeyForPacket(packetB, &Metadata{Type: SOCKS5, InName: "socks-b"})
+	if keyA == keyB {
+		t.Fatal("equal client tuples from different inbounds collided")
+	}
+	if keyA.AddrPort != keyB.AddrPort || keyA.IngressAddrPort == keyB.IngressAddrPort {
+		t.Fatalf("unexpected namespaced keys: %#v %#v", keyA, keyB)
+	}
+	if repeated := NewUDPNatKeyForPacket(packetA, &Metadata{Type: SOCKS5, InName: "socks-a"}); repeated != keyA {
+		t.Fatalf("stable ingress produced a different key: %#v != %#v", repeated, keyA)
+	}
+}
+
 func TestPacketAdapterWriteBackOutlivesWrapper(t *testing.T) {
 	packet := &packetAdapterLifecycleProbe{benchmarkUDPPacket: benchmarkUDPPacket{
 		addr: net.UDPAddrFromAddrPort(netip.MustParseAddrPort("192.0.2.1:12345")),
@@ -62,6 +92,26 @@ func TestPacketAdapterWriteBackOutlivesWrapper(t *testing.T) {
 	}
 	if packet.writes != 1 {
 		t.Fatalf("unexpected write count: %d", packet.writes)
+	}
+}
+
+func TestNestedPacketAdapterWriteBackOutlivesAllWrappers(t *testing.T) {
+	packet := &packetAdapterLifecycleProbe{benchmarkUDPPacket: benchmarkUDPPacket{
+		addr: net.UDPAddrFromAddrPort(netip.MustParseAddrPort("192.0.2.2:23456")),
+	}}
+	inner := NewPacketAdapter(packet, &Metadata{})
+	outer := NewPacketAdapter(inner, &Metadata{})
+	writeBack := outer.WriteBackTarget()
+	outer.Drop()
+
+	if packet.drops != 1 {
+		t.Fatalf("unexpected nested drop count: %d", packet.drops)
+	}
+	if _, err := writeBack.WriteBack(nil, packet.addr); err != nil {
+		t.Fatal(err)
+	}
+	if packet.writes != 1 {
+		t.Fatalf("unexpected nested write count: %d", packet.writes)
 	}
 }
 

@@ -78,11 +78,46 @@ type Tun struct {
 	SendMsgX bool `yaml:"sendmsgx" json:"sendmsgx,omitempty"`
 }
 
+func (t Tun) Clone() Tun {
+	t.DNSHijack = slices.Clone(t.DNSHijack)
+	t.Inet4Address = slices.Clone(t.Inet4Address)
+	t.Inet6Address = slices.Clone(t.Inet6Address)
+	t.KernelDirectEBPFInterfaces = slices.Clone(t.KernelDirectEBPFInterfaces)
+	t.KernelDirectEBPFDirectPrefixes = slices.Clone(t.KernelDirectEBPFDirectPrefixes)
+	t.KernelDirectEBPFProxyPrefixes = slices.Clone(t.KernelDirectEBPFProxyPrefixes)
+	t.LoopbackAddress = slices.Clone(t.LoopbackAddress)
+	t.RouteAddress = slices.Clone(t.RouteAddress)
+	t.RouteAddressSet = slices.Clone(t.RouteAddressSet)
+	t.RouteExcludeAddress = slices.Clone(t.RouteExcludeAddress)
+	t.RouteExcludeAddressSet = slices.Clone(t.RouteExcludeAddressSet)
+	t.IncludeInterface = slices.Clone(t.IncludeInterface)
+	t.ExcludeInterface = slices.Clone(t.ExcludeInterface)
+	t.IncludeUID = slices.Clone(t.IncludeUID)
+	t.IncludeUIDRange = slices.Clone(t.IncludeUIDRange)
+	t.ExcludeUID = slices.Clone(t.ExcludeUID)
+	t.ExcludeUIDRange = slices.Clone(t.ExcludeUIDRange)
+	t.ExcludeSrcPort = slices.Clone(t.ExcludeSrcPort)
+	t.ExcludeSrcPortRange = slices.Clone(t.ExcludeSrcPortRange)
+	t.ExcludeDstPort = slices.Clone(t.ExcludeDstPort)
+	t.ExcludeDstPortRange = slices.Clone(t.ExcludeDstPortRange)
+	t.IncludeAndroidUser = slices.Clone(t.IncludeAndroidUser)
+	t.IncludePackage = slices.Clone(t.IncludePackage)
+	t.ExcludePackage = slices.Clone(t.ExcludePackage)
+	t.IncludeMACAddress = slices.Clone(t.IncludeMACAddress)
+	t.ExcludeMACAddress = slices.Clone(t.ExcludeMACAddress)
+	t.Inet4RouteAddress = slices.Clone(t.Inet4RouteAddress)
+	t.Inet6RouteAddress = slices.Clone(t.Inet6RouteAddress)
+	t.Inet4RouteExcludeAddress = slices.Clone(t.Inet4RouteExcludeAddress)
+	t.Inet6RouteExcludeAddress = slices.Clone(t.Inet6RouteExcludeAddress)
+	return t
+}
+
 func (t *Tun) Sort() {
 	slices.Sort(t.DNSHijack)
 
 	slices.SortFunc(t.Inet4Address, netipx.ComparePrefix)
 	slices.SortFunc(t.Inet6Address, netipx.ComparePrefix)
+	slices.SortFunc(t.LoopbackAddress, func(a, b netip.Addr) int { return a.Compare(b) })
 	slices.SortFunc(t.RouteAddress, netipx.ComparePrefix)
 	slices.Sort(t.RouteAddressSet)
 	slices.SortFunc(t.RouteExcludeAddress, netipx.ComparePrefix)
@@ -96,6 +131,10 @@ func (t *Tun) Sort() {
 	slices.Sort(t.IncludeUIDRange)
 	slices.Sort(t.ExcludeUID)
 	slices.Sort(t.ExcludeUIDRange)
+	slices.Sort(t.ExcludeSrcPort)
+	slices.Sort(t.ExcludeSrcPortRange)
+	slices.Sort(t.ExcludeDstPort)
+	slices.Sort(t.ExcludeDstPortRange)
 	slices.Sort(t.IncludeAndroidUser)
 	slices.Sort(t.IncludePackage)
 	slices.Sort(t.ExcludePackage)
@@ -200,7 +239,7 @@ func (t *Tun) Equal(other Tun) bool {
 	if t.AutoRedirectIPRoute2FallbackRuleIndex != other.AutoRedirectIPRoute2FallbackRuleIndex {
 		return false
 	}
-	if !slices.Equal(t.RouteAddress, other.RouteAddress) {
+	if !slices.Equal(t.LoopbackAddress, other.LoopbackAddress) {
 		return false
 	}
 	if t.StrictRoute != other.StrictRoute {
@@ -234,6 +273,18 @@ func (t *Tun) Equal(other Tun) bool {
 		return false
 	}
 	if !slices.Equal(t.ExcludeUIDRange, other.ExcludeUIDRange) {
+		return false
+	}
+	if !slices.Equal(t.ExcludeSrcPort, other.ExcludeSrcPort) {
+		return false
+	}
+	if !slices.Equal(t.ExcludeSrcPortRange, other.ExcludeSrcPortRange) {
+		return false
+	}
+	if !slices.Equal(t.ExcludeDstPort, other.ExcludeDstPort) {
+		return false
+	}
+	if !slices.Equal(t.ExcludeDstPortRange, other.ExcludeDstPortRange) {
 		return false
 	}
 	if !slices.Equal(t.IncludeAndroidUser, other.IncludeAndroidUser) {

@@ -58,6 +58,17 @@ func ParseProxyGroup(config map[string]any, proxyMap map[string]C.Proxy, provide
 	if groupOption.Type == "" || groupOption.Name == "" {
 		return nil, errFormat
 	}
+	if groupOption.Interval < 0 || groupOption.TestTimeout < 0 {
+		return nil, fmt.Errorf("%s: interval and timeout cannot be negative", groupOption.Name)
+	}
+	for _, expression := range append(strings.Split(groupOption.Filter, "`"), strings.Split(groupOption.ExcludeFilter, "`")...) {
+		if expression == "" {
+			continue
+		}
+		if _, err := regexp2.Compile(expression, regexp2.None); err != nil {
+			return nil, fmt.Errorf("%s: invalid filter: %w", groupOption.Name, err)
+		}
+	}
 
 	if _, ok := config["routing-mark"]; ok {
 		log.Errorln("The group [%s] with routing-mark configuration was removed, please set it directly on the proxy instead", groupOption.Name)
@@ -96,7 +107,10 @@ func ParseProxyGroup(config map[string]any, proxyMap map[string]C.Proxy, provide
 		if groupOption.Filter != "" {
 			var filterRegs []*regexp2.Regexp
 			for _, filter := range strings.Split(groupOption.Filter, "`") {
-				filterReg := regexp2.MustCompile(filter, regexp2.None)
+				filterReg, err := regexp2.Compile(filter, regexp2.None)
+				if err != nil {
+					return nil, fmt.Errorf("%s: invalid filter: %w", groupName, err)
+				}
 				filterRegs = append(filterRegs, filterReg)
 			}
 			for _, p := range AllProxies {

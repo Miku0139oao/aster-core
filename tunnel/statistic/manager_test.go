@@ -62,14 +62,14 @@ func TestManagerReapsIdleZeroByteTCP(t *testing.T) {
 		Start:         time.Now().Add(-time.Minute),
 		UploadTotal:   atomic.NewInt64(0),
 		DownloadTotal: atomic.NewInt64(0),
-		Metadata:      &C.Metadata{NetWork: C.TCP, DstPort: 6651},
+		Metadata:      &C.Metadata{NetWork: C.TCP, Type: C.TUN, DstPort: 6651},
 	})
 	live := newReapTracker(manager, "live", &TrackerInfo{
 		UUID:          utils.NewUUIDV4(),
 		Start:         time.Now().Add(-time.Minute),
 		UploadTotal:   atomic.NewInt64(12),
 		DownloadTotal: atomic.NewInt64(0),
-		Metadata:      &C.Metadata{NetWork: C.TCP, DstPort: 6651},
+		Metadata:      &C.Metadata{NetWork: C.TCP, Type: C.TUN, DstPort: 6651},
 	})
 	ike := newReapTracker(manager, "ike", &TrackerInfo{
 		UUID:          utils.NewUUIDV4(),
@@ -100,7 +100,7 @@ func TestManagerReapSkipsYoungZeroByteTCP(t *testing.T) {
 		Start:         time.Now().Add(-10 * time.Second),
 		UploadTotal:   atomic.NewInt64(0),
 		DownloadTotal: atomic.NewInt64(0),
-		Metadata:      &C.Metadata{NetWork: C.TCP, DstPort: 6651},
+		Metadata:      &C.Metadata{NetWork: C.TCP, Type: C.TUN, DstPort: 6651},
 	})
 	manager.Join(young)
 	require.Zero(t, manager.reapIdleZeroByteTCP(time.Now()))
@@ -116,14 +116,14 @@ func TestManagerReapSkipsTCPPorts500And4500(t *testing.T) {
 		Start:         start,
 		UploadTotal:   atomic.NewInt64(0),
 		DownloadTotal: atomic.NewInt64(0),
-		Metadata:      &C.Metadata{NetWork: C.TCP, DstPort: 500},
+		Metadata:      &C.Metadata{NetWork: C.TCP, Type: C.TUN, DstPort: 500},
 	})
 	ike4500 := newReapTracker(manager, "ike4500", &TrackerInfo{
 		UUID:          utils.NewUUIDV4(),
 		Start:         start,
 		UploadTotal:   atomic.NewInt64(0),
 		DownloadTotal: atomic.NewInt64(0),
-		Metadata:      &C.Metadata{NetWork: C.TCP, DstPort: 4500},
+		Metadata:      &C.Metadata{NetWork: C.TCP, Type: C.TUN, DstPort: 4500},
 	})
 	manager.Join(ike500)
 	manager.Join(ike4500)
@@ -140,7 +140,7 @@ func TestManagerReapCloseIsIdempotent(t *testing.T) {
 		Start:         time.Now().Add(-time.Minute),
 		UploadTotal:   atomic.NewInt64(0),
 		DownloadTotal: atomic.NewInt64(0),
-		Metadata:      &C.Metadata{NetWork: C.TCP, DstPort: 6651},
+		Metadata:      &C.Metadata{NetWork: C.TCP, Type: C.TUN, DstPort: 6651},
 	})
 	manager.Join(stale)
 
@@ -162,7 +162,7 @@ func TestManagerReapCloseConcurrentWithHandleSocket(t *testing.T) {
 		Start:         time.Now().Add(-time.Minute),
 		UploadTotal:   atomic.NewInt64(0),
 		DownloadTotal: atomic.NewInt64(0),
-		Metadata:      &C.Metadata{NetWork: C.TCP, DstPort: 6651},
+		Metadata:      &C.Metadata{NetWork: C.TCP, Type: C.TUN, DstPort: 6651},
 	})
 	manager.Join(stale)
 
@@ -187,13 +187,13 @@ func TestTrackerEligibleForZeroByteReap(t *testing.T) {
 		Start:         staleStart,
 		UploadTotal:   atomic.NewInt64(0),
 		DownloadTotal: atomic.NewInt64(0),
-		Metadata:      &C.Metadata{NetWork: C.TCP, DstPort: 6651},
+		Metadata:      &C.Metadata{NetWork: C.TCP, Type: C.TUN, DstPort: 6651},
 	}, now))
 	require.False(t, trackerEligibleForZeroByteReap(&TrackerInfo{
 		Start:         now.Add(-10 * time.Second),
 		UploadTotal:   atomic.NewInt64(0),
 		DownloadTotal: atomic.NewInt64(0),
-		Metadata:      &C.Metadata{NetWork: C.TCP, DstPort: 6651},
+		Metadata:      &C.Metadata{NetWork: C.TCP, Type: C.TUN, DstPort: 6651},
 	}, now))
 	require.False(t, trackerEligibleForZeroByteReap(&TrackerInfo{
 		Start:         staleStart,
@@ -205,8 +205,14 @@ func TestTrackerEligibleForZeroByteReap(t *testing.T) {
 		Start:         staleStart,
 		UploadTotal:   atomic.NewInt64(0),
 		DownloadTotal: atomic.NewInt64(0),
-		Metadata:      &C.Metadata{NetWork: C.TCP, DstPort: 4500},
+		Metadata:      &C.Metadata{NetWork: C.TCP, Type: C.TUN, DstPort: 4500},
 	}, now))
+	require.False(t, trackerEligibleForZeroByteReap(&TrackerInfo{
+		Start:         staleStart,
+		UploadTotal:   atomic.NewInt64(0),
+		DownloadTotal: atomic.NewInt64(0),
+		Metadata:      &C.Metadata{NetWork: C.TCP, Type: C.HTTP, DstPort: 6651},
+	}, now), "ordinary server-first TCP must not be reaped")
 }
 
 func TestManagerTracksConnectionCountsByPrincipal(t *testing.T) {

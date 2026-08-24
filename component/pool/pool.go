@@ -91,9 +91,20 @@ func (p *pool[T]) Put(item T) {
 }
 
 func recycle[T any](p *Pool[T]) {
-	for item := range p.pool.ch {
-		if p.pool.evict != nil {
-			p.pool.evict(item.elm)
+	// Finalizers run on one runtime goroutine. The pool channel is never closed,
+	// so ranging over it can block that goroutine forever and prevent unrelated
+	// finalizers from running. Drain only entries that are available now.
+	for {
+		select {
+		case item, ok := <-p.pool.ch:
+			if !ok {
+				return
+			}
+			if p.pool.evict != nil {
+				p.pool.evict(item.elm)
+			}
+		default:
+			return
 		}
 	}
 }

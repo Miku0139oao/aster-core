@@ -25,37 +25,231 @@ func withKernelDirectObservation() middleware {
 	return func(next handler) handler {
 		return func(ctx *icontext.DNSContext, r *D.Msg) (*D.Msg, error) {
 			msg, err := next(ctx, r)
-			if err != nil || msg == nil || len(r.Question) == 0 {
+			if err != nil || msg == nil || r == nil || len(r.Question) != 1 || !kerneldirect.HasConsumers() {
 				return msg, err
 			}
-			host := strings.TrimRight(r.Question[0].Name, ".")
-			answers := make([]kerneldirect.DNSAnswer, 0, len(msg.Answer))
-			for _, answer := range msg.Answer {
-				var addr netip.Addr
-				var ttl uint32
-				switch record := answer.(type) {
-				case *D.A:
-					addr, _ = netip.AddrFromSlice(record.A)
-					ttl = record.Hdr.Ttl
-				case *D.AAAA:
-					addr, _ = netip.AddrFromSlice(record.AAAA)
-					ttl = record.Hdr.Ttl
-				default:
-					continue
-				}
-				addr = addr.Unmap()
-				if !addr.IsValid() || resolver.IsFakeIP(addr) {
-					continue
-				}
-				answers = append(answers, kerneldirect.DNSAnswer{
-					Addr: addr,
-					TTL:  time.Duration(ttl) * time.Second,
-				})
+			question := r.Question[0]
+			answers := collectKernelDirectAnswers(question, msg)
+			if len(answers) != 0 {
+				kerneldirect.ObserveDNS(dnsNameKey(question.Name), answers)
 			}
-			kerneldirect.ObserveDNS(host, answers)
 			return msg, nil
 		}
 	}
+}
+
+func dnsNameKey(name string) string {
+	return strings.ToLower(strings.TrimSuffix(name, "."))
+}
+
+const (
+	kernelDirectMaxAliasExpansions = 64
+	kernelDirectMaxAliasRecords    = 256
+	kernelDirectMaxAnswers         = 64
+)
+
+type kernelDirectAlias struct {
+	target string
+	ttl    uint32
+}
+
+func kernelDirectAliasTarget(name string) (string, bool) {
+	target := dnsNameKey(name)
+	return target, target != "" || name == "."
+}
+
+func kernelDirectDNAMEAlias(name, owner, target string) (string, bool) {
+	nameLabels := D.SplitDomainName(name)
+	ownerLabels := D.SplitDomainName(owner)
+	if len(ownerLabels) == 0 || len(nameLabels) <= len(ownerLabels) {
+		return "", false
+	}
+	nameSuffix := nameLabels[len(nameLabels)-len(ownerLabels):]
+	for i := range ownerLabels {
+		if nameSuffix[i] != ownerLabels[i] {
+			return "", false
+		}
+	}
+	targetLabels := D.SplitDomainName(target)
+	labels := append([]string{}, nameLabels[:len(nameLabels)-len(ownerLabels)]...)
+	return strings.Join(append(labels, targetLabels...), "."), true
+}
+
+func mergeKernelDirectAlias(aliases map[string]kernelDirectAlias, owner string, alias kernelDirectAlias) bool {
+	if owner == "" {
+		return false
+	}
+	if current, exists := aliases[owner]; exists {
+		if current.target != alias.target {
+			return false
+		}
+		if alias.ttl < current.ttl {
+			aliases[owner] = alias
+		}
+		return true
+	}
+	aliases[owner] = alias
+	return true
+}
+
+func kernelDirectTerminal(question D.Question, msg *D.Msg) (string, uint32, bool) {
+	query := dnsNameKey(question.Name)
+	if query == "" {
+		return "", 0, false
+	}
+	cnames := make(map[string]kernelDirectAlias)
+	dnames := make(map[string]kernelDirectAlias)
+	aliasRecords := 0
+	for _, rr := range msg.Answer {
+		switch rec := rr.(type) {
+		case *D.CNAME:
+			if rec == nil || rec.Hdr.Class != D.ClassINET {
+				continue
+			}
+			target, ok := kernelDirectAliasTarget(rec.Target)
+			if !ok || !mergeKernelDirectAlias(cnames, dnsNameKey(rec.Hdr.Name), kernelDirectAlias{target: target, ttl: rec.Hdr.Ttl}) {
+				return "", 0, false
+			}
+			aliasRecords++
+		case *D.DNAME:
+			if rec == nil || rec.Hdr.Class != D.ClassINET {
+				continue
+			}
+			target, ok := kernelDirectAliasTarget(rec.Target)
+			if !ok || !mergeKernelDirectAlias(dnames, dnsNameKey(rec.Hdr.Name), kernelDirectAlias{target: target, ttl: rec.Hdr.Ttl}) {
+				return "", 0, false
+			}
+			aliasRecords++
+		}
+		if aliasRecords > kernelDirectMaxAliasRecords {
+			return "", 0, false
+		}
+	}
+
+	name := query
+	pathTTL := ^uint32(0)
+	seen := map[string]struct{}{name: {}}
+	for expansion := 0; expansion < kernelDirectMaxAliasExpansions; expansion++ {
+		cname, cnameFound := cnames[name]
+		var (
+			dnameTarget string
+			dnameTTL    uint32
+			bestLabels  = -1
+		)
+		for owner, alias := range dnames {
+			target, ok := kernelDirectDNAMEAlias(name, owner, alias.target)
+			if !ok {
+				continue
+			}
+			labels := len(D.SplitDomainName(owner))
+			if labels > bestLabels {
+				bestLabels, dnameTarget, dnameTTL = labels, target, alias.ttl
+			} else if labels == bestLabels {
+				if target != dnameTarget {
+					return "", 0, false
+				}
+				if alias.ttl < dnameTTL {
+					dnameTTL = alias.ttl
+				}
+			}
+		}
+
+		var (
+			next       string
+			transition uint32
+			found      bool
+		)
+		switch {
+		case cnameFound && bestLabels >= 0:
+			if cname.target != dnameTarget {
+				return "", 0, false
+			}
+			next, transition, found = cname.target, cname.ttl, true
+			if dnameTTL < transition {
+				transition = dnameTTL
+			}
+		case cnameFound:
+			next, transition, found = cname.target, cname.ttl, true
+		case bestLabels >= 0:
+			next, transition, found = dnameTarget, dnameTTL, true
+		}
+		if !found {
+			return name, pathTTL, true
+		}
+		if _, exists := seen[next]; exists {
+			return "", 0, false
+		}
+		seen[next] = struct{}{}
+		if transition < pathTTL {
+			pathTTL = transition
+		}
+		name = next
+	}
+	return "", 0, false
+}
+
+func appendKernelDirectAnswer(answers []kerneldirect.DNSAnswer, addr netip.Addr, ttl uint32) []kerneldirect.DNSAnswer {
+	addr = addr.Unmap()
+	if !addr.IsValid() || resolver.IsFakeIP(addr) {
+		return answers
+	}
+	effectiveTTL := time.Duration(ttl) * time.Second
+	for i := range answers {
+		if answers[i].Addr == addr {
+			if effectiveTTL < answers[i].TTL {
+				answers[i].TTL = effectiveTTL
+			}
+			return answers
+		}
+	}
+	if len(answers) >= kernelDirectMaxAnswers {
+		return answers
+	}
+	return append(answers, kerneldirect.DNSAnswer{Addr: addr, TTL: effectiveTTL})
+}
+
+func collectKernelDirectAnswers(question D.Question, msg *D.Msg) []kerneldirect.DNSAnswer {
+	if msg == nil || !msg.Response || msg.Truncated || msg.Rcode != D.RcodeSuccess || question.Qclass != D.ClassINET || (question.Qtype != D.TypeA && question.Qtype != D.TypeAAAA) {
+		return nil
+	}
+	terminal, pathTTL, ok := kernelDirectTerminal(question, msg)
+	if !ok {
+		return nil
+	}
+	answers := make([]kerneldirect.DNSAnswer, 0, 2)
+	for _, section := range [][]D.RR{msg.Answer, msg.Extra} {
+		for _, rr := range section {
+			var (
+				addr netip.Addr
+				ttl  uint32
+				name string
+			)
+			switch rec := rr.(type) {
+			case *D.A:
+				if rec == nil || question.Qtype != D.TypeA || rec.Hdr.Class != D.ClassINET {
+					continue
+				}
+				addr, _ = netip.AddrFromSlice(rec.A)
+				ttl, name = rec.Hdr.Ttl, rec.Hdr.Name
+			case *D.AAAA:
+				if rec == nil || question.Qtype != D.TypeAAAA || rec.Hdr.Class != D.ClassINET {
+					continue
+				}
+				addr, _ = netip.AddrFromSlice(rec.AAAA)
+				ttl, name = rec.Hdr.Ttl, rec.Hdr.Name
+			default:
+				continue
+			}
+			if dnsNameKey(name) != terminal {
+				continue
+			}
+			if pathTTL < ttl {
+				ttl = pathTTL
+			}
+			answers = appendKernelDirectAnswer(answers, addr, ttl)
+		}
+	}
+	return answers
 }
 
 func withHosts(mapping *lru.LruCache[netip.Addr, string]) middleware {

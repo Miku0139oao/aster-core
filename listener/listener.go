@@ -47,7 +47,8 @@ var (
 	// Names registered in inboundListeners that are not serving, because a failed
 	// patch could not release them. Guarded by inboundMux.
 	unusableInboundListeners = map[string]struct{}{}
-	tunLister                *sing_tun.Listener
+	tunLister                tunListener
+	newTunListener           = func(config LC.Tun, tunnel C.Tunnel) (tunListener, error) { return sing_tun.New(config, tunnel) }
 	shadowSocksListener      C.MultiAddrListener
 	vmessListener            *sing_vmess.Listener
 	tuicListener             *tuic.Listener
@@ -69,6 +70,13 @@ var (
 	LastTuicConf LC.TuicServer
 )
 
+type tunListener interface {
+	OnReload()
+	Close() error
+	Config() LC.Tun
+	Address() string
+}
+
 type Ports struct {
 	Port              int    `json:"port"`
 	SocksPort         int    `json:"socks-port"`
@@ -80,10 +88,12 @@ type Ports struct {
 }
 
 func GetTunConf() LC.Tun {
+	tunMux.Lock()
+	defer tunMux.Unlock()
 	if tunLister == nil {
-		return LastTunConf
+		return LastTunConf.Clone()
 	}
-	return tunLister.Config()
+	return tunLister.Config().Clone()
 }
 
 func GetTuicConf() LC.TuicServer {
@@ -504,43 +514,74 @@ func ReCreateMixed(port int, tunnel C.Tunnel) {
 	log.Infoln("Mixed(http+socks) proxy listening at: %s", mixedListener.Address())
 }
 
-func ReCreateTun(tunConf LC.Tun, tunnel C.Tunnel) {
-	tunConf.Sort()
-
+func ReCreateTun(tunConf LC.Tun, tunnel C.Tunnel) error {
 	tunMux.Lock()
-	defer func() {
-		LastTunConf = tunConf
-		tunMux.Unlock()
-	}()
+	defer tunMux.Unlock()
+	return reCreateTunLocked(tunConf.Clone(), tunnel)
+}
 
-	var err error
-	defer func() {
-		if err != nil {
-			log.Errorln("Start TUN listening error: %s", err.Error())
-			tunConf.Enable = false
-		}
-	}()
+// PatchTun serializes snapshot, merge/validation, and activation with full
+// configuration reloads. The callback receives a detached copy and may return
+// a validation error without changing the live listener.
+func PatchTun(build func(LC.Tun) (LC.Tun, error), tunnel C.Tunnel) error {
+	tunMux.Lock()
+	defer tunMux.Unlock()
+	tunConf, err := build(LastTunConf.Clone())
+	if err != nil {
+		return err
+	}
+	return reCreateTunLocked(tunConf.Clone(), tunnel)
+}
 
+func reCreateTunLocked(tunConf LC.Tun, tunnel C.Tunnel) error {
+	tunConf.Sort()
 	if tunConf.Equal(LastTunConf) {
 		if tunLister != nil { // some default value in dialer maybe changed when config reload, reset at here
 			tunLister.OnReload()
+			return nil
 		}
-		return
+		if !tunConf.Enable {
+			return nil
+		}
 	}
-
-	closeTunListener()
 
 	if !tunConf.Enable {
-		return
+		if err := closeTunListenerLocked(); err != nil {
+			return fmt.Errorf("close TUN listener: %w", err)
+		}
+		LastTunConf = tunConf
+		return nil
 	}
 
-	lister, err := sing_tun.New(tunConf, tunnel)
+	// sing_tun.New cannot coexist with a live listener: the device name,
+	// DefaultInterfaceFinder, and auto-redirect mark are exclusive. Close first
+	// so a real reload can start, then restore the previous listener if New fails.
+	// LastTunConf is only updated after a successful start so a failed recreate
+	// cannot persist the new config or flip Enable to false.
+	prevConf := LastTunConf.Clone()
+	hadListener := tunLister != nil
+	if err := closeTunListenerLocked(); err != nil {
+		return fmt.Errorf("close previous TUN listener: %w", err)
+	}
+
+	lister, err := newTunListener(tunConf, tunnel)
 	if err != nil {
-		return
+		log.Errorln("Start TUN listening error: %s", err.Error())
+		if hadListener {
+			restored, restoreErr := newTunListener(prevConf, tunnel)
+			if restoreErr != nil {
+				contextualRestoreErr := fmt.Errorf("restore previous TUN listener: %w", restoreErr)
+				log.Errorln("Restore TUN listening error: %s", restoreErr.Error())
+				return errors.Join(err, contextualRestoreErr)
+			}
+			tunLister = restored
+		}
+		return err
 	}
 	tunLister = lister
-
+	LastTunConf = tunConf
 	log.Infoln("[TUN] Tun adapter listening at: %s", tunLister.Address())
+	return nil
 }
 
 func PatchTunnel(tunnels []LC.Tunnel, tunnel C.Tunnel) {
@@ -873,13 +914,21 @@ func genAddr(host string, port int, allowLan bool) string {
 	return fmt.Sprintf("127.0.0.1:%d", port)
 }
 
-func closeTunListener() {
-	if tunLister != nil {
-		tunLister.Close()
-		tunLister = nil
+func closeTunListenerLocked() error {
+	if tunLister == nil {
+		return nil
 	}
+	if err := tunLister.Close(); err != nil {
+		return err
+	}
+	tunLister = nil
+	return nil
 }
 
 func Cleanup() {
-	closeTunListener()
+	tunMux.Lock()
+	defer tunMux.Unlock()
+	if err := closeTunListenerLocked(); err != nil {
+		log.Warnln("Close TUN listener error: %s", err)
+	}
 }

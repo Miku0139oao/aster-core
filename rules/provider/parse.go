@@ -31,6 +31,9 @@ func ParseRuleProvider(name string, mapping map[string]any, parse common.ParseRu
 	if err := decoder.Decode(mapping, schema); err != nil {
 		return nil, err
 	}
+	if schema.Interval < 0 || schema.SizeLimit < 0 {
+		return nil, fmt.Errorf("rule provider interval and size-limit cannot be negative")
+	}
 	behavior, err := P.ParseBehavior(schema.Behavior)
 	if err != nil {
 		return nil, err

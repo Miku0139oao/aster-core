@@ -132,10 +132,37 @@ func NewACAutomaton() *ACAutomaton {
 	return ac
 }
 
-func (ac *ACAutomaton) Add(domain string, t Type) {
+func acCharIndex(char byte) (int, bool) {
+	if int(char) >= len(char2Index) {
+		return 0, false
+	}
+	index := char2Index[char]
+	// The zero value is also the valid A/a index; every other byte mapped to
+	// zero was absent from the compact alphabet and must not alias A.
+	if index == 0 && char != 'A' && char != 'a' {
+		return 0, false
+	}
+	return index, true
+}
+
+func acPatternSupported(pattern string) bool {
+	for i := range pattern {
+		if _, ok := acCharIndex(pattern[i]); !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func (ac *ACAutomaton) Add(domain string, t Type) bool {
+	// Validate before mutating so callers can fall back to a byte-capable
+	// matcher without leaving a partial path in the automaton.
+	if !acPatternSupported(domain) {
+		return false
+	}
 	node := 0
 	for i := len(domain) - 1; i >= 0; i-- {
-		idx := char2Index[domain[i]]
+		idx, _ := acCharIndex(domain[i])
 		if ac.trie[node][idx].nextNode == 0 {
 			ac.count++
 			if len(ac.trie) < ac.count+1 {
@@ -187,6 +214,7 @@ func (ac *ACAutomaton) Add(domain string, t Type) {
 	default:
 		break
 	}
+	return true
 }
 
 func (ac *ACAutomaton) Build() {
@@ -225,7 +253,14 @@ func (ac *ACAutomaton) Match(s string) bool {
 	// 2. the match string is through a fail edge. NOT FULL MATCH
 	// 2.1 Through a fail edge, but there exists a valid node. SUBSTR
 	for i := len(s) - 1; i >= 0; i-- {
-		idx := char2Index[s[i]]
+		idx, supported := acCharIndex(s[i])
+		if !supported {
+			// An unsupported byte is a hard boundary for compact-alphabet
+			// patterns. Resetting preserves substring matches on either side.
+			node = 0
+			fullMatch = false
+			continue
+		}
 		fullMatch = fullMatch && ac.trie[node][idx].edgeType
 		node = ac.trie[node][idx].nextNode
 		switch ac.exists[node].matchType {

@@ -48,6 +48,13 @@ func TestCanonicalRuleIsStableAcrossFormatting(t *testing.T) {
 	}
 }
 
+func TestParseConfigRejectsUnsupportedMACOnlyPolicy(t *testing.T) {
+	raw := &RawConfig{Enabled: true, Devices: []RawDevicePolicy{{RawPolicy: RawPolicy{ID: "phone"}, MAC: "aa:bb:cc:dd:ee:ff"}}}
+	if _, err := ParseConfig(raw, func(path string) (string, error) { return filepath.Join(t.TempDir(), path), nil }); err == nil {
+		t.Fatal("MAC-only policy was accepted even though Flow has no MAC attribution")
+	}
+}
+
 func TestParseConfigRejectsDuplicateIDs(t *testing.T) {
 	raw := &RawConfig{Enabled: true, Devices: []RawDevicePolicy{
 		{RawPolicy: RawPolicy{ID: "same"}, SourceCIDRs: []string{"192.0.2.1/32"}},
@@ -56,6 +63,40 @@ func TestParseConfigRejectsDuplicateIDs(t *testing.T) {
 	_, err := ParseConfig(raw, func(path string) (string, error) { return filepath.Join(t.TempDir(), path), nil })
 	if err == nil {
 		t.Fatal("expected duplicate id error")
+	}
+}
+
+func TestParseConfigKeepsLogicalDefaultStoreForRawAPI(t *testing.T) {
+	resolvedRoot := filepath.Join(t.TempDir(), "private-root")
+	resolve := func(path string) (string, error) { return filepath.Join(resolvedRoot, path), nil }
+	config, err := ParseConfig(&RawConfig{Enabled: true}, resolve)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.StorePath != filepath.Join(resolvedRoot, "traffic-control.db") {
+		t.Fatalf("resolved store = %q", config.StorePath)
+	}
+	if raw := config.Raw(); raw.Store != "traffic-control.db" {
+		t.Fatalf("Raw store exposed resolved path %q", raw.Store)
+	}
+}
+
+func TestParseFlexibleDurationRejectsCompoundOverflow(t *testing.T) {
+	if _, err := parseFlexibleDuration("106751d106751d48h"); err == nil {
+		t.Fatal("expected compound duration overflow to fail")
+	}
+	if _, err := ParseConfig(&RawConfig{Enabled: true, CheckpointInterval: "106751d106751d48h"}, func(path string) (string, error) {
+		return filepath.Join(t.TempDir(), path), nil
+	}); err == nil {
+		t.Fatal("overflowing checkpoint interval was accepted")
+	}
+}
+
+func TestParseConfigRejectsExcessivePolicyCount(t *testing.T) {
+	raw := &RawConfig{Enabled: true, Devices: make([]RawDevicePolicy, maxTrafficControlPolicies+1)}
+	_, err := ParseConfig(raw, func(path string) (string, error) { return filepath.Join(t.TempDir(), path), nil })
+	if err == nil {
+		t.Fatal("excessive policy count was accepted")
 	}
 }
 

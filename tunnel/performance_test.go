@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/Miku0139oao/aster-core/common/utils"
 	"github.com/Miku0139oao/aster-core/component/nat"
 	C "github.com/Miku0139oao/aster-core/constant"
+	P "github.com/Miku0139oao/aster-core/constant/provider"
 	R "github.com/Miku0139oao/aster-core/rules"
 	"github.com/Miku0139oao/aster-core/tunnel/statistic"
 )
@@ -89,6 +91,37 @@ func (*benchmarkAdapter) URLTest(context.Context, string, utils.IntRanges[uint16
 	return 0, C.ErrNotSupport
 }
 
+type lifecycleTestProvider struct {
+	name   string
+	closed atomic.Int64
+}
+
+func (p *lifecycleTestProvider) Name() string             { return p.name }
+func (*lifecycleTestProvider) VehicleType() P.VehicleType { return P.Compatible }
+func (*lifecycleTestProvider) Type() P.ProviderType       { return P.Rule }
+func (*lifecycleTestProvider) Initial() error             { return nil }
+func (*lifecycleTestProvider) Update() error              { return nil }
+func (p *lifecycleTestProvider) Close() error {
+	p.closed.Add(1)
+	return nil
+}
+
+func TestCloseRetiredProvidersUsesObjectIdentity(t *testing.T) {
+	retired := &lifecycleTestProvider{name: "same-name"}
+	active := &lifecycleTestProvider{name: "same-name"}
+	retainedUnderNewName := &lifecycleTestProvider{name: "old-name"}
+	closeRetiredProviders(
+		map[string]*lifecycleTestProvider{"old": retired, "renamed": retainedUnderNewName},
+		map[string]*lifecycleTestProvider{"replacement": active, "new-name": retainedUnderNewName},
+	)
+	if retired.closed.Load() != 1 {
+		t.Fatalf("replaced provider close count = %d", retired.closed.Load())
+	}
+	if active.closed.Load() != 0 || retainedUnderNewName.closed.Load() != 0 {
+		t.Fatal("active provider was closed")
+	}
+}
+
 func TestPacketSenderDestinationMapping(t *testing.T) {
 	sender := newPacketSender().(*packetSender)
 	t.Cleanup(sender.Close)
@@ -99,8 +132,8 @@ func TestPacketSenderDestinationMapping(t *testing.T) {
 	if got := sender.targetAddress(originIP); got == nil || got.AddrPort() != targetIP.AddrPort() {
 		t.Fatalf("unexpected IP target: %v", got)
 	}
-	if got := sender.RestoreReadFrom(targetIP.DstIP); got != originIP.DstIP {
-		t.Fatalf("unexpected restored IP: %s", got)
+	if got := sender.RestoreReadFrom(targetIP.AddrPort()); got != originIP.AddrPort() {
+		t.Fatalf("unexpected restored endpoint: %s", got)
 	}
 
 	originHost := &C.Metadata{Host: "example.com", DstIP: originIP.DstIP}
@@ -120,18 +153,60 @@ func TestPacketSenderDestinationMappingUnmaps(t *testing.T) {
 	origin := netip.MustParseAddr("192.0.2.1")
 	target := netip.MustParseAddr("198.51.100.1")
 
-	sender.AddMapping(&C.Metadata{DstIP: origin4in6}, &C.Metadata{DstIP: target4in6})
-	if got := sender.RestoreReadFrom(target); got != origin {
-		t.Fatalf("unmapped lookup = %s, want %s", got, origin)
+	const port = 53
+	sender.AddMapping(&C.Metadata{DstIP: origin4in6, DstPort: port}, &C.Metadata{DstIP: target4in6, DstPort: port})
+	originAddrPort := netip.AddrPortFrom(origin, port)
+	targetAddrPort := netip.AddrPortFrom(target, port)
+	if got := sender.RestoreReadFrom(targetAddrPort); got != originAddrPort {
+		t.Fatalf("unmapped lookup = %s, want %s", got, originAddrPort)
 	}
-	if got := sender.RestoreReadFrom(target4in6); got != origin {
-		t.Fatalf("4in6 lookup = %s, want %s", got, origin)
+	if got := sender.RestoreReadFrom(netip.AddrPortFrom(target4in6, port)); got != originAddrPort {
+		t.Fatalf("4in6 lookup = %s, want %s", got, originAddrPort)
 	}
-	if got := sender.targetAddress(&C.Metadata{DstIP: origin4in6}); got == nil || got.AddrPort().Addr() != target {
+	if got := sender.targetAddress(&C.Metadata{DstIP: origin4in6, DstPort: port}); got == nil || got.AddrPort().Addr() != target {
 		t.Fatalf("4in6 origin key should resolve to unmapped target, got %v", got)
 	}
-	if got := sender.targetAddress(&C.Metadata{DstIP: origin}); got == nil || got.AddrPort().Addr() != target {
+	if got := sender.targetAddress(&C.Metadata{DstIP: origin, DstPort: port}); got == nil || got.AddrPort().Addr() != target {
 		t.Fatalf("unmapped origin key should hit the same mapping, got %v", got)
+	}
+}
+
+func TestPacketSenderReverseMappingDistinguishesPorts(t *testing.T) {
+	sender := newPacketSender().(*packetSender)
+	t.Cleanup(sender.Close)
+	targetIP := netip.MustParseAddr("198.51.100.10")
+	firstOrigin := &C.Metadata{DstIP: netip.MustParseAddr("192.0.2.10"), DstPort: 53}
+	secondOrigin := &C.Metadata{DstIP: netip.MustParseAddr("192.0.2.11"), DstPort: 443}
+	firstTarget := &C.Metadata{DstIP: targetIP, DstPort: 53}
+	secondTarget := &C.Metadata{DstIP: targetIP, DstPort: 443}
+	sender.AddMapping(firstOrigin, firstTarget)
+	sender.AddMapping(secondOrigin, secondTarget)
+
+	if got := sender.RestoreReadFrom(firstTarget.AddrPort()); got != firstOrigin.AddrPort() {
+		t.Fatalf("first endpoint restored as %s", got)
+	}
+	if got := sender.RestoreReadFrom(secondTarget.AddrPort()); got != secondOrigin.AddrPort() {
+		t.Fatalf("second endpoint restored as %s", got)
+	}
+}
+
+func TestPacketSenderDestinationMappingIsBounded(t *testing.T) {
+	sender := newPacketSender().(*packetSender)
+	t.Cleanup(sender.Close)
+	for i := 0; i < maxUDPDestinationMappings; i++ {
+		origin := &C.Metadata{DstIP: netip.AddrFrom4([4]byte{10, byte(i >> 16), byte(i >> 8), byte(i)}), DstPort: uint16(i)}
+		target := &C.Metadata{DstIP: netip.AddrFrom4([4]byte{11, byte(i >> 16), byte(i >> 8), byte(i)}), DstPort: uint16(i)}
+		if !sender.addMapping(origin, target) {
+			t.Fatalf("mapping %d rejected before limit", i)
+		}
+	}
+	overflowOrigin := &C.Metadata{DstIP: netip.MustParseAddr("192.0.2.1"), DstPort: 1}
+	overflowTarget := &C.Metadata{DstIP: netip.MustParseAddr("198.51.100.1"), DstPort: 1}
+	if sender.addMapping(overflowOrigin, overflowTarget) {
+		t.Fatal("mapping beyond per-association limit was accepted")
+	}
+	if got := sender.targetAddress(overflowOrigin); got != nil {
+		t.Fatalf("rejected mapping retained target %v", got)
 	}
 }
 
@@ -195,6 +270,25 @@ func TestMatchUsesRoutingSnapshot(t *testing.T) {
 	}
 }
 
+func BenchmarkPacketSenderMappingInsert(b *testing.B) {
+	for _, count := range []int{100, 1000} {
+		b.Run(strconv.Itoa(count), func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				sender := newPacketSender().(*packetSender)
+				for j := 0; j < count; j++ {
+					origin := &C.Metadata{DstIP: netip.AddrFrom4([4]byte{10, byte(j >> 16), byte(j >> 8), byte(j)}), DstPort: uint16(j)}
+					target := &C.Metadata{DstIP: netip.AddrFrom4([4]byte{11, byte(j >> 16), byte(j >> 8), byte(j)}), DstPort: uint16(j)}
+					if !sender.addMapping(origin, target) {
+						b.Fatal("mapping limit reached")
+					}
+				}
+				sender.Close()
+			}
+		})
+	}
+}
+
 func BenchmarkPacketSenderDestinationLookup(b *testing.B) {
 	sender := newPacketSender().(*packetSender)
 	b.Cleanup(sender.Close)
@@ -221,7 +315,7 @@ func BenchmarkPacketSenderReverseLookup(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if got := sender.RestoreReadFrom(target.DstIP); got != origin.DstIP {
+		if got := sender.RestoreReadFrom(target.AddrPort()); got != origin.AddrPort() {
 			b.Fatalf("unexpected origin: %s", got)
 		}
 	}

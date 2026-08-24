@@ -112,6 +112,13 @@ func (c realityConnWrapper) Upstream() any {
 	return c.Conn
 }
 
+// VisionUpstream exposes only the TLS object Vision needs to inspect. The
+// wrapper remains non-replaceable so generic buffer unwrapping cannot bypass
+// its corrected Close/half-close semantics.
+func (c realityConnWrapper) VisionUpstream() any {
+	return c.Conn
+}
+
 func (c realityConnWrapper) CloseWrite() error {
 	return c.Close()
 }

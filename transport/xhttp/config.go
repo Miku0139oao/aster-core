@@ -338,6 +338,9 @@ func parseRange(s string) (Range, error) {
 		if err != nil {
 			return Range{}, err
 		}
+		if v < 0 {
+			return Range{}, fmt.Errorf("invalid range: %s", s)
+		}
 		return Range{v, v}, nil
 	}
 	if len(parts) != 2 {
@@ -640,6 +643,9 @@ func (c *Config) GetGenerateSessionID() (func() string, error) {
 		}
 		if sessionLength.Min <= 0 {
 			return nil, errors.New("session-length must be greater than 0")
+		}
+		if sessionLength.Max > maxXHTTPSessionIDBytes {
+			return nil, fmt.Errorf("session-length must not exceed %d", maxXHTTPSessionIDBytes)
 		}
 		for i := 0; i < len(sessionTable); i++ {
 			if sessionTable[i] >= 0x80 {

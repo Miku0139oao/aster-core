@@ -1,11 +1,10 @@
 package tproxy
 
 import (
+	"errors"
 	"net"
 	"net/netip"
-	"sync"
 	"testing"
-	"time"
 
 	C "github.com/Miku0139oao/aster-core/constant"
 
@@ -13,26 +12,18 @@ import (
 )
 
 type packetTestNatTable struct {
-	conn   *net.UDPConn
-	cond   *sync.Cond
-	loaded bool
+	err error
 }
 
-func (t *packetTestNatTable) GetOrCreate(C.UDPNatKey, func() C.PacketSender) (C.PacketSender, bool) {
-	return nil, false
+func (t *packetTestNatTable) GetOrCreate(C.UDPNatKey, func() C.PacketSender) (C.PacketSender, bool, bool) {
+	return nil, false, false
 }
 func (t *packetTestNatTable) Delete(C.UDPNatKey) {}
-func (t *packetTestNatTable) GetForLocalConn(string, string) *net.UDPConn {
-	return t.conn
+func (t *packetTestNatTable) GetOrCreateLocalConn(C.UDPNatKey, string, func() (*net.UDPConn, error)) (*net.UDPConn, error) {
+	return nil, t.err
 }
-func (t *packetTestNatTable) AddForLocalConn(string, string, *net.UDPConn) bool { return true }
-func (t *packetTestNatTable) RangeForLocalConn(string, func(string, *net.UDPConn) bool) {
+func (t *packetTestNatTable) RangeForLocalConn(C.UDPNatKey, func(string, *net.UDPConn) bool) {
 }
-func (t *packetTestNatTable) GetOrCreateLockForLocalConn(string, string) (*sync.Cond, bool) {
-	return t.cond, t.loaded
-}
-func (t *packetTestNatTable) DeleteForLocalConn(string, string)     {}
-func (t *packetTestNatTable) DeleteLockForLocalConn(string, string) {}
 
 type packetTestTunnel struct {
 	nat C.NatTable
@@ -42,59 +33,16 @@ func (packetTestTunnel) HandleTCPConn(net.Conn, *C.Metadata)      {}
 func (packetTestTunnel) HandleUDPPacket(C.UDPPacket, *C.Metadata) {}
 func (t packetTestTunnel) NatTable() C.NatTable                   { return t.nat }
 
-func TestCreateOrGetLocalConnUnlocksWaiterWhenEntryMissing(t *testing.T) {
-	cond := sync.NewCond(&sync.Mutex{})
-	table := &packetTestNatTable{cond: cond, loaded: true}
-	tunnel := packetTestTunnel{nat: table}
+func TestCreateOrGetLocalConnPropagatesPromiseError(t *testing.T) {
+	expected := errors.New("NAT entry closed")
+	tunnel := packetTestTunnel{nat: &packetTestNatTable{err: expected}}
+	flow := C.UDPNatKey{AddrPort: netip.MustParseAddrPort("192.0.2.1:12345")}
 
-	rAddr := netip.MustParseAddrPort("1.1.1.1:53")
-	lAddr := netip.MustParseAddrPort("192.0.2.1:12345")
-
-	done := make(chan error, 1)
-	go func() {
-		_, err := createOrGetLocalConn(rAddr, lAddr, tunnel)
-		done <- err
-	}()
-
-	stop := make(chan struct{})
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for {
-			select {
-			case <-stop:
-				return
-			default:
-				cond.L.Lock()
-				cond.Broadcast()
-				cond.L.Unlock()
-				time.Sleep(5 * time.Millisecond)
-			}
-		}
-	}()
-
-	var err error
-	select {
-	case err = <-done:
-	case <-time.After(2 * time.Second):
-		close(stop)
-		wg.Wait()
-		t.Fatal("waiter did not return after broadcasts")
-	}
-	close(stop)
-	wg.Wait()
-	require.Error(t, err)
-
-	locked := make(chan struct{})
-	go func() {
-		cond.L.Lock()
-		close(locked)
-		cond.L.Unlock()
-	}()
-	select {
-	case <-locked:
-	case <-time.After(2 * time.Second):
-		t.Fatal("waiter returned without unlocking the NAT cond mutex")
-	}
+	_, err := createOrGetLocalConn(
+		flow,
+		netip.MustParseAddrPort("1.1.1.1:53"),
+		netip.MustParseAddrPort("192.0.2.1:12345"),
+		tunnel,
+	)
+	require.ErrorIs(t, err, expected)
 }

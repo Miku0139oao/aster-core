@@ -2,6 +2,7 @@ package kerneldirect
 
 import (
 	"io"
+	"math"
 	"net/netip"
 	"sort"
 	"sync"
@@ -16,6 +17,48 @@ const (
 	DefaultEBPFMaxEntries  = uint32(65536)
 	DefaultEBPFFlowEntries = uint32(65536)
 )
+
+// FastPathOverhead is the number of unique normalized LPM keys reserved for
+// static YAML prefixes, local bypass hosts, and PROXY default routes.
+// staticProxy is counted even when proxySteering is false; callers that will
+// not install those prefixes should pass a nil or empty slice.
+func FastPathOverhead(proxySteering bool, staticDirect, staticProxy, staticBypass []netip.Prefix) uint32 {
+	keys := make(map[netip.Prefix]struct{}, len(staticDirect)+len(staticProxy)+len(staticBypass)+2)
+	add := func(prefixes []netip.Prefix) {
+		for _, prefix := range prefixes {
+			if normalized, ok := normalizePrefix(prefix); ok {
+				keys[normalized] = struct{}{}
+			}
+		}
+	}
+	add(staticDirect)
+	add(staticProxy)
+	add(staticBypass)
+	if proxySteering {
+		keys[netip.MustParsePrefix("0.0.0.0/0")] = struct{}{}
+		keys[netip.MustParsePrefix("::/0")] = struct{}{}
+	}
+	if uint64(len(keys)) > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	return uint32(len(keys))
+}
+
+func normalizePrefix(prefix netip.Prefix) (netip.Prefix, bool) {
+	if !prefix.IsValid() {
+		return netip.Prefix{}, false
+	}
+	addr := prefix.Addr()
+	bits := prefix.Bits()
+	if addr.Is4In6() {
+		addr = addr.Unmap()
+		bits -= 96
+	}
+	if bits < 0 || bits > addr.BitLen() {
+		return netip.Prefix{}, false
+	}
+	return netip.PrefixFrom(addr, bits).Masked(), true
+}
 
 // FastPathOptions configures the optional TC eBPF DIRECT classifier. The
 // nftables address set remains active as a fail-safe and for locally generated

@@ -1,6 +1,7 @@
 package xhttp
 
 import (
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -120,7 +121,7 @@ func (c *countingReadCloser) Close() error {
 func TestConnCloseIsIdempotentAndDoesNotDeleteReplacementSession(t *testing.T) {
 	handler := &requestHandler{sessions: make(map[string]*httpSession)}
 	const sessionID = "session"
-	original := newHTTPSession(1)
+	original := newHTTPSession(1, 1024)
 	handler.sessions[sessionID] = original
 	writer := new(countingWriteCloser)
 	reader := new(countingReadCloser)
@@ -136,7 +137,7 @@ func TestConnCloseIsIdempotentAndDoesNotDeleteReplacementSession(t *testing.T) {
 	require.NoError(t, conn.SetDeadline(time.Now().Add(time.Hour)))
 	require.NoError(t, conn.Close())
 
-	replacement := newHTTPSession(1)
+	replacement := newHTTPSession(1, 1024)
 	handler.sessions[sessionID] = replacement
 	require.NoError(t, conn.Close())
 
@@ -145,6 +146,48 @@ func TestConnCloseIsIdempotentAndDoesNotDeleteReplacementSession(t *testing.T) {
 	require.EqualValues(t, 1, closeCallbacks.Load())
 	require.Same(t, replacement, handler.getSession(sessionID))
 	require.ErrorIs(t, conn.SetDeadline(time.Now()), net.ErrClosed)
+}
+
+func TestRequestHandlerBoundsSessionsWithoutPerSessionReapers(t *testing.T) {
+	handler := &requestHandler{
+		scMaxBufferedPosts: Range{Min: 1, Max: 1},
+		sessions:           make(map[string]*httpSession),
+		lastReap:           time.Now(),
+	}
+	require.True(t, handler.reserveQueueBytes(maxXHTTPGlobalQueuedBytes))
+	require.False(t, handler.reserveQueueBytes(1))
+	handler.releaseQueueBytes(maxXHTTPGlobalQueuedBytes)
+	require.Zero(t, handler.globalQueuedBytes.Load())
+
+	for i := 0; i < maxXHTTPSessions; i++ {
+		_, err := handler.upsertSession(fmt.Sprintf("session-%d", i))
+		require.NoError(t, err)
+	}
+	_, err := handler.upsertSession("overflow")
+	require.ErrorIs(t, err, errXHTTPSessionLimit)
+
+	orphan := handler.sessions["session-0"]
+	orphan.lastActivity.Store(time.Now().Add(-3 * time.Minute).UnixNano())
+	handler.lastReap = time.Now().Add(-time.Minute)
+	_, err = handler.upsertSession("replacement")
+	require.NoError(t, err)
+	require.Nil(t, handler.getSession("session-0"))
+	for id, session := range handler.sessions {
+		handler.deleteSession(id, session)
+	}
+}
+
+func TestInvalidRouteDoesNotCreateXHTTPSession(t *testing.T) {
+	config := Config{Path: "/xhttp", Mode: "stream-one"}
+	handlerValue, err := NewServerHandler(ServerOption{Config: config, ConnHandler: func(net.Conn) {}})
+	require.NoError(t, err)
+	handler := handlerValue.(*requestHandler)
+	request := httptest.NewRequest(http.MethodGet, "https://example.com/xhttp/probe", http.NoBody)
+	require.NoError(t, config.FillStreamRequest(request, ""))
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	require.Equal(t, http.StatusNotFound, recorder.Result().StatusCode)
+	require.Empty(t, handler.sessions)
 }
 
 func TestServerHandlerModeRestrictions(t *testing.T) {

@@ -31,6 +31,13 @@ type Tuic struct {
 	echConfig  *ech.Config
 }
 
+func (t *Tuic) Close() error {
+	if t.client != nil {
+		t.client.Close()
+	}
+	return t.Base.Close()
+}
+
 type TuicOption struct {
 	BasicOption
 	Name                  string   `proxy:"name"`

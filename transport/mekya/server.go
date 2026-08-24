@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Miku0139oao/aster-core/transport/mkcp"
@@ -21,14 +23,22 @@ type Listener struct {
 	mkcp       *mkcp.Listener
 	server     *http.Server
 	done       chan struct{}
+	cancel     context.CancelFunc
 	once       sync.Once
 }
 
 func Listen(ctx context.Context, ln net.Listener, cfg Config) (*Listener, error) {
-	packetConn := newWrappedPacketConn(ctx, ln.Addr())
-	handler := newServer(ctx, cfg, packetConn)
-	mkcpListener, err := mkcp.Listen(ctx, packetConn, cfg.KCP)
+	cfg, err := normalizeConfig(cfg)
 	if err != nil {
+		return nil, err
+	}
+	listenerCtx, cancel := context.WithCancel(ctx)
+	packetConn := newWrappedPacketConn(listenerCtx, ln.Addr())
+	handler := newServer(listenerCtx, cfg, packetConn)
+	mkcpListener, err := mkcp.Listen(listenerCtx, packetConn, cfg.KCP)
+	if err != nil {
+		cancel()
+		_ = packetConn.Close()
 		return nil, err
 	}
 
@@ -50,11 +60,13 @@ func Listen(ctx context.Context, ln net.Listener, cfg Config) (*Listener, error)
 		mkcp:       mkcpListener,
 		server:     server,
 		done:       make(chan struct{}),
+		cancel:     cancel,
 	}
 	go func() {
 		defer close(l.done)
 		err := server.Serve(ln)
 		if err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+			cancel()
 			_ = mkcpListener.Close()
 			_ = packetConn.Close()
 		}
@@ -76,6 +88,7 @@ func (l *Listener) Accept() (net.Conn, error) {
 func (l *Listener) Close() error {
 	var err error
 	l.once.Do(func() {
+		l.cancel()
 		err = errors.Join(l.server.Close(), l.mkcp.Close(), l.packetConn.Close(), l.outer.Close())
 		<-l.done
 	})
@@ -86,47 +99,140 @@ func (l *Listener) Addr() net.Addr {
 	return l.outer.Addr()
 }
 
+const (
+	mekyaSessionIDSize     = 16
+	mekyaSessionIdle       = 5 * time.Minute
+	mekyaSessionReapPeriod = 30 * time.Second
+)
+
+var errMekyaSessionLimit = errors.New("mekya: active session limit reached")
+
 type server struct {
-	ctx        context.Context
-	cfg        Config
-	packetConn *wrappedPacketConn
-	sessions   sync.Map
+	ctx          context.Context
+	cfg          Config
+	packetConn   *wrappedPacketConn
+	sessions     sync.Map
+	sessionCount atomic.Int64
 }
 
 func newServer(ctx context.Context, cfg Config, packetConn *wrappedPacketConn) *server {
-	return &server{ctx: ctx, cfg: cfg, packetConn: packetConn}
+	s := &server{ctx: ctx, cfg: cfg, packetConn: packetConn}
+	go s.reapLoop()
+	return s
 }
 
 func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	sessionID, err := base64.RawURLEncoding.DecodeString(r.Header.Get("X-Session-ID"))
-	if err != nil {
+	if err != nil || len(sessionID) != mekyaSessionIDSize {
 		http.Error(w, "invalid session id", http.StatusBadRequest)
 		return
 	}
-	body, err := io.ReadAll(r.Body)
-	_ = r.Body.Close()
+	body, err := readMekyaRequestBody(r.Body, s.cfg.MaxRequestSize)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, errMekyaRequestTooLarge) {
+			status = http.StatusRequestEntityTooLarge
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	packetCount, err := validatePacketBundleBody(body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	session, err := s.getSession(r.Context(), sessionID, parseRemoteAddr(r.RemoteAddr))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+
+	key := string(sessionID)
+	existing, loaded := s.sessions.Load(key)
+	if !loaded && packetCount == 0 {
+		// Polling an unknown ID must not allocate a session and reader goroutine.
+		http.Error(w, "unknown session", http.StatusNotFound)
 		return
 	}
-	if err := session.ingest(body); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+	var session *serverSession
+	if loaded {
+		session = existing.(*serverSession)
+	} else {
+		session, err = s.getSession(sessionID, parseRemoteAddr(r.RemoteAddr))
+		if err != nil {
+			status := http.StatusInternalServerError
+			if errors.Is(err, errMekyaSessionLimit) {
+				status = http.StatusServiceUnavailable
+			}
+			http.Error(w, err.Error(), status)
+			return
+		}
+	}
+	session.touch()
+	if packetCount > 0 {
+		if err := session.ingest(r.Context(), body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 	}
 	w.WriteHeader(http.StatusOK)
 	session.writeResponse(r.Context(), w)
 }
 
-func (s *server) getSession(_ context.Context, sessionID []byte, remoteAddr *net.TCPAddr) (*serverSession, error) {
+var errMekyaRequestTooLarge = errors.New("mekya: request body exceeds max-request-size")
+
+func readMekyaRequestBody(body io.ReadCloser, limit int) ([]byte, error) {
+	if body == nil {
+		return nil, nil
+	}
+	defer body.Close()
+	reader := io.LimitReader(body, int64(limit)+1)
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > limit {
+		return nil, errMekyaRequestTooLarge
+	}
+	return data, nil
+}
+
+func validatePacketBundleBody(body []byte) (int, error) {
+	count := 0
+	for offset := 0; offset < len(body); count++ {
+		if len(body)-offset < packetBundleOverhead {
+			return 0, io.ErrUnexpectedEOF
+		}
+		length := int(binary.BigEndian.Uint16(body[offset : offset+packetBundleOverhead]))
+		offset += packetBundleOverhead
+		if length > len(body)-offset {
+			return 0, io.ErrUnexpectedEOF
+		}
+		offset += length
+	}
+	return count, nil
+}
+
+func (s *server) getSession(sessionID []byte, remoteAddr *net.TCPAddr) (*serverSession, error) {
+	if len(sessionID) != mekyaSessionIDSize {
+		return nil, errors.New("mekya: invalid session id length")
+	}
+	if err := s.ctx.Err(); err != nil {
+		return nil, err
+	}
 	key := string(sessionID)
 	if session, ok := s.sessions.Load(key); ok {
 		return session.(*serverSession), nil
 	}
+	for {
+		count := s.sessionCount.Load()
+		if count >= int64(s.cfg.MaxSessions) {
+			return nil, errMekyaSessionLimit
+		}
+		if s.sessionCount.CompareAndSwap(count, count+1) {
+			break
+		}
+	}
+
 	sessionCtx, cancel := context.WithCancel(s.ctx)
 	session := &serverSession{
 		ctx:                            sessionCtx,
@@ -140,21 +246,49 @@ func (s *server) getSession(_ context.Context, sessionID []byte, remoteAddr *net
 		maxWriteDuration:               time.Duration(s.cfg.MaxWriteDurationMs) * time.Millisecond,
 		maxSimultaneousWriteConnection: s.cfg.MaxSimultaneousWriteConnection,
 	}
+	session.touch()
 	actual, loaded := s.sessions.LoadOrStore(key, session)
 	if loaded {
+		s.sessionCount.Add(-1)
 		cancel()
 		return actual.(*serverSession), nil
 	}
 	if err := s.packetConn.addSession(session); err != nil {
+		s.removeSession(session)
 		cancel()
-		s.sessions.Delete(key)
 		return nil, err
 	}
 	return session, nil
 }
 
-func (s *server) removeSession(sessionID []byte) {
-	s.sessions.Delete(string(sessionID))
+func (s *server) removeSession(session *serverSession) {
+	if s.sessions.CompareAndDelete(string(session.sessionID), session) {
+		s.sessionCount.Add(-1)
+	}
+}
+
+func (s *server) reapLoop() {
+	ticker := time.NewTicker(mekyaSessionReapPeriod)
+	defer ticker.Stop()
+	for {
+		select {
+		case now := <-ticker.C:
+			s.reapInactive(now, mekyaSessionIdle)
+		case <-s.ctx.Done():
+			return
+		}
+	}
+}
+
+func (s *server) reapInactive(now time.Time, idle time.Duration) {
+	cutoff := now.Add(-idle).UnixNano()
+	s.sessions.Range(func(_, value any) bool {
+		session := value.(*serverSession)
+		if session.lastActivity.Load() < cutoff {
+			_ = session.Close()
+		}
+		return true
+	})
 }
 
 func parseRemoteAddr(addr string) *net.TCPAddr {
@@ -177,9 +311,15 @@ type serverSession struct {
 	maxSimultaneousWriteConnection int
 	writingMu                      sync.Mutex
 	writingConns                   []*writingConnection
+	lastActivity                   atomic.Int64
+	closeOnce                      sync.Once
 }
 
-func (s *serverSession) ingest(body []byte) error {
+func (s *serverSession) touch() {
+	s.lastActivity.Store(time.Now().UnixNano())
+}
+
+func (s *serverSession) ingest(ctx context.Context, body []byte) error {
 	reader := bytes.NewReader(body)
 	for reader.Len() > 0 {
 		packet, err := readPacketBundle(reader)
@@ -187,9 +327,12 @@ func (s *serverSession) ingest(body []byte) error {
 			return err
 		}
 		select {
+		case <-ctx.Done():
+			return ctx.Err()
 		case <-s.ctx.Done():
 			return s.ctx.Err()
 		case s.readerChan <- packet:
+			s.touch()
 		}
 	}
 	return nil
@@ -274,6 +417,7 @@ func (s *serverSession) Read(p []byte) (int, error) {
 	case <-s.ctx.Done():
 		return 0, s.ctx.Err()
 	case packet := <-s.readerChan:
+		s.touch()
 		return copy(p, packet), nil
 	}
 }
@@ -284,6 +428,7 @@ func (s *serverSession) Write(p []byte) (int, error) {
 	case <-s.ctx.Done():
 		return 0, s.ctx.Err()
 	case s.writerChan <- packet:
+		s.touch()
 		return len(p), nil
 	default:
 		return len(p), nil
@@ -291,8 +436,18 @@ func (s *serverSession) Write(p []byte) (int, error) {
 }
 
 func (s *serverSession) Close() error {
-	s.server.removeSession(s.sessionID)
-	s.cancel()
+	s.closeOnce.Do(func() {
+		s.server.removeSession(s)
+		s.server.packetConn.removeSession(s)
+		s.cancel()
+		s.writingMu.Lock()
+		writing := append([]*writingConnection(nil), s.writingConns...)
+		s.writingConns = nil
+		s.writingMu.Unlock()
+		for _, connection := range writing {
+			connection.cancel()
+		}
+	})
 	return nil
 }
 

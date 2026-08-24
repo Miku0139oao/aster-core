@@ -40,7 +40,13 @@ func ApplyPadding(buffer *buf.Buffer, command byte, userUUID *[]byte, paddingTLS
 		*userUUID = nil
 	}
 
-	buffer.Extend(int(paddingLen))
+	padding := buffer.Extend(int(paddingLen))
+	// sing buffers are pooled and are not guaranteed to be zeroed. Padding is
+	// carried inside TLS, so zeroing is sufficient and avoids exposing bytes
+	// retained from a previous user of the backing array.
+	for i := range padding {
+		padding[i] = 0
+	}
 	log.Debugln("XTLS Vision write padding: command=%d, payloadLen=%d, paddingLen=%d", command, contentLen, paddingLen)
 }
 

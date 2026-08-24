@@ -3,9 +3,12 @@ package mekya
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -244,6 +247,91 @@ func TestNewRoundTripperALPNRouting(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestNormalizeConfigAppliesBounds(t *testing.T) {
+	config, err := normalizeConfig(Config{})
+	require.NoError(t, err)
+	require.Equal(t, defaultMaxRequestSize, config.MaxRequestSize)
+	require.Equal(t, defaultMaxSessions, config.MaxSessions)
+	require.Equal(t, defaultMaxSimultaneousWriteConnection, config.MaxSimultaneousWriteConnection)
+	require.Equal(t, defaultPacketWritingBuffer, config.PacketWritingBuffer)
+
+	_, err = normalizeConfig(Config{MaxSessions: maximumMaxSessions + 1})
+	require.Error(t, err)
+	_, err = normalizeConfig(Config{MaxRequestSize: maximumRequestSize + 1})
+	require.Error(t, err)
+	_, err = normalizeConfig(Config{PollingIntervalInitial: maximumTimingMilliseconds + 1})
+	require.Error(t, err)
+}
+
+func TestServerSessionLimitRemovalAndReaping(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	config, err := normalizeConfig(Config{MaxSessions: 2})
+	require.NoError(t, err)
+	packetConn := newWrappedPacketConn(ctx, &net.TCPAddr{})
+	defer packetConn.Close()
+	server := newServer(ctx, config, packetConn)
+
+	first, err := server.getSession(bytes.Repeat([]byte{1}, mekyaSessionIDSize), &net.TCPAddr{})
+	require.NoError(t, err)
+	second, err := server.getSession(bytes.Repeat([]byte{2}, mekyaSessionIDSize), &net.TCPAddr{})
+	require.NoError(t, err)
+	_, err = server.getSession(bytes.Repeat([]byte{3}, mekyaSessionIDSize), &net.TCPAddr{})
+	require.ErrorIs(t, err, errMekyaSessionLimit)
+	require.Equal(t, int64(2), server.sessionCount.Load())
+
+	require.NoError(t, first.Close())
+	require.Equal(t, int64(1), server.sessionCount.Load())
+	packetConn.mu.Lock()
+	_, retained := packetConn.sessions[string(first.sessionID)]
+	packetConn.mu.Unlock()
+	require.False(t, retained)
+
+	third, err := server.getSession(bytes.Repeat([]byte{3}, mekyaSessionIDSize), &net.TCPAddr{})
+	require.NoError(t, err)
+	second.lastActivity.Store(time.Now().Add(-time.Hour).UnixNano())
+	third.lastActivity.Store(time.Now().Add(-time.Hour).UnixNano())
+	server.reapInactive(time.Now(), time.Minute)
+	require.Equal(t, int64(0), server.sessionCount.Load())
+}
+
+func TestMekyaRequestValidationDoesNotCreateEmptySession(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	config, err := normalizeConfig(Config{MaxRequestSize: 8})
+	require.NoError(t, err)
+	packetConn := newWrappedPacketConn(ctx, &net.TCPAddr{})
+	defer packetConn.Close()
+	server := newServer(ctx, config, packetConn)
+
+	recorder := &mekyaResponseRecorder{header: make(http.Header)}
+	request := &http.Request{Method: http.MethodPost, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("")), RemoteAddr: "127.0.0.1:1234"}
+	request.Header.Set("X-Session-ID", base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{1}, mekyaSessionIDSize)))
+	server.ServeHTTP(recorder, request)
+	require.Equal(t, http.StatusNotFound, recorder.code)
+	require.Equal(t, int64(0), server.sessionCount.Load())
+
+	_, err = readMekyaRequestBody(io.NopCloser(strings.NewReader("123456789")), 8)
+	require.ErrorIs(t, err, errMekyaRequestTooLarge)
+	_, err = validatePacketBundleBody([]byte{0, 4, 1})
+	require.True(t, errors.Is(err, io.ErrUnexpectedEOF))
+}
+
+type mekyaResponseRecorder struct {
+	header http.Header
+	body   bytes.Buffer
+	code   int
+}
+
+func (r *mekyaResponseRecorder) Header() http.Header  { return r.header }
+func (r *mekyaResponseRecorder) WriteHeader(code int) { r.code = code }
+func (r *mekyaResponseRecorder) Write(p []byte) (int, error) {
+	if r.code == 0 {
+		r.code = http.StatusOK
+	}
+	return r.body.Write(p)
 }
 
 func testConfig() Config {

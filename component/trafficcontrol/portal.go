@@ -15,14 +15,19 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
 type portalService struct {
 	server  *http.Server
 	listen  net.Listener
-	baseURL string
 	secret  [32]byte
+	started atomic.Bool
+	mu      sync.RWMutex
+	config  PortalConfig
+	baseURL string
 }
 
 type portalPage struct {
@@ -42,32 +47,74 @@ var portalTemplate = template.Must(template.New("quota").Funcs(template.FuncMap{
 <p>保底：{{rate .Policy.Quota.OverageUploadBPS}} 上傳／{{rate .Policy.Quota.OverageDownloadBPS}} 下載</p></section>{{end}}
 </main></body></html>`))
 
-func (m *Manager) startPortal(config PortalConfig) error {
+func (m *Manager) preparePortal(config PortalConfig) (*portalService, error) {
 	if strings.TrimSpace(config.Listen) == "" {
-		return nil
+		return nil, nil
 	}
 	listener, err := net.Listen("tcp", config.Listen)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	service := &portalService{listen: listener, baseURL: strings.TrimRight(config.URL, "/")}
-	if service.baseURL == "" {
-		service.baseURL = "http://" + listener.Addr().String()
-	}
+	service := &portalService{listen: listener, config: config}
+	service.setConfig(config)
 	if _, err := rand.Read(service.secret[:]); err != nil {
 		_ = listener.Close()
-		return err
+		return nil, err
 	}
 	service.server = &http.Server{Handler: http.HandlerFunc(m.servePortal), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10}
+	return service, nil
+}
+
+func (m *Manager) activatePortal(service *portalService) {
 	m.portal.Store(service)
-	go func() { _ = service.server.Serve(listener) }()
+	if service == nil || !service.started.CompareAndSwap(false, true) {
+		return
+	}
+	go func() { _ = service.server.Serve(service.listen) }()
+}
+
+func (s *portalService) setConfig(config PortalConfig) {
+	s.mu.Lock()
+	s.config = config
+	s.baseURL = strings.TrimRight(config.URL, "/")
+	if s.baseURL == "" && s.listen != nil {
+		s.baseURL = "http://" + s.listen.Addr().String()
+	}
+	s.mu.Unlock()
+}
+
+func (s *portalService) requestedListen() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.RLock()
+	listen := s.config.Listen
+	s.mu.RUnlock()
+	return listen
+}
+
+func (s *portalService) url() string {
+	s.mu.RLock()
+	url := s.baseURL
+	s.mu.RUnlock()
+	return url
+}
+
+func (m *Manager) startPortal(config PortalConfig) error {
+	service, err := m.preparePortal(config)
+	if err != nil {
+		return err
+	}
+	m.activatePortal(service)
 	return nil
 }
 
-func (m *Manager) stopPortal() error {
-	service := m.portal.Swap(nil)
+func closePortalService(service *portalService) error {
 	if service == nil {
 		return nil
+	}
+	if !service.started.Load() {
+		return service.listen.Close()
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -78,13 +125,21 @@ func (m *Manager) stopPortal() error {
 	return err
 }
 
+func (m *Manager) stopPortal() error {
+	return closePortalService(m.portal.Swap(nil))
+}
+
 func (s *Session) PortalURL() string {
 	if s == nil || s.manager == nil || s.manager.portal.Load() == nil {
 		return ""
 	}
-	ids := make([]string, 0, len(s.policies))
+	binding := s.currentBinding()
+	if binding == nil {
+		return ""
+	}
+	ids := make([]string, 0, len(binding.policies))
 	now := s.manager.now()
-	for _, policy := range s.policies {
+	for _, policy := range binding.policies {
 		if policy.state.OverQuota.Load() {
 			policy.refreshQuota(now)
 		}
@@ -111,7 +166,7 @@ func (m *Manager) signedPortalURL(ids []string, expires time.Time) string {
 	_, _ = mac.Write([]byte(message))
 	signature := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 	values := url.Values{"p": []string{joined}, "e": []string{expiry}, "s": []string{signature}}
-	return service.baseURL + "/?" + values.Encode()
+	return service.url() + "/?" + values.Encode()
 }
 
 func (m *Manager) servePortal(writer http.ResponseWriter, request *http.Request) {

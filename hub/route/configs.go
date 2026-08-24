@@ -1,7 +1,7 @@
 package route
 
 import (
-	"fmt"
+	"errors"
 	"net/netip"
 	"path/filepath"
 
@@ -69,10 +69,10 @@ type tunSchema struct {
 	AutoRoute           *bool       `yaml:"auto-route" json:"auto-route"`
 	AutoDetectInterface *bool       `yaml:"auto-detect-interface" json:"auto-detect-interface"`
 
-	MTU        *uint32 `yaml:"mtu" json:"mtu,omitempty"`
-	GSO        *bool   `yaml:"gso" json:"gso,omitempty"`
-	GSOMaxSize *uint32 `yaml:"gso-max-size" json:"gso-max-size,omitempty"`
-	// Inet4Address           *[]netip.Prefix `yaml:"inet4-address" json:"inet4-address,omitempty"`
+	MTU                                   *uint32         `yaml:"mtu" json:"mtu,omitempty"`
+	GSO                                   *bool           `yaml:"gso" json:"gso,omitempty"`
+	GSOMaxSize                            *uint32         `yaml:"gso-max-size" json:"gso-max-size,omitempty"`
+	Inet4Address                          *[]netip.Prefix `yaml:"inet4-address" json:"inet4-address,omitempty"`
 	Inet6Address                          *[]netip.Prefix `yaml:"inet6-address" json:"inet6-address,omitempty"`
 	IPRoute2TableIndex                    *int            `yaml:"iproute2-table-index" json:"iproute2-table-index,omitempty"`
 	IPRoute2RuleIndex                     *int            `yaml:"iproute2-rule-index" json:"iproute2-rule-index,omitempty"`
@@ -105,6 +105,10 @@ type tunSchema struct {
 	IncludeUIDRange                       *[]string       `yaml:"include-uid-range" json:"include-uid-range,omitempty"`
 	ExcludeUID                            *[]uint32       `yaml:"exclude-uid" json:"exclude-uid,omitempty"`
 	ExcludeUIDRange                       *[]string       `yaml:"exclude-uid-range" json:"exclude-uid-range,omitempty"`
+	ExcludeSrcPort                        *[]uint16       `yaml:"exclude-src-port" json:"exclude-src-port,omitempty"`
+	ExcludeSrcPortRange                   *[]string       `yaml:"exclude-src-port-range" json:"exclude-src-port-range,omitempty"`
+	ExcludeDstPort                        *[]uint16       `yaml:"exclude-dst-port" json:"exclude-dst-port,omitempty"`
+	ExcludeDstPortRange                   *[]string       `yaml:"exclude-dst-port-range" json:"exclude-dst-port-range,omitempty"`
 	IncludeAndroidUser                    *[]int          `yaml:"include-android-user" json:"include-android-user,omitempty"`
 	IncludePackage                        *[]string       `yaml:"include-package" json:"include-package,omitempty"`
 	ExcludePackage                        *[]string       `yaml:"exclude-package" json:"exclude-package,omitempty"`
@@ -113,6 +117,7 @@ type tunSchema struct {
 	EndpointIndependentNat                *bool           `yaml:"endpoint-independent-nat" json:"endpoint-independent-nat,omitempty"`
 	UDPTimeout                            *int64          `yaml:"udp-timeout" json:"udp-timeout,omitempty"`
 	ICMPTimeout                           *int64          `yaml:"icmp-timeout" json:"icmp-timeout,omitempty"`
+	DisableICMPForwarding                 *bool           `yaml:"disable-icmp-forwarding" json:"disable-icmp-forwarding,omitempty"`
 	FileDescriptor                        *int            `yaml:"file-descriptor" json:"file-descriptor"`
 
 	Inet4RouteAddress        *[]netip.Prefix `yaml:"inet4-route-address" json:"inet4-route-address,omitempty"`
@@ -182,9 +187,9 @@ func pointerOrDefaultTun(p *tunSchema, def LC.Tun) LC.Tun {
 		if p.GSOMaxSize != nil {
 			def.GSOMaxSize = *p.GSOMaxSize
 		}
-		//if p.Inet4Address != nil {
-		//	def.Inet4Address = *p.Inet4Address
-		//}
+		if p.Inet4Address != nil {
+			def.Inet4Address = *p.Inet4Address
+		}
 		if p.Inet6Address != nil {
 			def.Inet6Address = *p.Inet6Address
 		}
@@ -201,7 +206,11 @@ func pointerOrDefaultTun(p *tunSchema, def LC.Tun) LC.Tun {
 			def.KernelDirect = *p.KernelDirect
 		}
 		if p.KernelDirectMaxEntries != nil {
-			if normalized, err := kerneldirect.NormalizeMaxEntries(*p.KernelDirectMaxEntries); err == nil {
+			normalized, err := kerneldirect.NormalizeMaxEntries(*p.KernelDirectMaxEntries)
+			if err != nil {
+				// Keep the requested value so ValidateKernelDirectTun can reject it.
+				def.KernelDirectMaxEntries = *p.KernelDirectMaxEntries
+			} else {
 				def.KernelDirectMaxEntries = normalized
 			}
 		}
@@ -295,6 +304,18 @@ func pointerOrDefaultTun(p *tunSchema, def LC.Tun) LC.Tun {
 		if p.ExcludeUIDRange != nil {
 			def.ExcludeUIDRange = *p.ExcludeUIDRange
 		}
+		if p.ExcludeSrcPort != nil {
+			def.ExcludeSrcPort = *p.ExcludeSrcPort
+		}
+		if p.ExcludeSrcPortRange != nil {
+			def.ExcludeSrcPortRange = *p.ExcludeSrcPortRange
+		}
+		if p.ExcludeDstPort != nil {
+			def.ExcludeDstPort = *p.ExcludeDstPort
+		}
+		if p.ExcludeDstPortRange != nil {
+			def.ExcludeDstPortRange = *p.ExcludeDstPortRange
+		}
 		if p.IncludeAndroidUser != nil {
 			def.IncludeAndroidUser = *p.IncludeAndroidUser
 		}
@@ -318,6 +339,9 @@ func pointerOrDefaultTun(p *tunSchema, def LC.Tun) LC.Tun {
 		}
 		if p.ICMPTimeout != nil {
 			def.ICMPTimeout = *p.ICMPTimeout
+		}
+		if p.DisableICMPForwarding != nil {
+			def.DisableICMPForwarding = *p.DisableICMPForwarding
 		}
 		if p.FileDescriptor != nil {
 			def.FileDescriptor = *p.FileDescriptor
@@ -377,6 +401,13 @@ func pointerOrDefaultTuicServer(p *tuicServerSchema, def LC.TuicServer) LC.TuicS
 	return def
 }
 
+type tunPatchValidationError struct {
+	err error
+}
+
+func (e *tunPatchValidationError) Error() string { return e.err.Error() }
+func (e *tunPatchValidationError) Unwrap() error { return e.err }
+
 func patchConfigs(w http.ResponseWriter, r *http.Request) {
 	general := &configSchema{}
 	if err := decodeRequestJSON(w, r, &general); err != nil {
@@ -385,9 +416,29 @@ func patchConfigs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if general.Tun != nil && general.Tun.KernelDirectMaxEntries != nil && *general.Tun.KernelDirectMaxEntries > kerneldirect.MaximumMaxEntries {
-		render.Status(r, http.StatusBadRequest)
-		render.JSON(w, r, newError(fmt.Sprintf("tun kernel-direct-max-entries exceeds maximum %d", kerneldirect.MaximumMaxEntries)))
+	previousInterface := dialer.DefaultInterface.Load()
+	if general.InterfaceName != nil {
+		dialer.DefaultInterface.Store(*general.InterfaceName)
+	}
+	if err := listener.PatchTun(func(current LC.Tun) (LC.Tun, error) {
+		merged := pointerOrDefaultTun(general.Tun, current)
+		if general.Tun != nil {
+			if err := config.ValidateKernelDirectTun(merged); err != nil {
+				return LC.Tun{}, &tunPatchValidationError{err: err}
+			}
+		}
+		return merged, nil
+	}, tunnel.Tunnel); err != nil {
+		if general.InterfaceName != nil {
+			dialer.DefaultInterface.Store(previousInterface)
+		}
+		var validationErr *tunPatchValidationError
+		if errors.As(err, &validationErr) {
+			render.Status(r, http.StatusBadRequest)
+		} else {
+			render.Status(r, http.StatusInternalServerError)
+		}
+		render.JSON(w, r, newError(err.Error()))
 		return
 	}
 
@@ -419,10 +470,6 @@ func patchConfigs(w http.ResponseWriter, r *http.Request) {
 		dialer.SetTcpConcurrent(*general.TcpConcurrent)
 	}
 
-	if general.InterfaceName != nil {
-		dialer.DefaultInterface.Store(*general.InterfaceName)
-	}
-
 	ports := listener.GetPorts()
 
 	listener.ReCreateHTTP(pointerOrDefault(general.Port, ports.Port), tunnel.Tunnel)
@@ -430,7 +477,6 @@ func patchConfigs(w http.ResponseWriter, r *http.Request) {
 	listener.ReCreateRedir(pointerOrDefault(general.RedirPort, ports.RedirPort), tunnel.Tunnel)
 	listener.ReCreateTProxy(pointerOrDefault(general.TProxyPort, ports.TProxyPort), tunnel.Tunnel)
 	listener.ReCreateMixed(pointerOrDefault(general.MixedPort, ports.MixedPort), tunnel.Tunnel)
-	listener.ReCreateTun(pointerOrDefaultTun(general.Tun, listener.LastTunConf), tunnel.Tunnel)
 	listener.ReCreateShadowSocks(pointerOrDefault(general.ShadowSocksConfig, ports.ShadowSocksConfig), tunnel.Tunnel)
 	listener.ReCreateVmess(pointerOrDefault(general.VmessConfig, ports.VmessConfig), tunnel.Tunnel)
 	listener.ReCreateTuic(pointerOrDefaultTuicServer(general.TuicServer, listener.LastTuicConf), tunnel.Tunnel)

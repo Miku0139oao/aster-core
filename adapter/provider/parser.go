@@ -54,6 +54,10 @@ func ParseProxyProvider(name string, mapping map[string]any, tunnel C.Tunnel) (P
 		return nil, err
 	}
 
+	if schema.Interval < 0 || schema.HealthCheck.Interval < 0 || schema.HealthCheck.TestTimeout < 0 || schema.SizeLimit < 0 {
+		return nil, errors.New("provider interval, health-check timeout, and size-limit cannot be negative")
+	}
+
 	expectedStatus, err := utils.NewUnsignedRanges[uint16](schema.HealthCheck.ExpectedStatus)
 	if err != nil {
 		return nil, err

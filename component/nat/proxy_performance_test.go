@@ -46,15 +46,15 @@ func BenchmarkTableExistingFlow(b *testing.B) {
 	key := C.UDPNatKey{AddrPort: netip.MustParseAddrPort("192.0.2.1:12345")}
 	sender := &benchmarkPacketSender{}
 	maker := func() C.PacketSender { return sender }
-	if _, loaded := table.GetOrCreate(key, maker); loaded {
+	if _, loaded, admitted := table.GetOrCreate(key, maker); loaded || !admitted {
 		b.Fatal("first lookup unexpectedly loaded")
 	}
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		got, loaded := table.GetOrCreate(key, maker)
-		if !loaded || got != sender {
+		got, loaded, admitted := table.GetOrCreate(key, maker)
+		if !loaded || !admitted || got != sender {
 			b.Fatal("existing NAT flow was not found")
 		}
 	}

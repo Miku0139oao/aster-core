@@ -84,22 +84,25 @@ func (c *httpServerConn) Wait() <-chan struct{} {
 }
 
 type httpSession struct {
-	uploadQueue *UploadQueue
-	connected   chan struct{}
-	once        sync.Once
+	uploadQueue  *UploadQueue
+	lastActivity atomic.Int64
+	connected    atomic.Bool
 }
 
-func newHTTPSession(maxPackets int) *httpSession {
-	return &httpSession{
-		uploadQueue: NewUploadQueue(maxPackets),
-		connected:   make(chan struct{}),
+func newHTTPSession(maxPackets, maxBytes int) *httpSession {
+	session := &httpSession{
+		uploadQueue: NewUploadQueue(maxPackets, maxBytes),
 	}
+	session.touch()
+	return session
+}
+
+func (s *httpSession) touch() {
+	s.lastActivity.Store(time.Now().UnixNano())
 }
 
 func (s *httpSession) markConnected() {
-	s.once.Do(func() {
-		close(s.connected)
-	})
+	s.connected.Store(true)
 }
 
 type requestHandler struct {
@@ -112,9 +115,25 @@ type requestHandler struct {
 	scStreamUpServerSecs Range
 	scMaxBufferedPosts   Range
 
-	mu       sync.Mutex
-	sessions map[string]*httpSession
+	mu                sync.Mutex
+	sessions          map[string]*httpSession
+	lastReap          time.Time
+	uploadSlots       chan struct{}
+	globalQueuedBytes atomic.Int64
 }
+
+const (
+	maxXHTTPSessions           = 4096
+	maxXHTTPSessionIDBytes     = 256
+	maxXHTTPPostBytes          = 8 << 20
+	maxXHTTPBufferedPosts      = 256
+	maxXHTTPSessionQueuedBytes = 32 << 20
+	maxXHTTPGlobalQueuedBytes  = 128 << 20
+	maxXHTTPConcurrentUploads  = 256
+	xhttpOrphanIdle            = 2 * time.Minute
+)
+
+var errXHTTPSessionLimit = fmt.Errorf("xhttp: active session limit reached")
 
 func NewServerHandler(opt ServerOption) (http.Handler, error) {
 	xPaddingBytes, err := opt.Config.GetNormalizedXPaddingBytes()
@@ -133,6 +152,12 @@ func NewServerHandler(opt ServerOption) (http.Handler, error) {
 	if err != nil {
 		return nil, err
 	}
+	if scMaxEachPostBytes.Max > maxXHTTPPostBytes {
+		return nil, fmt.Errorf("sc-max-each-post-bytes exceeds %d", maxXHTTPPostBytes)
+	}
+	if scMaxBufferedPosts.Max > maxXHTTPBufferedPosts {
+		return nil, fmt.Errorf("sc-max-buffered-posts exceeds %d", maxXHTTPBufferedPosts)
+	}
 	return &requestHandler{
 		config:               opt.Config,
 		connHandler:          opt.ConnHandler,
@@ -142,34 +167,72 @@ func NewServerHandler(opt ServerOption) (http.Handler, error) {
 		scStreamUpServerSecs: scStreamUpServerSecs,
 		scMaxBufferedPosts:   scMaxBufferedPosts,
 		sessions:             map[string]*httpSession{},
+		lastReap:             time.Now(),
+		uploadSlots:          make(chan struct{}, maxXHTTPConcurrentUploads),
 	}, nil
 }
 
-func (h *requestHandler) upsertSession(sessionID string) *httpSession {
+func validXHTTPSessionID(sessionID string) bool {
+	if len(sessionID) == 0 || len(sessionID) > maxXHTTPSessionIDBytes {
+		return false
+	}
+	for i := range sessionID {
+		if sessionID[i] < 0x20 || sessionID[i] >= 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+func (h *requestHandler) reapOrphansLocked(now time.Time) {
+	if now.Sub(h.lastReap) < 30*time.Second {
+		return
+	}
+	h.lastReap = now
+	cutoff := now.Add(-xhttpOrphanIdle).UnixNano()
+	for id, session := range h.sessions {
+		if session.connected.Load() || session.lastActivity.Load() >= cutoff {
+			continue
+		}
+		_ = session.uploadQueue.Close()
+		delete(h.sessions, id)
+	}
+}
+
+func (h *requestHandler) reserveQueueBytes(size int) bool {
+	for {
+		current := h.globalQueuedBytes.Load()
+		if int64(size) > maxXHTTPGlobalQueuedBytes-current {
+			return false
+		}
+		if h.globalQueuedBytes.CompareAndSwap(current, current+int64(size)) {
+			return true
+		}
+	}
+}
+
+func (h *requestHandler) releaseQueueBytes(size int) {
+	if size > 0 {
+		h.globalQueuedBytes.Add(-int64(size))
+	}
+}
+
+func (h *requestHandler) upsertSession(sessionID string) (*httpSession, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	h.reapOrphansLocked(time.Now())
 
-	s, ok := h.sessions[sessionID]
-	if ok {
-		return s
+	if session, ok := h.sessions[sessionID]; ok {
+		session.touch()
+		return session, nil
 	}
-
-	s = newHTTPSession(h.scMaxBufferedPosts.Max)
-	h.sessions[sessionID] = s
-
-	// Reap orphan sessions that never become fully connected (e.g. from probing).
-	// Matches Xray-core's 30-second reaper in upsertSession.
-	go func() {
-		timer := time.NewTimer(30 * time.Second)
-		defer timer.Stop()
-		select {
-		case <-timer.C:
-			h.deleteSession(sessionID, s)
-		case <-s.connected:
-		}
-	}()
-
-	return s
+	if len(h.sessions) >= maxXHTTPSessions {
+		return nil, errXHTTPSessionLimit
+	}
+	session := newHTTPSession(h.scMaxBufferedPosts.Max, maxXHTTPSessionQueuedBytes)
+	session.uploadQueue.SetByteBudget(h.reserveQueueBytes, h.releaseQueueBytes)
+	h.sessions[sessionID] = session
+	return session, nil
 }
 
 func (h *requestHandler) deleteSession(sessionID string, expected *httpSession) {
@@ -281,15 +344,20 @@ func (h *requestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	obfsPaddingAccepted := h.config.XPaddingObfsMode && paddingValue != ""
 	sessionId, seqStr := h.config.ExtractMetaFromRequest(r, path)
 
-	var currentSession *httpSession
-	if sessionId != "" {
-		currentSession = h.upsertSession(sessionId)
+	if sessionId != "" && !validXHTTPSessionID(sessionId) {
+		http.Error(w, "invalid xhttp session", http.StatusBadRequest)
+		return
 	}
 
 	// stream-up upload: POST /path/{session}
 	if r.Method != http.MethodGet && sessionId != "" && seqStr == "" && h.allowStreamUpUpload() {
+		currentSession, err := h.upsertSession(sessionId)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
 		httpSC := newHTTPServerConn(w, r.Body)
-		err := currentSession.uploadQueue.Push(Packet{
+		err = currentSession.uploadQueue.Push(Packet{
 			Reader: httpSC,
 		})
 		if err != nil {
@@ -337,11 +405,31 @@ func (h *requestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// packet-up upload: POST /path/{session}/{seq}
 	if r.Method != http.MethodGet && sessionId != "" && seqStr != "" && h.allowPacketUpUpload() {
+		seq, err := strconv.ParseUint(seqStr, 10, 64)
+		if err != nil {
+			http.Error(w, "invalid xhttp seq", http.StatusBadRequest)
+			return
+		}
+		select {
+		case h.uploadSlots <- struct{}{}:
+			defer func() { <-h.uploadSlots }()
+		default:
+			http.Error(w, "too many concurrent uploads", http.StatusTooManyRequests)
+			return
+		}
+		currentSession, err := h.upsertSession(sessionId)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		if err := currentSession.uploadQueue.CanPush(seq); err != nil {
+			http.Error(w, err.Error(), http.StatusTooManyRequests)
+			return
+		}
 		scMaxEachPostBytes := h.scMaxEachPostBytes.Max
 		dataPlacement := h.config.GetNormalizedUplinkDataPlacement()
 		uplinkDataKey := h.config.UplinkDataKey
 		var headerPayload []byte
-		var err error
 		if dataPlacement == PlacementAuto || dataPlacement == PlacementHeader {
 			var headerPayloadChunks []string
 			for i := 0; true; i++ {
@@ -410,18 +498,12 @@ func (h *requestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		seq, err := strconv.ParseUint(seqStr, 10, 64)
-		if err != nil {
-			http.Error(w, "invalid xhttp seq", http.StatusBadRequest)
-			return
-		}
-
 		err = currentSession.uploadQueue.Push(Packet{
 			Seq:     seq,
 			Payload: payload,
 		})
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, err.Error(), http.StatusTooManyRequests)
 			return
 		}
 
@@ -435,6 +517,11 @@ func (h *requestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// stream-up/packet-up download: GET /path/{session}
 	if r.Method == http.MethodGet && sessionId != "" && seqStr == "" && h.allowSessionDownload() {
+		currentSession, err := h.upsertSession(sessionId)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
 		currentSession.markConnected()
 
 		// magic header instructs nginx + apache to not buffer response body

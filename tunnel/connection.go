@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -19,13 +20,12 @@ type packetSender struct {
 	ch     chan C.PacketAdapter
 
 	// destination NAT mapping
-	// originToTarget is owned by the single Process goroutine. The initial
-	// mapping is installed before Process starts, so outbound packet lookups do
-	// not need a lock. Reverse lookups use an immutable atomic snapshot because
-	// they are read concurrently by the receive goroutine.
-	originToTarget  map[destinationKey]*net.UDPAddr
-	targetToOrigin  map[netip.Addr]netip.Addr
-	reverseMappings atomic.Pointer[map[netip.Addr]netip.Addr]
+	// originToTarget is owned by the single Process goroutine. Reverse lookups
+	// share targetToOrigin with the receive goroutine under reverseMu; this keeps
+	// insertion O(1) instead of copying the complete map for every destination.
+	originToTarget map[destinationKey]*net.UDPAddr
+	targetToOrigin map[netip.AddrPort]netip.AddrPort
+	reverseMu      sync.RWMutex
 
 	nextDeadlineRefresh atomic.Int64
 }
@@ -54,46 +54,56 @@ func newPacketSender() C.PacketSender {
 		ch:     ch,
 
 		originToTarget: make(map[destinationKey]*net.UDPAddr),
-		targetToOrigin: make(map[netip.Addr]netip.Addr),
+		targetToOrigin: make(map[netip.AddrPort]netip.AddrPort),
 	}
+}
+
+const maxUDPDestinationMappings = 4096
+
+func (s *packetSender) addMapping(originMetadata *C.Metadata, metadata *C.Metadata) bool {
+	originKey := metadataDestinationKey(originMetadata)
+	if s.originToTarget[originKey] != nil {
+		return true
+	}
+	if len(s.originToTarget) >= maxUDPDestinationMappings {
+		return false
+	}
+	originAddrPort := originMetadata.AddrPort()
+	targetAddrPort := metadata.AddrPort()
+	s.originToTarget[originKey] = net.UDPAddrFromAddrPort(targetAddrPort)
+
+	s.reverseMu.Lock()
+	if addr := s.targetToOrigin[targetAddrPort]; !addr.IsValid() && originAddrPort.IsValid() {
+		s.targetToOrigin[targetAddrPort] = originAddrPort
+	}
+	s.reverseMu.Unlock()
+	return true
 }
 
 func (s *packetSender) AddMapping(originMetadata *C.Metadata, metadata *C.Metadata) {
-	originKey := metadataDestinationKey(originMetadata)
-	originAddr := originMetadata.DstIP.Unmap()
-	targetAddr := metadata.DstIP.Unmap()
-	if s.originToTarget[originKey] == nil {
-		s.originToTarget[originKey] = net.UDPAddrFromAddrPort(netip.AddrPortFrom(targetAddr, metadata.DstPort))
-	}
-
-	if addr := s.targetToOrigin[targetAddr]; !addr.IsValid() { // overwrite only if the record is illegal
-		s.targetToOrigin[targetAddr] = originAddr
-		snapshot := make(map[netip.Addr]netip.Addr, len(s.targetToOrigin))
-		for target, origin := range s.targetToOrigin {
-			snapshot[target] = origin
-		}
-		s.reverseMappings.Store(&snapshot)
-	}
+	s.addMapping(originMetadata, metadata)
 }
 
-func (s *packetSender) RestoreReadFrom(addr netip.Addr) netip.Addr {
-	addr = addr.Unmap()
-	snapshot := s.reverseMappings.Load()
-	if snapshot != nil {
-		if originAddr := (*snapshot)[addr]; originAddr.IsValid() {
-			return originAddr
-		}
+func (s *packetSender) RestoreReadFrom(addr netip.AddrPort) netip.AddrPort {
+	addr = netip.AddrPortFrom(addr.Addr().Unmap(), addr.Port())
+	s.reverseMu.RLock()
+	originAddr := s.targetToOrigin[addr]
+	s.reverseMu.RUnlock()
+	if originAddr.IsValid() {
+		return originAddr
 	}
 	return addr
 }
 
 const udpDeadlineRefreshInterval = time.Second
 
+var udpDeadlineEpoch = time.Now()
+
 func (s *packetSender) RefreshReadDeadline(pc C.PacketConn) {
 	now := time.Now()
-	nowUnixNano := now.UnixNano()
+	elapsed := time.Since(udpDeadlineEpoch).Nanoseconds()
 	nextRefresh := s.nextDeadlineRefresh.Load()
-	if nowUnixNano < nextRefresh || !s.nextDeadlineRefresh.CompareAndSwap(nextRefresh, now.Add(udpDeadlineRefreshInterval).UnixNano()) {
+	if elapsed < nextRefresh || !s.nextDeadlineRefresh.CompareAndSwap(nextRefresh, elapsed+udpDeadlineRefreshInterval.Nanoseconds()) {
 		return
 	}
 	// The extra refresh interval ensures an active association never expires
@@ -115,7 +125,10 @@ func (s *packetSender) processPacket(pc C.PacketConn, packet C.PacketAdapter) {
 		originMetadata := metadata  // save origin metadata
 		metadata = metadata.Clone() // don't modify PacketAdapter's metadata
 
-		_ = preHandleMetadata(metadata) // error was pre-checked
+		if err := preHandleMetadata(metadata); err != nil {
+			log.Warnln("[UDP] Destination metadata became invalid: %s", err)
+			return
+		}
 		metadata = metadata.Pure()
 		if metadata.Host != "" {
 			// TODO: ResolveUDP may take a long time to block the Process loop
@@ -130,7 +143,10 @@ func (s *packetSender) processPacket(pc C.PacketConn, packet C.PacketAdapter) {
 			log.Warnln("[UDP] Destination ip not valid: %#v", metadata)
 			return
 		}
-		s.AddMapping(originMetadata, metadata)
+		if !s.addMapping(originMetadata, metadata) {
+			log.Warnln("[UDP] Destination mapping limit reached (%d)", maxUDPDestinationMappings)
+			return
+		}
 		addr = metadata.UDPAddr()
 	}
 	if handleUDPToRemote(packet, pc, addr) == nil {
@@ -231,12 +247,10 @@ func handleUDPToLocal(writeBack C.WriteBack, pc C.PacketConn, sender C.PacketSen
 		}
 
 		fromAddrPort := fromUDPAddr.AddrPort()
-		fromAddr := fromAddrPort.Addr().Unmap()
 
-		// restore DestinationNAT
-		fromAddr = sender.RestoreReadFrom(fromAddr).Unmap()
-
-		fromAddrPort = netip.AddrPortFrom(fromAddr, fromAddrPort.Port())
+		// restore DestinationNAT, including the original port when aliases share
+		// one resolved IP but target different services.
+		fromAddrPort = sender.RestoreReadFrom(fromAddrPort)
 
 		_, err = writeBack.WriteBack(data, net.UDPAddrFromAddrPort(fromAddrPort))
 		if put != nil {
@@ -248,12 +262,12 @@ func handleUDPToLocal(writeBack C.WriteBack, pc C.PacketConn, sender C.PacketSen
 	}
 }
 
-func closeAllLocalCoon(lAddr C.UDPNatKey) {
-	natTable.RangeForLocalConn(lAddr.String(), func(key string, value *net.UDPConn) bool {
+func closeAllLocalCoon(flow C.UDPNatKey) {
+	natTable.RangeForLocalConn(flow, func(key string, value *net.UDPConn) bool {
 		conn := value
 
 		conn.Close()
-		log.Debugln("Closing TProxy local conn... lAddr=%s rAddr=%s", lAddr, key)
+		log.Debugln("Closing TProxy local conn... flow=%s rAddr=%s", flow.String(), key)
 		return true
 	})
 }

@@ -66,10 +66,18 @@ func NewMphMatcherGroup() *MphMatcherGroup {
 func (g *MphMatcherGroup) AddPattern(pattern string, t Type) (uint32, error) {
 	switch t {
 	case Substr:
-		if g.ac == nil {
-			g.ac = NewACAutomaton()
+		if acPatternSupported(pattern) {
+			if g.ac == nil {
+				g.ac = NewACAutomaton()
+			}
+			g.ac.Add(pattern, t)
+		} else {
+			matcher, err := t.New(pattern)
+			if err != nil {
+				return 0, err
+			}
+			g.otherMatchers = append(g.otherMatchers, matcherEntry{m: matcher, id: g.count})
 		}
-		g.ac.Add(pattern, t)
 	case Full, Domain:
 		pattern = strings.ToLower(pattern)
 		g.AddFullOrDomainPattern(pattern, t)

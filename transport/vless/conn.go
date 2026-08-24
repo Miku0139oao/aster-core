@@ -57,6 +57,9 @@ func (vc *Conn) Write(p []byte) (int, error) {
 
 func (vc *Conn) WriteBuffer(buffer *buf.Buffer) error {
 	if !vc.sent {
+		// WriteBuffer transfers ownership to the receiver even on the first
+		// request, where sendRequest copies the payload into its own frame.
+		defer buffer.Release()
 		if err := vc.sendRequest(buffer.Bytes()); err != nil {
 			return err
 		}
@@ -133,10 +136,12 @@ func (vc *Conn) recvResponse() (err error) {
 
 	length := int64(buffer[1])
 	if length != 0 { // addon data length > 0
-		io.CopyN(io.Discard, vc.ExtendedConn, length) // just discard
+		if _, err = io.CopyN(io.Discard, vc.ExtendedConn, length); err != nil {
+			return err
+		}
 	}
 
-	return
+	return nil
 }
 
 func (vc *Conn) Upstream() any {

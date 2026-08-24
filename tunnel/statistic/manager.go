@@ -228,13 +228,19 @@ func (m *Manager) ResetStatistic() {
 	m.downloadTotal.Store(0)
 }
 
+const zeroByteReapInterval = 5 * time.Second
+
 func (m *Manager) handle() {
 	ticker := time.NewTicker(time.Second)
+	nextReap := time.Now().Add(zeroByteReapInterval)
 
 	for now := range ticker.C {
 		m.uploadBlip.Store(m.uploadTemp.Swap(0))
 		m.downloadBlip.Store(m.downloadTemp.Swap(0))
-		m.reapIdleZeroByteTCP(now)
+		if !now.Before(nextReap) {
+			m.reapIdleZeroByteTCP(now)
+			nextReap = now.Add(zeroByteReapInterval)
+		}
 	}
 }
 
@@ -268,6 +274,11 @@ func trackerEligibleForZeroByteReap(info *TrackerInfo, now time.Time) bool {
 		return false
 	}
 	if info.Metadata.NetWork != C.TCP {
+		return false
+	}
+	switch info.Metadata.Type {
+	case C.REDIR, C.TPROXY, C.TUN:
+	default:
 		return false
 	}
 	if info.Metadata.DstPort == 500 || info.Metadata.DstPort == 4500 {

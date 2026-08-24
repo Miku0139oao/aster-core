@@ -2,7 +2,9 @@ package trafficcontrol
 
 import (
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/netip"
 	"os"
@@ -33,7 +35,7 @@ func TestManagerMatchesFourDimensionsAndPersists(t *testing.T) {
 		t.Fatal(err)
 	}
 	session := manager.Open(Flow{SourceIP: netip.MustParseAddr("192.0.2.9"), RuleType: "DomainSuffix", RulePayload: "example.com", RuleTarget: "Proxy", Chains: []string{"edge", "Proxy"}})
-	if session == nil || len(session.policies) != 4 {
+	if session == nil || len(session.binding.Load().policies) != 4 {
 		t.Fatalf("expected four matching policies, got %#v", session)
 	}
 	session.Record(Upload, 60)
@@ -93,6 +95,15 @@ func TestReportRollupDoesNotDoubleCount(t *testing.T) {
 	if len(report) != 1 || report[0].Counters.UploadBytes != 10 {
 		t.Fatalf("unexpected daily rollup: %#v", report)
 	}
+}
+
+func TestManagerClosePublishesDisabledRuntime(t *testing.T) {
+	manager := NewManager()
+	require.NoError(t, manager.Configure(testManagerConfig(filepath.Join(t.TempDir(), "traffic.db"))))
+	require.True(t, manager.Enabled())
+	require.NoError(t, manager.Close())
+	require.False(t, manager.Enabled())
+	require.Empty(t, manager.Status().Policies)
 }
 
 func TestResetIsImmediatelyPersistent(t *testing.T) {
@@ -217,6 +228,190 @@ func TestConfigureAtRevisionAllowsOnlyOneConcurrentUpdate(t *testing.T) {
 	require.True(t, (first == nil && errors.Is(second, ErrRevisionConflict)) || (second == nil && errors.Is(first, ErrRevisionConflict)))
 }
 
+func TestFailedConfigurePreservesActiveLifecycle(t *testing.T) {
+	directory := t.TempDir()
+	manager := NewManager()
+	config := testManagerConfig(filepath.Join(directory, "active.db"))
+	config.Portal.Listen = "127.0.0.1:0"
+	require.NoError(t, manager.Configure(config))
+	defer manager.Close()
+
+	session := manager.Open(Flow{})
+	require.NotNil(t, session)
+	session.Record(Upload, 101)
+	oldPortalURL := session.PortalURL()
+	require.NotEmpty(t, oldPortalURL)
+	oldRuntime := manager.runtime.Load()
+	oldStore := manager.store
+	oldPortal := manager.portal.Load()
+	_, revision := manager.Config()
+
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer occupied.Close()
+	failed := config.Clone()
+	failed.StorePath = filepath.Join(directory, "staged.db")
+	failed.Portal.Listen = occupied.Addr().String()
+	require.Error(t, manager.ConfigureAtRevision(failed, revision))
+
+	current, currentRevision := manager.Config()
+	require.Equal(t, revision, currentRevision)
+	require.Equal(t, config.StorePath, current.StorePath)
+	require.Same(t, oldRuntime, manager.runtime.Load())
+	require.Same(t, oldStore, manager.store)
+	require.Same(t, oldPortal, manager.portal.Load())
+	manager.flusherMu.Lock()
+	flusherRunning := manager.flushStop != nil
+	manager.flusherMu.Unlock()
+	require.True(t, flusherRunning)
+
+	response, err := http.Get(oldPortalURL)
+	require.NoError(t, err)
+	response.Body.Close()
+	require.Equal(t, http.StatusOK, response.StatusCode)
+	session.Record(Download, 1)
+	require.Equal(t, int64(102), manager.Status().Policies[0].Counters.TotalBytes())
+}
+
+func TestConfigureReusesSameStoreAndPortal(t *testing.T) {
+	manager := NewManager()
+	config := testManagerConfig(filepath.Join(t.TempDir(), "traffic.db"))
+	config.Portal.Listen = "127.0.0.1:0"
+	require.NoError(t, manager.Configure(config))
+	defer manager.Close()
+	oldStore, oldPortal := manager.store, manager.portal.Load()
+
+	updated := config.Clone()
+	updated.Policies[0].UploadBPS = 1_000_000
+	require.NoError(t, manager.Configure(updated))
+	require.Same(t, oldStore, manager.store)
+	require.Same(t, oldPortal, manager.portal.Load())
+	require.Equal(t, int64(1_000_000), manager.runtime.Load().policies[0].spec.UploadBPS)
+}
+
+func TestActiveSessionRebindsAcrossPolicyGenerations(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "traffic.db")
+	manager := NewManager()
+	config := testManagerConfig(path)
+	require.NoError(t, manager.Configure(config))
+	defer manager.Close()
+
+	session := manager.Open(Flow{})
+	require.NotNil(t, session)
+	firstBinding := session.binding.Load()
+	firstState := firstBinding.policies[0].state
+	session.Record(Upload, 10)
+
+	sameIdentity := config.Clone()
+	sameIdentity.Policies[0].UploadBPS = 1_000_000
+	require.NoError(t, manager.Configure(sameIdentity))
+	session.Record(Upload, 5)
+	secondBinding := session.binding.Load()
+	require.NotSame(t, firstBinding.runtime, secondBinding.runtime)
+	require.Same(t, firstState, secondBinding.policies[0].state)
+	require.Equal(t, int64(1), firstState.Active.Load())
+	require.Equal(t, int64(15), secondBinding.policies[0].state.Counters.UploadBytes)
+
+	changedIdentity := sameIdentity.Clone()
+	changedIdentity.Policies[0].Quota.Window = 2 * time.Hour
+	require.NoError(t, manager.Configure(changedIdentity))
+	session.Record(Upload, 7)
+	thirdBinding := session.binding.Load()
+	thirdState := thirdBinding.policies[0].state
+	require.NotSame(t, firstState, thirdState)
+	require.Equal(t, int64(0), firstState.Active.Load())
+	require.Equal(t, int64(1), thirdState.Active.Load())
+	require.Equal(t, int64(7), thirdState.Counters.UploadBytes)
+
+	removed := changedIdentity.Clone()
+	removed.Policies = nil
+	require.NoError(t, manager.Configure(removed))
+	session.Record(Upload, 9)
+	require.Empty(t, session.binding.Load().policies)
+	require.Equal(t, int64(0), thirdState.Active.Load())
+	session.Close()
+}
+
+func TestAllowPacketSupportsLowRateDatagramAndRollsBackReservations(t *testing.T) {
+	manager := NewManager()
+	now := time.Date(2026, time.August, 6, 12, 0, 0, 0, time.UTC)
+	manager.now = func() time.Time { return now }
+	first := newRuntimePolicy(Policy{ID: "first", Kind: PolicyGlobal, Enabled: true, UploadBPS: 8_000}, &policyState{})
+	second := newRuntimePolicy(Policy{ID: "second", Kind: PolicyGlobal, Enabled: true, UploadBPS: 8_000}, &policyState{})
+	runtime := &runtimeState{config: &Config{Enabled: true}, policies: []*runtimePolicy{first, second}}
+	manager.runtime.Store(runtime)
+	session := &Session{manager: manager}
+	session.binding.Store(&sessionBinding{runtime: runtime, policies: runtime.policies})
+
+	if !session.AllowPacket(Upload, 1500) {
+		t.Fatal("one normal datagram was permanently rejected below 12 kbit/s")
+	}
+	// Exhaust the second limiter, then verify its rejection does not consume the
+	// first policy's tokens.
+	if !second.upload.AllowN(now, second.upload.Burst()-1500) {
+		t.Fatal("failed to prepare exhausted limiter")
+	}
+	before := first.upload.TokensAt(now)
+	if session.AllowPacket(Upload, 1500) {
+		t.Fatal("expected stacked exhausted limiter to reject packet")
+	}
+	if after := first.upload.TokensAt(now); after != before {
+		t.Fatalf("failed stacked admission consumed first limiter tokens: before=%v after=%v", before, after)
+	}
+}
+
+func TestReportKeysAndSeriesAreBounded(t *testing.T) {
+	dimensions := make([]string, maxReportKeysPerSession+50)
+	for i := range dimensions {
+		dimensions[i] = fmt.Sprintf("device:%d", i)
+	}
+	if keys := reportKeys(dimensions); len(keys) != maxReportKeysPerSession {
+		t.Fatalf("report keys = %d, want %d", len(keys), maxReportKeysPerSession)
+	}
+
+	manager := NewManager()
+	manager.reports = make(map[string]*reportSeries, maxReportSeries)
+	for i := 0; i < maxReportSeries; i++ {
+		key := fmt.Sprintf("existing:%d", i)
+		manager.reports[key] = &reportSeries{Key: key}
+	}
+	if series := manager.reportSeries("overflow"); series != nil {
+		t.Fatal("report series beyond the global limit was allocated")
+	}
+}
+
+func TestReportsValidateGranularityBeforeMissingKey(t *testing.T) {
+	manager := NewManager()
+	if _, err := manager.Reports("missing", "bogus", time.Unix(0, 0), time.Unix(1, 0)); err == nil {
+		t.Fatal("missing report key bypassed granularity validation")
+	}
+}
+
+func TestStatusPolicyCIDRsAreDetached(t *testing.T) {
+	manager := NewManager()
+	config := testManagerConfig(filepath.Join(t.TempDir(), "traffic.db"))
+	require.NoError(t, manager.Configure(config))
+	defer manager.Close()
+	status := manager.Status()
+	var device *PolicyStatus
+	for i := range status.Policies {
+		if status.Policies[i].Policy.ID == "phone" {
+			device = &status.Policies[i]
+			break
+		}
+	}
+	require.NotNil(t, device)
+	device.Policy.SourceCIDRs[0] = netip.MustParsePrefix("203.0.113.0/24")
+	status = manager.Status()
+	for _, policy := range status.Policies {
+		if policy.Policy.ID == "phone" {
+			require.Equal(t, "192.0.2.9/32", policy.Policy.SourceCIDRs[0].String())
+			return
+		}
+	}
+	t.Fatal("phone policy disappeared")
+}
+
 func TestOverQuotaSessionRecoversWhenRollingWindowExpires(t *testing.T) {
 	manager := NewManager()
 	now := time.Date(2026, time.August, 6, 12, 0, 0, 0, time.UTC)
@@ -230,10 +425,10 @@ func TestOverQuotaSessionRecoversWhenRollingWindowExpires(t *testing.T) {
 	session := manager.Open(Flow{})
 	require.NotNil(t, session)
 	session.Record(Upload, 100)
-	require.True(t, session.policies[0].state.OverQuota.Load())
+	require.True(t, session.binding.Load().policies[0].state.OverQuota.Load())
 
 	now = now.Add(2 * time.Hour)
 	require.True(t, session.AllowPacket(Upload, 1))
-	require.False(t, session.policies[0].state.OverQuota.Load())
+	require.False(t, session.binding.Load().policies[0].state.OverQuota.Load())
 	session.Close()
 }

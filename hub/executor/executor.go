@@ -91,6 +91,12 @@ func ApplyConfig(cfg *config.Config, force bool) error {
 	log.SetLevel(cfg.General.LogLevel)
 
 	tunnel.OnSuspend()
+	resumed := false
+	defer func() {
+		if !resumed {
+			tunnel.OnRunning()
+		}
+	}()
 
 	ca.ResetCertificate()
 	for _, c := range cfg.TLS.CustomTrustCert {
@@ -116,7 +122,7 @@ func ApplyConfig(cfg *config.Config, force bool) error {
 	// must still be applied: skipping it leaves proxy providers unloaded and the
 	// tun, tunnel and inner listeners bound to the retired configuration.
 	inboundErr := updateInbounds(cfg, force)
-	updateTun(cfg.General) // tun should not care "force"
+	tunErr := updateTun(cfg.General) // tun should not care "force"
 	updateIPTables(cfg)
 	updateTunnels(cfg.Tunnels)
 
@@ -128,10 +134,11 @@ func ApplyConfig(cfg *config.Config, force bool) error {
 	loadProvider(cfg.RuleProviders)
 	runtime.GC()
 	tunnel.OnRunning()
+	resumed = true
 	updateUpdater(cfg)
 
 	resolver.ResetConnection()
-	return inboundErr
+	return errors.Join(inboundErr, tunErr)
 }
 
 func updateInbounds(cfg *config.Config, force bool) error {
@@ -272,8 +279,8 @@ func updateListeners(general *config.General, listeners map[string]C.InboundList
 	return nil
 }
 
-func updateTun(general *config.General) {
-	listener.ReCreateTun(general.Tun, tunnel.Tunnel)
+func updateTun(general *config.General) error {
+	return listener.ReCreateTun(general.Tun, tunnel.Tunnel)
 }
 
 func updateExperimental(c *config.Experimental) {

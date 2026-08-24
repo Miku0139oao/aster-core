@@ -23,6 +23,8 @@ const (
 	dirMode  os.FileMode = 0o755
 )
 
+var ErrResourceTooLarge = errors.New("resource exceeds size limit")
+
 var etag = false
 
 func ETag() bool {
@@ -151,11 +153,7 @@ func (h *HTTPVehicle) Read(ctx context.Context, oldHash utils.HashType) (buf []b
 		err = errors.New(resp.Status)
 		return
 	}
-	var reader io.Reader = resp.Body
-	if h.sizeLimit > 0 {
-		reader = io.LimitReader(reader, h.sizeLimit)
-	}
-	buf, err = io.ReadAll(reader)
+	buf, err = readWithLimit(resp.Body, h.sizeLimit)
 	if err != nil {
 		return
 	}
@@ -168,6 +166,21 @@ func (h *HTTPVehicle) Read(ctx context.Context, oldHash utils.HashType) (buf []b
 		})
 	}
 	return
+}
+
+func readWithLimit(reader io.Reader, limit int64) ([]byte, error) {
+	if limit <= 0 || limit == int64(^uint64(0)>>1) {
+		return io.ReadAll(reader)
+	}
+	limited := &io.LimitedReader{R: reader, N: limit + 1}
+	buf, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(buf)) > limit {
+		return nil, ErrResourceTooLarge
+	}
+	return buf, nil
 }
 
 func NewHTTPVehicle(url string, path string, proxy string, header http.Header, timeout time.Duration, sizeLimit int64) *HTTPVehicle {

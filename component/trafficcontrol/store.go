@@ -68,9 +68,35 @@ type persistedReport struct {
 	Rolled  map[int64]bool     `json:"rolled,omitempty"`
 }
 
+func rejectSymlinkAncestors(path string) error {
+	for current := filepath.Dir(filepath.Clean(path)); ; current = filepath.Dir(current) {
+		info, err := os.Lstat(current)
+		if err == nil {
+			if info.Mode()&os.ModeSymlink != 0 {
+				return fmt.Errorf("traffic-control store ancestor %q is a symlink", current)
+			}
+			if !info.IsDir() {
+				return fmt.Errorf("traffic-control store ancestor %q is not a directory", current)
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return nil
+		}
+	}
+}
+
 func OpenStore(path string, maxSize int64) (*Store, error) {
 	path = filepath.Clean(path)
+	if err := rejectSymlinkAncestors(path); err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	if err := rejectSymlinkAncestors(path); err != nil {
 		return nil, err
 	}
 	directoryInfo, err := os.Lstat(filepath.Dir(path))
@@ -86,6 +112,9 @@ func OpenStore(path string, maxSize int64) (*Store, error) {
 	if info, statErr := os.Lstat(path); statErr == nil {
 		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 			return nil, errors.New("traffic-control store must be a regular file")
+		}
+		if maxSize > 0 && info.Size() > maxSize {
+			return nil, ErrStoreLimit
 		}
 	} else if !errors.Is(statErr, os.ErrNotExist) {
 		return nil, statErr

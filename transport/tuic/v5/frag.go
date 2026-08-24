@@ -2,6 +2,7 @@ package v5
 
 import (
 	"bytes"
+	"fmt"
 	"sync"
 
 	"github.com/Miku0139oao/aster-core/common/lru"
@@ -17,11 +18,17 @@ import (
 var MaxFragSize = 1200 - PacketOverHead - 3
 
 func fragWriteNative(quicConn *quic.Conn, packet Packet, buf *bytes.Buffer, fragSize int) (err error) {
+	if fragSize <= 0 {
+		return fmt.Errorf("invalid TUIC fragment size %d", fragSize)
+	}
 	fullPayload := packet.DATA
+	fragCount := (len(fullPayload) + fragSize - 1) / fragSize // round up
+	if fragCount > int(^uint8(0)) {
+		return fmt.Errorf("TUIC packet requires %d fragments, maximum is %d", fragCount, ^uint8(0))
+	}
 	off := 0
 	fragID := uint8(0)
-	fragCount := uint8((len(fullPayload) + fragSize - 1) / fragSize) // round up
-	packet.FRAG_TOTAL = fragCount
+	packet.FRAG_TOTAL = uint8(fragCount)
 	for off < len(fullPayload) {
 		payloadSize := len(fullPayload) - off
 		if payloadSize > fragSize {
@@ -66,6 +73,7 @@ func newPacketBag() *packetBag {
 func (d *deFragger) init() {
 	if d.lru == nil {
 		d.lru = lru.New(
+			lru.WithSize[uint16, *packetBag](1024),
 			lru.WithAge[uint16, *packetBag](10),
 			lru.WithUpdateAgeOnGet[uint16, *packetBag](),
 		)

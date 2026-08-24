@@ -6,7 +6,7 @@ description: Aster Core changes since the Mihomo v1.19.29 baseline
 # Changelog
 
 > [!NOTE]
-> This is the Aster Core rolling snapshot changelog, current through `HEAD` on `2026-08-19`. It covers only Aster-era changes after baseline commit `e26714a1` (Mihomo `v1.19.29`). Dates follow commit dates and do not represent release versions.
+> This is the Aster Core rolling snapshot changelog, current through `2026-08-24`. It covers only Aster-era changes after baseline commit `e26714a1` (Mihomo `v1.19.29`). Dates follow commit/review dates and do not represent release versions. The Unreleased section is not a downloadable release until it lands on `main` and Prerelease-main is refreshed.
 
 Aster Core does not have an official Aster `v*` release yet. GitHub's `Prerelease-main` is a continuously updated prerelease, so its contents may change with `main`.
 
@@ -15,6 +15,32 @@ Aster Core does not have an official Aster `v*` release yet. GitHub's `Prereleas
 - [繁體中文版](/changelog)
 
 For the full feature and compatibility overview, see [Aster vs. Mihomo](/en/reference/mihomo-differences). This page keeps the dated Aster highlights without reproducing the upstream Mihomo history.
+
+## Unreleased | 2026-08-24 performance, memory, and reliability review
+
+- **Kernel DIRECT hot path:** Skip full expiry scans until the next TTL, share one apply barrier per generation, and use a stack buffer for the common 1–4 observations. Existing-flow refresh fell from 15.286 µs / 64 B / 1 alloc to 270.8 ns / 0 alloc on the same host (**56.4×** median).
+- **Rules and UDP mappings:** Restored binary lookup for finalized IP sets: a miss across 100k disjoint ranges fell from 2.385 ms to 114.7 ns. UDP associations no longer copy the complete reverse map for every destination; inserting 1,000 mappings fell from 41.31 ms / 46.37 MB to 486.3 µs / 542.6 KiB, with a 4,096-destination bound per association.
+- **Low-memory bounds:** `bytes.Buffer` values above 128 KiB are not retained globally; `with_low_memory` defaults each DNS cache to 1,024 entries and negative sizes are rejected. TUIC fragment bags, Kernel DIRECT waiters, and eBPF prefix budgeting gained explicit bounds. Configured provider/rule-provider `size-limit` values now use a `limit+1` check and reject overflow instead of accepting truncated data.
+- **DNS and routing safety:** Kernel DIRECT now trusts only one Answer-authorized CNAME/DNAME chain rooted at the query, accepts A/AAAA only for its terminal owner, and bounds addresses by alias TTL. Cycles, ambiguity, wrong class/family, truncated responses, and failed responses are rejected. Fake-IP flush, sniffer publication, and the second UDP fake-IP lookup also lost race/TOCTOU windows.
+- **TUN and API:** PATCH snapshot→merge→validate→activate is serialized with reload. TUN activation runs before unrelated PATCH side effects; activation/rollback failures return 5xx; old-listener close errors are preserved. Equality/schema now cover loopback, IPv4, port exclusions, and ICMP-forwarding fields.
+- **Protocols and lifecycle:** Fixed the deadline-wrapped sing-packet panic, a pool finalizer that blocked Go finalization, uninitialized XTLS Vision padding, REALITY + Vision unwrapping, first-buffer VLESS ownership, TUIC v5 wire sizing/fragment bounds, kcptun session shutdown, TrustTunnel health-loop shutdown, and OpenVPN `IV_VER` override. QUIC CRYPTO coverage now uses the bounded bitmap fix from Mihomo 1.19.30.
+- **Traffic Control:** Fixed compound-duration overflow, default-store path disclosure, ancestor-symlink/existing-oversized-store checks, permanent low-rate UDP rejection, stacked-limiter token rollback, status slice aliasing, invalid granularity, and per-record report-key rebuilding. MAC-only policies are now rejected; `source-cidrs` is required.
+- **Mihomo 1.19.30 benchmark:** Seven interleaved, fresh-process, single-core Windows rounds measured UDP metadata at 4.45×, disabled logging at 96.8×, AnyTLS 1 KiB at 2.29×, and 16 KiB at 1.32×. Both TCP relay ranges overlap; only zero allocation is claimed, not a significant desktop speedup. See [Performance and benchmarks](/en/reference/performance) for ranges, method, and the Windows working-set counter-example.
+- **Residual-risk follow-up:** Kernel DIRECT classifiers stay serialized and quiescent through `Close`. UDP NAT keys now include an inbound namespace, TPROXY local sockets use a close-once promise, and the global NAT table has an admission cap. MRS/DomainSet reject hostile lengths and malformed tries; geosite AC/MPH no longer aliases unsupported bytes to `A`. Failed Traffic Control `Configure` keeps the previous runtime/store/portal, and live sessions rebind to the new generation. Mekya, XHTTP, TUIC pools, and rule-provider reloads gained session/queue/goroutine bounds; retired providers are closed.
+
+### Compatibility notes
+
+- Traffic Control may retain a MAC as device identity, but the core currently has no ingress MAC attribution. Every `devices` policy must provide `source-cidrs`; a MAC-only policy that could never match is no longer accepted.
+- Kernel DIRECT dependency/capacity validation in `PATCH /configs` remains HTTP 400. Errors reached while constructing the TUN listener—device, permission, route/nftables, activation, or restoration—return HTTP 500.
+- TC eBPF remains disabled by default and is not promoted to the recommended backend.
+
+## Landed on main | follow-up reliability fixes after 2026-08-19
+
+- **Controller compatibility:** Removed bulk `DELETE /connections`; per-ID `DELETE /connections/{id}` remains. Clients that relied on mass close must enumerate and close entries individually.
+- **AnyTLS / REALITY:** Fixed frame alignment, wire lengths, authentication preamble handling, idle-pool state, sessions created after shutdown, v2 handshake synchronization, and REALITY close semantics through unwrap.
+- **DNS and rules:** Preserved fake-IP clone offset/cycle and fixed AAAA fallback, Hosts alias cycles, IP4P misclassification, rcode request mutation, DIRECT case folding, wildcard validation, and single-line provider YAML.
+- **Listeners and packet paths:** Redir/TPROXY UDP can retry independently; fixed TPROXY NAT waiters, ancillary TOS parsing, `RawConn.Control` errors, TUN route updates after close, and packets stranded during sender shutdown.
+- **Controller and releases:** Hardened WebSocket interval/upgrade/streaming and empty-array schemas, bounded storage bodies, added revision validation, checksum self-checks, and repaired prerelease-note/build paths.
 
 ## Core and Kernel DIRECT
 

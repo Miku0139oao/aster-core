@@ -1,16 +1,17 @@
 package cidr
 
 import (
+	"errors"
 	"fmt"
 	"net/netip"
-	"unsafe"
+	"sort"
 
 	"go4.org/netipx"
 )
 
 type IpCidrSet struct {
-	// must same with netipx.IPSet
-	rr []netipx.IPRange
+	rr     []netipx.IPRange
+	merged bool
 }
 
 func NewIpCidrSet() *IpCidrSet {
@@ -28,6 +29,7 @@ func (set *IpCidrSet) AddIpCidrForString(ipCidr string) error {
 func (set *IpCidrSet) AddIpCidr(ipCidr netip.Prefix) (err error) {
 	if r := netipx.RangeOfPrefix(ipCidr); r.IsValid() {
 		set.rr = append(set.rr, r)
+		set.merged = false
 	} else {
 		err = fmt.Errorf("not valid ipcidr range: %s", ipCidr)
 	}
@@ -48,6 +50,16 @@ func (set *IpCidrSet) IsContain(ip netip.Addr) bool {
 	}
 
 	ip = ip.WithZone("")
+	if set.merged {
+		// Merge guarantees sorted, non-overlapping ranges. Find the first range
+		// starting after ip, then test its predecessor like netipx.IPSet.Contains.
+		i := sort.Search(len(set.rr), func(i int) bool {
+			return ip.Less(set.rr[i].From())
+		})
+		return i > 0 && set.rr[i-1].Contains(ip)
+	}
+	// Builders and config parsing may query before Merge; preserve that behavior
+	// even when ranges were inserted in arbitrary order.
 	for _, r := range set.rr {
 		if r.Contains(ip) {
 			return true
@@ -66,7 +78,12 @@ func (set *IpCidrSet) MatchIp(ip netip.Addr) bool {
 
 func (set *IpCidrSet) Merge() error {
 	var b netipx.IPSetBuilder
-	b.AddSet(set.ToIPSet())
+	for _, r := range set.rr {
+		if !r.IsValid() {
+			return errors.New("invalid IP range")
+		}
+		b.AddRange(r)
+	}
 	i, err := b.IPSet()
 	if err != nil {
 		return err
@@ -89,12 +106,24 @@ func (set *IpCidrSet) Foreach(f func(prefix netip.Prefix) bool) {
 	}
 }
 
-// ToIPSet not safe convert to *netipx.IPSet
-// be careful, must be used after Merge
 func (set *IpCidrSet) ToIPSet() *netipx.IPSet {
-	return (*netipx.IPSet)(unsafe.Pointer(set))
+	if set == nil {
+		return new(netipx.IPSet)
+	}
+	var b netipx.IPSetBuilder
+	for _, r := range set.rr {
+		if r.IsValid() {
+			b.AddRange(r)
+		}
+	}
+	i, err := b.IPSet()
+	if err != nil {
+		return new(netipx.IPSet)
+	}
+	return i
 }
 
 func (set *IpCidrSet) fromIPSet(i *netipx.IPSet) {
-	*set = *(*IpCidrSet)(unsafe.Pointer(i))
+	set.rr = i.Ranges()
+	set.merged = true
 }

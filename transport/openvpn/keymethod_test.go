@@ -107,6 +107,17 @@ func TestInstallScriptPeerInfo(t *testing.T) {
 	if info != want {
 		t.Fatalf("unexpected peer-info:\n got %q\nwant %q", info, want)
 	}
+
+	overridden := InstallScriptPeerInfo(CipherAES128GCM, nil, CompLzoYes, map[string]string{
+		"IV_VER":     "custom-client/1.0",
+		"IV_PROTO":   "999",
+		"IV_LZO":     "0",
+		"IV_CIPHERS": "AES-256-CBC",
+	})
+	want = "IV_VER=custom-client/1.0\nIV_PROTO=6\nIV_LZO=1\nIV_CIPHERS=AES-128-GCM\n"
+	if overridden != want {
+		t.Fatalf("unexpected overridden peer-info:\n got %q\nwant %q", overridden, want)
+	}
 }
 
 func TestParseServerKeyMethod2Record(t *testing.T) {

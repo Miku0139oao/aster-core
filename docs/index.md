@@ -72,7 +72,7 @@ Aster Core 是 [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo) 的衍生
 | UDP 新封包準備 | **快約 5.4 倍** | 遊戲、語音、QUIC 等大量 UDP 封包較少製造垃圾記憶體 |
 | 被關掉的 debug log | **快約 101 倍** | 不需要的 log 不再先做好再丟掉 |
 
-在單核 25% CPU 時間、512 MiB RAM 的受限環境中，停用 log 與 AnyTLS 的獨立測試程序峰值記憶體比 Mihomo 1.19.30 少約 **27–31%**；UDP 持平，TCP 獨立測試程序峰值反而較高。完整核心以最小設定空載時，Aster 約 39.3 MiB、Mihomo 約 34.7 MiB，Aster 多約 **4.6 MiB**。忙碌時部分 hot path 少製造臨時記憶體，空載底座則因功能較多而稍大。
+記憶體必須分開看：這些 hot path 已消除每次操作的 heap allocation，但完整核心以最小設定空載時，OpenWrt 測得 Aster 約 39.3 MiB、Mihomo 約 34.7 MiB，Aster 多約 **4.6 MiB**。2026-08-24 的 Windows 五輪中位數也顯示 Aster working set 多約 0.93 MiB。Aster 不能宣稱空載一定比較省 RAM；優勢是忙碌路徑少製造暫存垃圾，並為 cache／mapping／pool 加上界線。
 
 ### 改了什麼？
 
@@ -84,7 +84,7 @@ Aster Core 是 [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo) 的衍生
 - **流量統計更輕：** 上下載數字直接累加，不為每次更新掃描所有連線。
 
 > [!IMPORTANT]
-> 這不代表 Speedtest 會快 5.4 倍。5.4 倍是「準備一個 UDP 封包」這個核心小步驟；最接近整體資料轉送的 TCP 測試約快 2%。測試用的 Ryzen 7 5825U 軟路由仍比許多家用路由器強，低階裝置的絕對速度會更低，不能直接套用這些數字。另有以單核 25% CPU 時間、512 MiB 記憶體模擬弱硬體的測試，五項優化仍全部有效。整體趨勢是硬體越弱，省掉的 CPU 工作與記憶體配置越有感；首頁仍保留較保守的未限速結果。
+> 這不代表 Speedtest 會快 5.4 倍。5.4 倍是「準備一個 UDP 封包」這個核心小步驟；最接近整體資料轉送的 TCP 測試約快 2%。測試用的 Ryzen 7 5825U 軟路由仍比許多家用路由器強，低階裝置的絕對速度會更低，不能直接套用。單核 25% CPU quota／512 MiB 實驗只證明優化在相同 x86 VM 的節流環境仍存在，不等於模擬 ARM、MIPS、cache 或記憶體頻寬；首頁保留較保守的未限速結果。
 
 > [!WARNING]
 > 「更接近 dae」不等於一定更快。實驗性 TC eBPF classifier 在一台實際 OpenWrt 路由器把同 server 測速由約 1,647 Mbps 降到 692 Mbps；推薦設定仍是 Kernel DIRECT 的 nftables backend 搭配 OpenWrt flow offload。詳見 [OpenWrt 與 Nikki](/deployment/openwrt)。

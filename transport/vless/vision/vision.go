@@ -81,6 +81,10 @@ func NewConn(conn net.Conn, tlsConn net.Conn, userUUID uuid.UUID) (*Conn, error)
 			p = unsafe.Pointer(underlying)
 			break
 		}
+		if u, ok := upstream.(interface{ VisionUpstream() any }); ok {
+			upstream = u.VisionUpstream()
+			continue
+		}
 		if u, ok := upstream.(N.ReaderWithUpstream); !ok || !u.ReaderReplaceable() { // must replaceable
 			break
 		}

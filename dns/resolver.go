@@ -12,6 +12,7 @@ import (
 	"github.com/Miku0139oao/aster-core/component/resolver"
 	"github.com/Miku0139oao/aster-core/component/trie"
 	C "github.com/Miku0139oao/aster-core/constant"
+	"github.com/Miku0139oao/aster-core/constant/features"
 	"github.com/Miku0139oao/aster-core/log"
 
 	D "github.com/miekg/dns"
@@ -468,8 +469,11 @@ type Config struct {
 }
 
 func (config Config) newCache() dnsCache {
-	if config.CacheMaxSize == 0 {
+	if config.CacheMaxSize <= 0 {
 		config.CacheMaxSize = 4096
+		if features.WithLowMemory {
+			config.CacheMaxSize = 1024
+		}
 	}
 	switch config.CacheAlgorithm {
 	case "arc":

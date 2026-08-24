@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -91,8 +92,10 @@ type runtimePolicy struct {
 }
 
 type runtimeState struct {
-	config   *Config
-	policies []*runtimePolicy
+	config     *Config
+	policies   []*runtimePolicy
+	generation uint64
+	recordGate sync.RWMutex
 }
 
 type reportSeries struct {
@@ -148,75 +151,239 @@ func (m *Manager) ConfigureAtRevision(config *Config, expected uint64) error {
 	return m.configure(config)
 }
 
-func (m *Manager) configure(config *Config) error {
-	if err := m.stopFlusher(); err != nil {
-		return err
+type stagedConfiguration struct {
+	config      *Config
+	runtime     *runtimeState
+	states      map[string]*policyState
+	reports     map[string]*reportSeries
+	store       *Store
+	checkpoint  int64
+	reuseStore  bool
+	portal      *portalService
+	reusePortal bool
+	touched     []*policyState
+}
+
+func clonePolicyStateMap(source map[string]*policyState) map[string]*policyState {
+	result := make(map[string]*policyState, len(source))
+	for key, state := range source {
+		result[key] = state
 	}
-	if err := m.stopPortal(); err != nil {
-		return err
+	return result
+}
+
+func cloneReportMap(source map[string]*reportSeries) map[string]*reportSeries {
+	result := make(map[string]*reportSeries, len(source))
+	for key, series := range source {
+		result[key] = series
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.store != nil {
-		if err := m.flushLocked(); err != nil {
-			return err
+	return result
+}
+
+func limitStagedReports(reports map[string]*reportSeries) {
+	if len(reports) <= maxReportSeries {
+		return
+	}
+	type candidate struct {
+		key     string
+		updated int64
+	}
+	candidates := make([]candidate, 0, len(reports))
+	for key, series := range reports {
+		series.mu.Lock()
+		updated := series.Updated
+		series.mu.Unlock()
+		candidates = append(candidates, candidate{key: key, updated: updated})
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].updated == candidates[j].updated {
+			return candidates[i].key < candidates[j].key
 		}
-		if err := m.store.Close(); err != nil {
-			return err
+		return candidates[i].updated < candidates[j].updated
+	})
+	for _, candidate := range candidates[:len(candidates)-maxReportSeries] {
+		delete(reports, candidate.key)
+	}
+}
+
+func cleanupStagedOrphans(states map[string]*policyState, retention time.Duration, now int64) {
+	cutoff := now - int64(retention.Seconds())
+	for id, state := range states {
+		state.mu.Lock()
+		lastSeen := state.LastSeen
+		active := state.Active.Load()
+		state.mu.Unlock()
+		if active == 0 && lastSeen > 0 && lastSeen < cutoff {
+			delete(states, id)
 		}
-		m.store = nil
+	}
+}
+
+func (m *Manager) prepareConfiguration(config *Config) (*stagedConfiguration, error) {
+	stage := &stagedConfiguration{
+		runtime: &runtimeState{},
+		states:  make(map[string]*policyState),
+		reports: make(map[string]*reportSeries),
 	}
 	if config == nil || !config.Enabled {
-		m.runtime.Store(&runtimeState{})
-		m.states = make(map[string]*policyState)
-		m.reportsMu.Lock()
-		m.reports = make(map[string]*reportSeries)
-		m.reportsMu.Unlock()
-		m.revision.Add(1)
-		return nil
+		return stage, nil
 	}
 	config = config.Clone()
-	store, err := OpenStore(config.StorePath, config.MaxStoreSize)
-	if err != nil {
-		return fmt.Errorf("open traffic-control store: %w", err)
+	stage.config = config
+	stage.runtime.config = config
+
+	m.mu.Lock()
+	currentStore := m.store
+	if currentStore != nil && filepath.Clean(currentStore.path) == filepath.Clean(config.StorePath) {
+		if config.MaxStoreSize > 0 && currentStore.Size() > config.MaxStoreSize {
+			m.mu.Unlock()
+			return nil, fmt.Errorf("open traffic-control store: %w", ErrStoreLimit)
+		}
+		stage.store = currentStore
+		stage.reuseStore = true
+		stage.states = clonePolicyStateMap(m.states)
+		m.reportsMu.RLock()
+		stage.reports = cloneReportMap(m.reports)
+		m.reportsMu.RUnlock()
+		stage.checkpoint = m.lastCheckpoint.Load()
 	}
-	states, reports, checkpoint, err := store.Load()
-	if err != nil {
-		_ = store.Close()
-		return fmt.Errorf("load traffic-control store: %w", err)
+	m.mu.Unlock()
+
+	if !stage.reuseStore {
+		store, err := OpenStore(config.StorePath, config.MaxStoreSize)
+		if err != nil {
+			return nil, fmt.Errorf("open traffic-control store: %w", err)
+		}
+		states, reports, checkpoint, err := store.Load()
+		if err != nil {
+			_ = store.Close()
+			return nil, fmt.Errorf("load traffic-control store: %w", err)
+		}
+		stage.store, stage.states, stage.reports, stage.checkpoint = store, states, reports, checkpoint
 	}
-	m.store = store
-	m.states = states
-	m.reportsMu.Lock()
-	m.reports = reports
-	m.reportsMu.Unlock()
-	m.lastCheckpoint.Store(checkpoint)
+
+	limitStagedReports(stage.reports)
 	now := m.now().Unix()
-	runtime := &runtimeState{config: config, policies: make([]*runtimePolicy, 0, len(config.Policies))}
+	stage.runtime.policies = make([]*runtimePolicy, 0, len(config.Policies))
 	for _, spec := range config.Policies {
 		identity := policyIdentity(spec)
-		state := m.states[spec.ID]
+		state := stage.states[spec.ID]
 		if state == nil {
 			state = &policyState{ID: spec.ID, Identity: identity, Generation: 1, Buckets: make(map[int64]Counters), LastReset: now}
-			m.states[spec.ID] = state
+			stage.states[spec.ID] = state
 		} else if state.Identity != identity {
-			state = &policyState{ID: spec.ID, Identity: identity, Generation: state.Generation + 1, Buckets: make(map[int64]Counters), LastReset: now}
-			m.states[spec.ID] = state
+			state.mu.Lock()
+			generation := state.Generation + 1
+			state.mu.Unlock()
+			state = &policyState{ID: spec.ID, Identity: identity, Generation: generation, Buckets: make(map[int64]Counters), LastReset: now}
+			stage.states[spec.ID] = state
 		}
+		stage.touched = append(stage.touched, state)
+		stage.runtime.policies = append(stage.runtime.policies, newRuntimePolicy(spec, state))
+	}
+	cleanupStagedOrphans(stage.states, config.Reports.OrphanRetention, now)
+
+	currentPortal := m.portal.Load()
+	if currentPortal != nil && strings.TrimSpace(currentPortal.requestedListen()) == strings.TrimSpace(config.Portal.Listen) {
+		stage.portal = currentPortal
+		stage.reusePortal = true
+	} else if currentPortal == nil && strings.TrimSpace(config.Portal.Listen) == "" {
+		stage.reusePortal = true
+	} else {
+		portal, err := m.preparePortal(config.Portal)
+		if err != nil {
+			if !stage.reuseStore {
+				_ = stage.store.Close()
+			}
+			return nil, fmt.Errorf("start traffic-control portal: %w", err)
+		}
+		stage.portal = portal
+	}
+	return stage, nil
+}
+
+func (stage *stagedConfiguration) dispose() {
+	if stage == nil {
+		return
+	}
+	if !stage.reusePortal {
+		_ = closePortalService(stage.portal)
+	}
+	if !stage.reuseStore && stage.store != nil {
+		_ = stage.store.Close()
+	}
+}
+
+func (m *Manager) configure(config *Config) error {
+	stage, err := m.prepareConfiguration(config)
+	if err != nil {
+		return err
+	}
+	oldRuntime := m.runtime.Load()
+	oldInterval := time.Duration(0)
+	if oldRuntime.config != nil {
+		oldInterval = oldRuntime.config.CheckpointInterval
+	}
+	if err := m.stopFlusher(); err != nil {
+		stage.dispose()
+		return err
+	}
+
+	oldRuntime.recordGate.Lock()
+	m.mu.Lock()
+	if err := m.flushLocked(); err != nil {
+		m.mu.Unlock()
+		oldRuntime.recordGate.Unlock()
+		if oldInterval > 0 {
+			m.startFlusher(oldInterval)
+		}
+		stage.dispose()
+		return err
+	}
+
+	oldStore := m.store
+	oldPortal := m.portal.Load()
+	m.store = stage.store
+	m.states = stage.states
+	m.reportsMu.Lock()
+	m.reports = stage.reports
+	m.reportsMu.Unlock()
+	m.lastCheckpoint.Store(stage.checkpoint)
+	if stage.reuseStore && stage.store != nil {
+		stage.store.mu.Lock()
+		stage.store.maxSize = stage.config.MaxStoreSize
+		stage.store.mu.Unlock()
+	}
+	now := m.now().Unix()
+	for _, state := range stage.touched {
+		state.mu.Lock()
 		state.LastSeen = now
-		runtime.policies = append(runtime.policies, newRuntimePolicy(spec, state))
+		state.mu.Unlock()
 	}
-	m.cleanupOrphansLocked(config.Reports.OrphanRetention, now)
-	m.runtime.Store(runtime)
-	m.revision.Add(1)
-	m.dirty.Store(true)
-	if err := m.startPortal(config.Portal); err != nil {
-		_ = store.Close()
-		m.store = nil
-		m.runtime.Store(&runtimeState{})
-		return fmt.Errorf("start traffic-control portal: %w", err)
+	generation := m.revision.Add(1)
+	stage.runtime.generation = generation
+	m.runtime.Store(stage.runtime)
+	if stage.reusePortal {
+		if stage.portal != nil && stage.config != nil {
+			stage.portal.setConfig(stage.config.Portal)
+		}
+	} else {
+		m.portal.Store(stage.portal)
 	}
-	m.startFlusher(config.CheckpointInterval)
+	m.dirty.Store(stage.config != nil)
+	m.mu.Unlock()
+	oldRuntime.recordGate.Unlock()
+
+	if !stage.reusePortal {
+		m.activatePortal(stage.portal)
+		_ = closePortalService(oldPortal)
+	}
+	if stage.config != nil {
+		m.startFlusher(stage.config.CheckpointInterval)
+	}
+	if oldStore != nil && oldStore != stage.store {
+		_ = oldStore.Close()
+	}
 	return nil
 }
 
@@ -236,13 +403,9 @@ func newLimiter(bitsPerSecond int64) *rate.Limiter {
 	if bytesPerSecond < 1 {
 		bytesPerSecond = 1
 	}
-	burst := int64(32 << 10)
-	if bytesPerSecond < burst {
-		burst = bytesPerSecond
-	}
-	if burst < 1 {
-		burst = 1
-	}
+	// UDP admission must be able to reserve one maximum-size datagram even at
+	// low configured rates. The limiter still repays that burst at bytesPerSecond.
+	burst := int64(64 << 10)
 	return rate.NewLimiter(rate.Limit(bytesPerSecond), int(burst))
 }
 
@@ -254,36 +417,94 @@ func (m *Manager) Config() (*Config, uint64) {
 	return m.runtime.Load().config.Clone(), m.revision.Load()
 }
 
-type Session struct {
-	manager    *Manager
+type sessionBinding struct {
+	runtime    *runtimeState
 	policies   []*runtimePolicy
 	dimensions []string
-	closed     atomic.Bool
+	reportKeys []string
 }
 
-func (m *Manager) Open(flow Flow) *Session {
-	runtime := m.runtime.Load()
-	if runtime.config == nil {
-		return nil
+type Session struct {
+	manager *Manager
+	flow    Flow
+	binding atomic.Pointer[sessionBinding]
+	bindMu  sync.Mutex
+	closed  atomic.Bool
+}
+
+func cloneFlow(flow Flow) Flow {
+	flow.Chains = append([]string(nil), flow.Chains...)
+	return flow
+}
+
+func (m *Manager) bindSession(runtime *runtimeState, flow Flow) *sessionBinding {
+	binding := &sessionBinding{runtime: runtime}
+	if runtime == nil || runtime.config == nil {
+		return binding
 	}
 	canonicalRule := CanonicalRule(flow.RuleType, flow.RulePayload, flow.RuleTarget)
-	policies := make([]*runtimePolicy, 0, 5)
-	dimensions := make([]string, 0, 4)
+	binding.policies = make([]*runtimePolicy, 0, 5)
+	binding.dimensions = make([]string, 0, 4)
 	for _, policy := range runtime.policies {
 		if !policy.spec.Enabled || !policyMatches(policy.spec, flow, canonicalRule) {
 			continue
 		}
 		policy.refreshQuota(m.now())
-		policies = append(policies, policy)
+		binding.policies = append(binding.policies, policy)
 		policy.state.Active.Add(1)
-		dimensions = append(dimensions, string(policy.spec.Kind)+":"+policy.spec.ID)
+		binding.dimensions = append(binding.dimensions, string(policy.spec.Kind)+":"+policy.spec.ID)
 	}
-	if len(policies) == 0 {
+	binding.dimensions = uniqueStrings(binding.dimensions)
+	if runtime.config.Reports.Enabled {
+		binding.reportKeys = reportKeys(binding.dimensions)
+	}
+	return binding
+}
+
+func releaseSessionBinding(binding *sessionBinding) {
+	if binding == nil {
+		return
+	}
+	for _, policy := range binding.policies {
+		policy.state.Active.Add(-1)
+	}
+}
+
+func (m *Manager) Open(flow Flow) *Session {
+	runtime := m.runtime.Load()
+	binding := m.bindSession(runtime, flow)
+	if len(binding.policies) == 0 {
 		return nil
 	}
-	session := &Session{manager: m, policies: policies, dimensions: uniqueStrings(dimensions)}
-	m.recordReportConnections(session.dimensions, 1)
+	session := &Session{manager: m, flow: cloneFlow(flow)}
+	session.binding.Store(binding)
+	m.recordReportConnections(binding.reportKeys, 1)
 	return session
+}
+
+func (s *Session) currentBinding() *sessionBinding {
+	if s == nil || s.closed.Load() {
+		return nil
+	}
+	runtime := s.manager.runtime.Load()
+	if binding := s.binding.Load(); binding != nil && binding.runtime == runtime {
+		return binding
+	}
+	s.bindMu.Lock()
+	defer s.bindMu.Unlock()
+	if s.closed.Load() {
+		return nil
+	}
+	runtime = s.manager.runtime.Load()
+	if binding := s.binding.Load(); binding != nil && binding.runtime == runtime {
+		return binding
+	}
+	previous := s.binding.Load()
+	next := s.manager.bindSession(runtime, s.flow)
+	s.binding.Store(next)
+	releaseSessionBinding(previous)
+	s.manager.recordReportConnections(next.reportKeys, 1)
+	return next
 }
 
 func policyMatches(policy Policy, flow Flow, rule RuleSelector) bool {
@@ -312,20 +533,29 @@ func policyMatches(policy Policy, flow Flow, rule RuleSelector) bool {
 }
 
 func (s *Session) Close() {
-	if s == nil || !s.closed.CompareAndSwap(false, true) {
+	if s == nil {
 		return
 	}
-	for _, policy := range s.policies {
-		policy.state.Active.Add(-1)
+	s.bindMu.Lock()
+	if !s.closed.CompareAndSwap(false, true) {
+		s.bindMu.Unlock()
+		return
 	}
+	binding := s.binding.Swap(nil)
+	releaseSessionBinding(binding)
+	s.bindMu.Unlock()
 }
 
 func (s *Session) Wait(ctx context.Context, direction Direction, bytes int) error {
 	if s == nil || bytes <= 0 {
 		return nil
 	}
+	binding := s.currentBinding()
+	if binding == nil {
+		return nil
+	}
 	now := s.manager.now()
-	for _, policy := range s.policies {
+	for _, policy := range binding.policies {
 		if policy.state.OverQuota.Load() {
 			policy.refreshQuota(now)
 		}
@@ -371,15 +601,33 @@ func (s *Session) AllowPacket(direction Direction, bytes int) bool {
 	if s == nil || bytes <= 0 {
 		return true
 	}
+	binding := s.currentBinding()
+	if binding == nil {
+		return true
+	}
 	now := s.manager.now()
-	for _, policy := range s.policies {
+	var reservationStorage [8]*rate.Reservation
+	reservations := reservationStorage[:0]
+	cancel := func() {
+		for _, reservation := range reservations {
+			reservation.CancelAt(now)
+		}
+	}
+	for _, policy := range binding.policies {
 		if policy.state.OverQuota.Load() {
 			policy.refreshQuota(now)
 		}
 		limiter := policy.limiter(direction)
-		if limiter != nil && !limiter.AllowN(now, bytes) {
+		if limiter == nil {
+			continue
+		}
+		reservation := limiter.ReserveN(now, bytes)
+		if !reservation.OK() || reservation.DelayFrom(now) > 0 {
+			reservation.CancelAt(now)
+			cancel()
 			return false
 		}
+		reservations = append(reservations, reservation)
 	}
 	return true
 }
@@ -388,18 +636,31 @@ func (s *Session) Record(direction Direction, bytes int64) {
 	if s == nil || bytes <= 0 {
 		return
 	}
-	now := s.manager.now()
-	crossed := false
-	for _, policy := range s.policies {
-		if policy.record(direction, bytes, now) {
-			crossed = true
+	for {
+		binding := s.currentBinding()
+		if binding == nil || binding.runtime == nil {
+			return
 		}
-	}
-	s.manager.recordReports(s.dimensions, direction, bytes, now)
-	s.manager.dirty.Store(true)
-	if crossed {
-		s.manager.recordReportExceeded(s.dimensions, now)
-		s.manager.requestFlush()
+		binding.runtime.recordGate.RLock()
+		if s.closed.Load() || s.manager.runtime.Load() != binding.runtime {
+			binding.runtime.recordGate.RUnlock()
+			continue
+		}
+		now := s.manager.now()
+		crossed := false
+		for _, policy := range binding.policies {
+			if policy.record(direction, bytes, now) {
+				crossed = true
+			}
+		}
+		s.manager.recordReports(binding.reportKeys, direction, bytes, now)
+		s.manager.dirty.Store(true)
+		if crossed {
+			s.manager.recordReportExceeded(binding.reportKeys, now)
+			s.manager.requestFlush()
+		}
+		binding.runtime.recordGate.RUnlock()
+		return
 	}
 }
 
@@ -475,7 +736,7 @@ func sumBuckets(buckets map[int64]Counters) Counters {
 
 func (m *Manager) Status() Status {
 	runtime := m.runtime.Load()
-	status := Status{Enabled: runtime.config != nil, Revision: m.revision.Load(), LastCheckpoint: m.lastCheckpoint.Load()}
+	status := Status{Enabled: runtime.config != nil, Revision: m.revision.Load(), LastCheckpoint: m.lastCheckpoint.Load(), Policies: []PolicyStatus{}}
 	m.mu.Lock()
 	if m.store != nil {
 		status.StoreBytes = m.store.Size()
@@ -487,6 +748,7 @@ func (m *Manager) Status() Status {
 		state := runtimePolicy.state
 		state.mu.Lock()
 		item := PolicyStatus{Policy: runtimePolicy.spec, Counters: state.Counters, Rolling: sumBuckets(state.Buckets), Active: state.Active.Load(), OverQuota: state.OverQuota.Load(), LastUpdated: state.LastUpdated, LastReset: state.LastReset, Generation: state.Generation}
+		item.Policy.SourceCIDRs = append([]netip.Prefix(nil), item.Policy.SourceCIDRs...)
 		state.mu.Unlock()
 		status.Policies = append(status.Policies, item)
 	}
@@ -638,7 +900,10 @@ func (m *Manager) dropOldestReportSeries() bool {
 	}
 	candidates := make([]candidate, 0, len(m.reports))
 	for key, series := range m.reports {
-		candidates = append(candidates, candidate{key: key, updated: series.Updated})
+		series.mu.Lock()
+		updated := series.Updated
+		series.mu.Unlock()
+		candidates = append(candidates, candidate{key: key, updated: updated})
 	}
 	sort.Slice(candidates, func(i, j int) bool { return candidates[i].updated < candidates[j].updated })
 	count := (len(candidates) + 9) / 10
@@ -654,7 +919,11 @@ func (m *Manager) dropOldestReportSeries() bool {
 func (m *Manager) cleanupOrphansLocked(retention time.Duration, now int64) {
 	cutoff := now - int64(retention.Seconds())
 	for id, state := range m.states {
-		if state.LastSeen > 0 && state.LastSeen < cutoff {
+		state.mu.Lock()
+		lastSeen := state.LastSeen
+		active := state.Active.Load()
+		state.mu.Unlock()
+		if active == 0 && lastSeen > 0 && lastSeen < cutoff {
 			delete(m.states, id)
 		}
 	}
@@ -669,17 +938,27 @@ func (m *Manager) Close() error {
 	if err := m.stopPortal(); err != nil {
 		return err
 	}
+	oldRuntime := m.runtime.Load()
+	oldRuntime.recordGate.Lock()
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if err := m.flushLocked(); err != nil {
+		m.mu.Unlock()
+		oldRuntime.recordGate.Unlock()
 		return err
 	}
+	var closeErr error
 	if m.store != nil {
-		err := m.store.Close()
+		closeErr = m.store.Close()
 		m.store = nil
-		return err
 	}
-	return nil
+	m.runtime.Store(&runtimeState{})
+	m.states = make(map[string]*policyState)
+	m.reportsMu.Lock()
+	m.reports = make(map[string]*reportSeries)
+	m.reportsMu.Unlock()
+	m.mu.Unlock()
+	oldRuntime.recordGate.Unlock()
+	return closeErr
 }
 
 func prefixContains(prefix netip.Prefix, address netip.Addr) bool { return prefix.Contains(address) }
@@ -691,14 +970,33 @@ func reportPairKey(left, right string) string {
 	return left + "|" + right
 }
 
+const (
+	maxReportKeysPerSession = 128
+	maxReportSeries         = 4096
+)
+
 func reportKeys(dimensions []string) []string {
-	keys := append([]string(nil), dimensions...)
+	dimensions = uniqueStrings(dimensions)
+	capacity := len(dimensions)
+	if capacity > maxReportKeysPerSession {
+		capacity = maxReportKeysPerSession
+	}
+	keys := make([]string, 0, capacity)
+	for _, dimension := range dimensions {
+		if len(keys) == maxReportKeysPerSession {
+			return keys
+		}
+		keys = append(keys, dimension)
+	}
 	for i := range dimensions {
 		for j := i + 1; j < len(dimensions); j++ {
+			if len(keys) == maxReportKeysPerSession {
+				return keys
+			}
 			keys = append(keys, reportPairKey(dimensions[i], dimensions[j]))
 		}
 	}
-	return uniqueStrings(keys)
+	return keys
 }
 
 func (m *Manager) reportSeries(key string) *reportSeries {
@@ -711,20 +1009,26 @@ func (m *Manager) reportSeries(key string) *reportSeries {
 	m.reportsMu.Lock()
 	defer m.reportsMu.Unlock()
 	if series = m.reports[key]; series == nil {
+		if len(m.reports) >= maxReportSeries {
+			return nil
+		}
 		series = &reportSeries{Key: key, Hourly: make(map[int64]Counters), Daily: make(map[int64]Counters), Monthly: make(map[int64]Counters), Rolled: make(map[int64]bool)}
 		m.reports[key] = series
 	}
 	return series
 }
 
-func (m *Manager) recordReports(dimensions []string, direction Direction, bytes int64, now time.Time) {
+func (m *Manager) recordReports(keys []string, direction Direction, bytes int64, now time.Time) {
 	runtime := m.runtime.Load()
 	if runtime.config == nil || !runtime.config.Reports.Enabled {
 		return
 	}
 	hour := now.UTC().Truncate(time.Hour).Unix()
-	for _, key := range reportKeys(dimensions) {
+	for _, key := range keys {
 		series := m.reportSeries(key)
+		if series == nil {
+			continue
+		}
 		series.mu.Lock()
 		counters := series.Hourly[hour]
 		counters.add(direction, bytes)
@@ -734,15 +1038,18 @@ func (m *Manager) recordReports(dimensions []string, direction Direction, bytes 
 	}
 }
 
-func (m *Manager) recordReportConnections(dimensions []string, count int64) {
+func (m *Manager) recordReportConnections(keys []string, count int64) {
 	runtime := m.runtime.Load()
 	if runtime.config == nil || !runtime.config.Reports.Enabled {
 		return
 	}
 	now := m.now()
 	hour := now.UTC().Truncate(time.Hour).Unix()
-	for _, key := range reportKeys(dimensions) {
+	for _, key := range keys {
 		series := m.reportSeries(key)
+		if series == nil {
+			continue
+		}
 		series.mu.Lock()
 		counters := series.Hourly[hour]
 		counters.Connections += count
@@ -752,14 +1059,17 @@ func (m *Manager) recordReportConnections(dimensions []string, count int64) {
 	}
 }
 
-func (m *Manager) recordReportExceeded(dimensions []string, now time.Time) {
+func (m *Manager) recordReportExceeded(keys []string, now time.Time) {
 	runtime := m.runtime.Load()
 	if runtime.config == nil || !runtime.config.Reports.Enabled {
 		return
 	}
 	hour := now.UTC().Truncate(time.Hour).Unix()
-	for _, key := range reportKeys(dimensions) {
+	for _, key := range keys {
 		series := m.reportSeries(key)
+		if series == nil {
+			continue
+		}
 		series.mu.Lock()
 		counters := series.Hourly[hour]
 		counters.ExceededEvents++
@@ -826,6 +1136,10 @@ func addCounters(left, right Counters) Counters {
 }
 
 func (m *Manager) Reports(key, granularity string, from, to time.Time) ([]UsageBucket, error) {
+	granularity = strings.ToLower(granularity)
+	if granularity != "hour" && granularity != "day" && granularity != "month" {
+		return nil, errors.New("invalid report granularity")
+	}
 	m.reportsMu.RLock()
 	series := m.reports[key]
 	m.reportsMu.RUnlock()
@@ -835,7 +1149,7 @@ func (m *Manager) Reports(key, granularity string, from, to time.Time) ([]UsageB
 	series.mu.Lock()
 	defer series.mu.Unlock()
 	var source map[int64]Counters
-	switch strings.ToLower(granularity) {
+	switch granularity {
 	case "hour":
 		source = series.Hourly
 	case "day":

@@ -82,7 +82,7 @@ func getKernelDirectStatus(writer http.ResponseWriter, request *http.Request) {
 
 func getTrafficControlPolicies(writer http.ResponseWriter, request *http.Request) {
 	config, revision := trafficControl.Default.Config()
-	render.JSON(writer, request, render.M{"revision": revision, "config": config})
+	render.JSON(writer, request, render.M{"revision": revision, "config": config.Raw()})
 }
 
 type trafficControlUpdate struct {
@@ -97,12 +97,17 @@ func putTrafficControlPolicies(writer http.ResponseWriter, request *http.Request
 		writeTrafficControlError(writer, request, http.StatusBadRequest, err)
 		return
 	}
-	_, revision := trafficControl.Default.Config()
+	current, revision := trafficControl.Default.Config()
 	if revision != update.Revision {
 		writeTrafficControlError(writer, request, http.StatusConflict, trafficControl.ErrRevisionConflict)
 		return
 	}
 	config, err := trafficControl.ParseConfig(update.Config, func(path string) (string, error) {
+		// GET emits the live StorePath. Accept it so GET → PUT can keep the same file
+		// even when that path would not pass IsSafePath as a newly chosen store.
+		if current != nil && path == current.StorePath {
+			return current.StorePath, nil
+		}
 		resolved := C.Path.Resolve(path)
 		if !C.Path.IsSafePath(resolved) {
 			return "", C.Path.ErrNotSafePath(resolved)
@@ -195,6 +200,9 @@ func getTrafficControlReports(writer http.ResponseWriter, request *http.Request)
 	if err != nil {
 		writeTrafficControlError(writer, request, http.StatusBadRequest, err)
 		return
+	}
+	if buckets == nil {
+		buckets = []trafficControl.UsageBucket{}
 	}
 	render.JSON(writer, request, render.M{"key": key, "granularity": granularity, "from": from.Unix(), "to": to.Unix(), "buckets": buckets})
 }

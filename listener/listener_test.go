@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	C "github.com/Miku0139oao/aster-core/constant"
+	LC "github.com/Miku0139oao/aster-core/listener/config"
 	IN "github.com/Miku0139oao/aster-core/listener/inbound"
 
 	"github.com/stretchr/testify/require"
@@ -352,6 +353,130 @@ func TestPatchInboundListenersRestoredSliceListenerCanCloseAndRestart(t *testing
 	for _, listener := range lc.listeners {
 		require.Equal(t, 1, listener.closeCall)
 	}
+}
+
+type tunLifecycleTestListener struct {
+	config      LC.Tun
+	address     string
+	reloadCalls int
+	closeCalls  int
+	closeErr    error
+}
+
+func (l *tunLifecycleTestListener) OnReload()       { l.reloadCalls++ }
+func (l *tunLifecycleTestListener) Config() LC.Tun  { return l.config }
+func (l *tunLifecycleTestListener) Address() string { return l.address }
+func (l *tunLifecycleTestListener) Close() error {
+	l.closeCalls++
+	return l.closeErr
+}
+
+func replaceTunLifecycleForTest(t *testing.T, config LC.Tun, current tunListener, factory func(LC.Tun, C.Tunnel) (tunListener, error)) {
+	t.Helper()
+	tunMux.Lock()
+	previousConfig := LastTunConf
+	previousListener := tunLister
+	previousFactory := newTunListener
+	LastTunConf = config
+	tunLister = current
+	newTunListener = factory
+	tunMux.Unlock()
+	t.Cleanup(func() {
+		tunMux.Lock()
+		LastTunConf = previousConfig
+		tunLister = previousListener
+		newTunListener = previousFactory
+		tunMux.Unlock()
+	})
+}
+
+func TestReCreateTunRetriesEnabledSameConfigWithoutListener(t *testing.T) {
+	config := LC.Tun{Enable: true, Device: "same-config"}
+	creationErr := errors.New("requested creation failed")
+	calls := 0
+	replaceTunLifecycleForTest(t, config, nil, func(got LC.Tun, _ C.Tunnel) (tunListener, error) {
+		calls++
+		require.True(t, got.Equal(config))
+		return nil, creationErr
+	})
+
+	err := ReCreateTun(config, nil)
+
+	require.ErrorIs(t, err, creationErr)
+	require.Equal(t, 1, calls)
+	require.Nil(t, tunLister)
+	require.True(t, LastTunConf.Equal(config))
+}
+
+func TestReCreateTunRestoresPreviousListenerAfterReplacementFailure(t *testing.T) {
+	previousConfig := LC.Tun{Enable: true, Device: "previous"}
+	requestedConfig := LC.Tun{Enable: true, Device: "requested"}
+	previousListener := &tunLifecycleTestListener{config: previousConfig, address: "previous"}
+	restoredListener := &tunLifecycleTestListener{config: previousConfig, address: "restored"}
+	creationErr := errors.New("requested creation failed")
+	var calls []LC.Tun
+	replaceTunLifecycleForTest(t, previousConfig, previousListener, func(config LC.Tun, _ C.Tunnel) (tunListener, error) {
+		calls = append(calls, config)
+		if len(calls) == 1 {
+			return nil, creationErr
+		}
+		return restoredListener, nil
+	})
+
+	err := ReCreateTun(requestedConfig, nil)
+
+	require.ErrorIs(t, err, creationErr)
+	require.Len(t, calls, 2)
+	require.True(t, calls[0].Equal(requestedConfig))
+	require.True(t, calls[1].Equal(previousConfig))
+	require.Equal(t, 1, previousListener.closeCalls)
+	require.Same(t, restoredListener, tunLister)
+	require.True(t, LastTunConf.Equal(previousConfig))
+}
+
+func TestReCreateTunStopsWhenPreviousListenerCloseFails(t *testing.T) {
+	previousConfig := LC.Tun{Enable: true, Device: "previous"}
+	requestedConfig := LC.Tun{Enable: true, Device: "requested"}
+	closeErr := errors.New("close failed")
+	previousListener := &tunLifecycleTestListener{config: previousConfig, closeErr: closeErr}
+	factoryCalls := 0
+	replaceTunLifecycleForTest(t, previousConfig, previousListener, func(LC.Tun, C.Tunnel) (tunListener, error) {
+		factoryCalls++
+		return &tunLifecycleTestListener{}, nil
+	})
+
+	err := ReCreateTun(requestedConfig, nil)
+
+	require.ErrorIs(t, err, closeErr)
+	require.Equal(t, 1, previousListener.closeCalls)
+	require.Zero(t, factoryCalls)
+	require.Same(t, previousListener, tunLister)
+	require.True(t, LastTunConf.Equal(previousConfig))
+}
+
+func TestReCreateTunJoinsRequestedAndRestoreFailures(t *testing.T) {
+	previousConfig := LC.Tun{Enable: true, Device: "previous"}
+	requestedConfig := LC.Tun{Enable: true, Device: "requested"}
+	previousListener := &tunLifecycleTestListener{config: previousConfig}
+	creationErr := errors.New("requested creation failed")
+	restoreErr := errors.New("restore failed")
+	calls := 0
+	replaceTunLifecycleForTest(t, previousConfig, previousListener, func(LC.Tun, C.Tunnel) (tunListener, error) {
+		calls++
+		if calls == 1 {
+			return nil, creationErr
+		}
+		return nil, restoreErr
+	})
+
+	err := ReCreateTun(requestedConfig, nil)
+
+	require.ErrorIs(t, err, creationErr)
+	require.ErrorIs(t, err, restoreErr)
+	require.ErrorContains(t, err, "restore previous TUN listener")
+	require.Equal(t, 2, calls)
+	require.Nil(t, tunLister)
+	require.True(t, LastTunConf.Equal(previousConfig))
 }
 
 type recreateStubTunnel struct{}

@@ -59,6 +59,7 @@ type Listener struct {
 
 	cDialerInterfaceFinder dialer.InterfaceFinder
 
+	ruleProviderTunnel       P.Tunnel
 	ruleUpdateCallbackCloser io.Closer
 	kernelDirectCloser       io.Closer
 	kernelDirectFastPath     kerneldirect.FastPath
@@ -363,10 +364,11 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 		DisableICMPForwarding: options.DisableICMPForwarding,
 	}
 	l = &Listener{
-		closed:  false,
-		options: options,
-		handler: handler,
-		tunName: tunName,
+		closed:             false,
+		options:            options,
+		handler:            handler,
+		ruleProviderTunnel: rpTunnel,
+		tunName:            tunName,
 	}
 	defer func() {
 		if err != nil {
@@ -635,6 +637,12 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 }
 
 func (l *Listener) ruleUpdateCallback(ruleProvider P.RuleProvider) {
+	if l.ruleProviderTunnel != nil {
+		current, active := l.ruleProviderTunnel.RuleProviders()[ruleProvider.Name()]
+		if !active || current != ruleProvider {
+			return
+		}
+	}
 	if l.options.KernelDirect {
 		kerneldirect.Flush()
 	}

@@ -51,6 +51,10 @@ func NewUDP(addr string, tunnel C.Tunnel, additions ...inbound.Addition) (*UDPLi
 		packetConn: l,
 		addr:       addr,
 	}
+	// Local reply sockets feed packets back through handlePacketConn. Preserve
+	// the original listener namespace across that path instead of deriving it
+	// from the temporary spoofed socket.
+	additions = append([]inbound.Addition{inbound.WithInAddr(l.LocalAddr())}, additions...)
 
 	c := l.(*net.UDPConn)
 
@@ -108,5 +112,7 @@ func handlePacketConn(pc net.PacketConn, tunnel C.Tunnel, buf []byte, lAddr, rAd
 		tunnel:    tunnel,
 		additions: additions,
 	}
-	tunnel.HandleUDPPacket(inbound.NewPacket(target, pkt, C.TPROXY, additions...))
+	packet, metadata := inbound.NewPacket(target, pkt, C.TPROXY, additions...)
+	pkt.natKey = C.NewUDPNatKeyForPacket(pkt, metadata)
+	tunnel.HandleUDPPacket(packet, metadata)
 }

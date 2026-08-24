@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/netip"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -335,9 +336,9 @@ func TestHandleUDPConnObservesDirectDest(t *testing.T) {
 	UpdateRules(nil, nil, nil)
 	SetMode(Direct)
 
-	var current kerneldirect.DecisionSets
+	var current atomic.Pointer[kerneldirect.DecisionSets]
 	closer := kerneldirect.Register(func(string, netip.Addr) bool { return true }, func(sets kerneldirect.DecisionSets) {
-		current = sets
+		current.Store(&sets)
 	}, kerneldirect.ControllerOptions{MaxEntries: 8})
 	t.Cleanup(func() { _ = closer.Close() })
 
@@ -357,7 +358,7 @@ func TestHandleUDPConnObservesDirectDest(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if current.Direct != nil && current.Direct.Contains(addr) {
+		if sets := current.Load(); sets != nil && sets.Direct != nil && sets.Direct.Contains(addr) {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -366,9 +367,9 @@ func TestHandleUDPConnObservesDirectDest(t *testing.T) {
 }
 
 func TestKernelDirectObservesAfterDialWhenDstIPMissing(t *testing.T) {
-	var current kerneldirect.DecisionSets
+	var current atomic.Pointer[kerneldirect.DecisionSets]
 	closer := kerneldirect.Register(func(string, netip.Addr) bool { return true }, func(sets kerneldirect.DecisionSets) {
-		current = sets
+		current.Store(&sets)
 	}, kerneldirect.ControllerOptions{MaxEntries: 8})
 	t.Cleanup(func() { _ = closer.Close() })
 
@@ -379,13 +380,14 @@ func TestKernelDirectObservesAfterDialWhenDstIPMissing(t *testing.T) {
 		DstPort: 6651,
 	}
 	observeKernelDirectFlow(metadata, proxy)
-	if current.Direct != nil && current.Direct.Contains(addr) {
+	if sets := current.Load(); sets != nil && sets.Direct != nil && sets.Direct.Contains(addr) {
 		t.Fatal("must not observe a DIRECT dest before the address is known")
 	}
 
 	remote := stubRemoteConn{remote: stubRemoteAddr{s: net.JoinHostPort(addr.String(), "6651")}}
 	observeKernelDirectFlowAfterDial(metadata, proxy, remote)
-	if current.Direct == nil || !current.Direct.Contains(addr) {
+	sets := current.Load()
+	if sets == nil || sets.Direct == nil || !sets.Direct.Contains(addr) {
 		t.Fatal("successful DIRECT dial must observe the dest once the IP is known")
 	}
 	if metadata.DstIP != addr {

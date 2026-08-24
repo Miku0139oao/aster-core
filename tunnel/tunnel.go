@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -67,32 +69,41 @@ var (
 
 	findProcessMode = atomic.NewInt32Enum(process.FindProcessStrict)
 
-	snifferDispatcher *sniffer.Dispatcher
-	sniffingEnable    = false
-
-	ruleUpdateCallback = utils.NewCallback[P.RuleProvider]()
-	routingState       stdatomic.Pointer[routingSnapshot]
+	ruleUpdateCallback   = utils.NewCallback[P.RuleProvider]()
+	routingState         stdatomic.Pointer[routingSnapshot]
+	snifferState         stdatomic.Pointer[snifferSnapshot]
+	udpNATAdmissionDrops stdatomic.Uint64
 )
 
+type snifferSnapshot struct {
+	dispatcher *sniffer.Dispatcher
+	enabled    bool
+}
+
 type routingSnapshot struct {
-	proxies  map[string]C.Proxy
-	rules    []C.Rule
-	subRules map[string][]C.Rule
-	mode     TunnelMode
+	proxies       map[string]C.Proxy
+	providers     map[string]P.ProxyProvider
+	ruleProviders map[string]P.RuleProvider
+	rules         []C.Rule
+	subRules      map[string][]C.Rule
+	mode          TunnelMode
 }
 
 func init() {
 	publishRoutingState()
+	snifferState.Store(&snifferSnapshot{})
 }
 
 // publishRoutingState must be called while configMux is held, except during
 // package initialization before concurrent access is possible.
 func publishRoutingState() {
 	routingState.Store(&routingSnapshot{
-		proxies:  proxies,
-		rules:    rules,
-		subRules: subRules,
-		mode:     mode,
+		proxies:       proxies,
+		providers:     providers,
+		ruleProviders: ruleProviders,
+		rules:         rules,
+		subRules:      subRules,
+		mode:          mode,
 	})
 }
 
@@ -145,15 +156,15 @@ func (t tunnel) NatTable() C.NatTable {
 }
 
 func (t tunnel) Proxies() map[string]C.Proxy {
-	return proxies
+	return routingState.Load().proxies
 }
 
 func (t tunnel) Providers() map[string]P.ProxyProvider {
-	return providers
+	return routingState.Load().providers
 }
 
 func (t tunnel) RuleProviders() map[string]P.RuleProvider {
-	return ruleProviders
+	return routingState.Load().ruleProviders
 }
 
 func (t tunnel) RuleUpdateCallback() *utils.Callback[P.RuleProvider] {
@@ -176,16 +187,22 @@ func Status() TunnelStatus {
 	return status.Load()
 }
 
-func SetSniffing(b bool) {
-	if snifferDispatcher.Enable() {
-		configMux.Lock()
-		sniffingEnable = b
-		configMux.Unlock()
+func SetSniffing(enabled bool) {
+	for {
+		current := snifferState.Load()
+		if current == nil || current.dispatcher == nil || !current.dispatcher.Enable() {
+			return
+		}
+		next := &snifferSnapshot{dispatcher: current.dispatcher, enabled: enabled}
+		if snifferState.CompareAndSwap(current, next) {
+			return
+		}
 	}
 }
 
 func IsSniffing() bool {
-	return sniffingEnable
+	current := snifferState.Load()
+	return current != nil && current.enabled
 }
 
 // TCPIn return fan-in queue
@@ -223,7 +240,7 @@ func NatTable() C.NatTable {
 
 // Rules return all rules
 func Rules() []C.Rule {
-	return rules
+	return routingState.Load().rules
 }
 
 func Listeners() map[string]C.InboundListener {
@@ -233,36 +250,75 @@ func Listeners() map[string]C.InboundListener {
 // UpdateRules handle update rules
 func UpdateRules(newRules []C.Rule, newSubRule map[string][]C.Rule, rp map[string]P.RuleProvider) {
 	configMux.Lock()
+	retired := ruleProviders
 	rules = newRules
 	ruleProviders = rp
 	subRules = newSubRule
 	publishRoutingState()
 	configMux.Unlock()
+	closeRetiredProviders(retired, rp)
 	kerneldirect.Flush()
 }
 
-// Proxies return all proxies
+// Proxies return all proxies.
 func Proxies() map[string]C.Proxy {
-	return proxies
+	return routingState.Load().proxies
 }
 
-// Providers return all compatible providers
+// Providers return all compatible providers.
 func Providers() map[string]P.ProxyProvider {
-	return providers
+	return routingState.Load().providers
 }
 
-// RuleProviders return all loaded rule providers
+// RuleProviders return all loaded rule providers.
 func RuleProviders() map[string]P.RuleProvider {
-	return ruleProviders
+	return routingState.Load().ruleProviders
 }
 
-// UpdateProxies handle update proxies
+func sameProvider(left, right any) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	leftValue, rightValue := reflect.ValueOf(left), reflect.ValueOf(right)
+	if leftValue.Type() != rightValue.Type() {
+		return false
+	}
+	if leftValue.Kind() == reflect.Pointer {
+		return leftValue.Pointer() == rightValue.Pointer()
+	}
+	if leftValue.Type().Comparable() {
+		return leftValue.Interface() == rightValue.Interface()
+	}
+	return false
+}
+
+func closeRetiredProviders[T P.Provider](previous, current map[string]T) {
+	for _, oldProvider := range previous {
+		stillActive := false
+		for _, newProvider := range current {
+			if sameProvider(oldProvider, newProvider) {
+				stillActive = true
+				break
+			}
+		}
+		if stillActive {
+			continue
+		}
+		if closer, ok := any(oldProvider).(io.Closer); ok {
+			_ = closer.Close()
+		}
+	}
+}
+
+// UpdateProxies handle update proxies.
 func UpdateProxies(newProxies map[string]C.Proxy, newProviders map[string]P.ProxyProvider) {
 	configMux.Lock()
+	retired := providers
 	proxies = newProxies
 	providers = newProviders
 	publishRoutingState()
 	configMux.Unlock()
+	closeRetiredProviders(retired, newProviders)
 	kerneldirect.Flush()
 }
 
@@ -273,10 +329,8 @@ func UpdateListeners(newListeners map[string]C.InboundListener) {
 }
 
 func UpdateSniffer(dispatcher *sniffer.Dispatcher) {
-	configMux.Lock()
-	snifferDispatcher = dispatcher
-	sniffingEnable = dispatcher.Enable()
-	configMux.Unlock()
+	enabled := dispatcher != nil && dispatcher.Enable()
+	snifferState.Store(&snifferSnapshot{dispatcher: dispatcher, enabled: enabled})
 }
 
 // Mode return current mode
@@ -487,13 +541,27 @@ func handleUDPConn(packet C.PacketAdapter) {
 	}
 
 	key := packet.Key()
-	sender, loaded := natTable.GetOrCreate(key, func() C.PacketSender {
+	if !key.IsValid() {
+		packet.Drop()
+		log.Warnln("[UDP] reject packet with invalid source NAT key")
+		return
+	}
+	sender, loaded, admitted := natTable.GetOrCreate(key, func() C.PacketSender {
 		sender := newPacketSender()
-		if sniffingEnable && snifferDispatcher.Enable() {
-			return snifferDispatcher.UDPSniff(packet, sender)
+		state := snifferState.Load()
+		if state != nil && state.enabled && state.dispatcher != nil {
+			return state.dispatcher.UDPSniff(packet, sender)
 		}
 		return sender
 	})
+	if !admitted {
+		packet.Drop()
+		drops := udpNATAdmissionDrops.Add(1)
+		if drops&(drops-1) == 0 {
+			log.Warnln("[UDP] NAT flow limit reached; dropped %d packets", drops)
+		}
+		return
+	}
 	if !loaded {
 		dial := func() (C.PacketConn, C.WriteBackProxy, error) {
 			originMetadata := metadata  // save origin metadata
@@ -504,7 +572,10 @@ func handleUDPConn(packet C.PacketAdapter) {
 				return nil, nil, err
 			}
 
-			_ = preHandleMetadata(metadata) // error was pre-checked
+			if err := preHandleMetadata(metadata); err != nil {
+				log.Warnln("[UDP] Destination metadata became invalid: %s", err)
+				return nil, nil, err
+			}
 
 			proxy, rule, err := resolveMetadata(metadata)
 			if err != nil {
@@ -582,10 +653,11 @@ func handleTCPConn(connCtx C.ConnContext) {
 
 	conn := connCtx.Conn()
 	conn.ResetPeeked() // reset before sniffer
-	if sniffingEnable && snifferDispatcher.Enable() {
+	state := snifferState.Load()
+	if state != nil && state.enabled && state.dispatcher != nil {
 		// Try to sniff a domain when `preHandleMetadata` failed, this is usually
 		// caused by a "Fake DNS record missing" error when enhanced-mode is fake-ip.
-		if snifferDispatcher.TCPSniff(conn, metadata) {
+		if state.dispatcher.TCPSniff(conn, metadata) {
 			// we now have a domain name
 			preHandleFailed = false
 		}

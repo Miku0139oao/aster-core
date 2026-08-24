@@ -93,6 +93,7 @@ func (c *singPacketConn) pipeReadPacket(pLen int) {
 	buffer := buf.NewSize(pLen)
 	destination, err := c.singPacketConn.ReadPacket(buffer)
 	result := &singReadResult{}
+	result.buffer = buffer
 	result.destination = destination
 	result.err = err
 	c.netPacketConn.resultCh <- result

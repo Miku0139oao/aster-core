@@ -40,6 +40,138 @@ func TestBuildLPMEntriesLongestPrefixAndProxyWins(t *testing.T) {
 	require.Equal(t, decisionBypass, entries4[lpmKey4{PrefixLen: 32, Address: netip.MustParseAddr("9.9.9.9").As4()}], "local host bypass must win over PROXY /0")
 }
 
+func mustIPSet(t *testing.T, addrs ...string) *netipx.IPSet {
+	t.Helper()
+	var builder netipx.IPSetBuilder
+	for _, addr := range addrs {
+		builder.Add(netip.MustParseAddr(addr))
+	}
+	set, err := builder.IPSet()
+	require.NoError(t, err)
+	return set
+}
+
+func TestBuildLPMEntriesReservesBypassAndProxyDefaults(t *testing.T) {
+	// Non-adjacent addresses so IPSet.Prefixes() cannot aggregate them.
+	direct := mustIPSet(t, "203.0.113.1", "198.51.100.1", "8.8.8.8", "1.1.1.1", "9.9.9.9", "4.4.4.4", "8.8.4.4", "1.0.0.1")
+
+	entries4, entries6, err := buildLPMEntries(
+		DecisionSets{Direct: direct},
+		nil,
+		nil,
+		[]netip.Prefix{netip.MustParsePrefix("192.0.2.1/32")},
+		true,
+		4,
+	)
+	require.NoError(t, err)
+	require.Equal(t, decisionBypass, entries4[lpmKey4{PrefixLen: 32, Address: netip.MustParseAddr("192.0.2.1").As4()}])
+	require.Equal(t, decisionProxy, entries4[lpmKey4{PrefixLen: 0, Address: [4]byte{}}])
+	require.Equal(t, decisionProxy, entries6[lpmKey6{PrefixLen: 0, Address: [16]byte{}}])
+	require.Equal(t, 1, len(entries6), "IPv6 default route must stay reserved")
+	require.LessOrEqual(t, len(entries4)+len(entries6), 4)
+
+	learned := 0
+	for key, decision := range entries4 {
+		if key.PrefixLen == 0 || decision == decisionBypass {
+			continue
+		}
+		require.Equal(t, decisionDirect, decision)
+		learned++
+	}
+	require.Equal(t, 1, learned, "exactly one learned DIRECT prefix should fit beside reserved keys")
+	require.Equal(t, 3, len(entries4))
+}
+
+func TestBuildLPMEntriesPrioritizesLearnedProxyUnderCapacity(t *testing.T) {
+	direct := mustIPSet(t, "1.1.1.1")
+	proxy := mustIPSet(t, "8.8.8.8")
+	entries4, _, err := buildLPMEntries(
+		DecisionSets{Direct: direct, Proxy: proxy},
+		[]netip.Prefix{netip.MustParsePrefix("8.8.8.0/24")},
+		nil,
+		nil,
+		true,
+		4,
+	)
+	require.NoError(t, err)
+	require.Equal(t, decisionProxy, entries4[lpmKey4{PrefixLen: 32, Address: netip.MustParseAddr("8.8.8.8").As4()}], "learned PROXY must win the only learned slot")
+	_, keptDirect := entries4[lpmKey4{PrefixLen: 32, Address: netip.MustParseAddr("1.1.1.1").As4()}]
+	require.False(t, keptDirect, "DIRECT must be dropped before PROXY under capacity pressure")
+}
+
+func TestBuildLPMEntriesZeroLearnedBudgetKeepsReservedKeys(t *testing.T) {
+	direct := mustIPSet(t, "203.0.113.1", "198.51.100.1")
+	entries4, entries6, err := buildLPMEntries(
+		DecisionSets{Direct: direct},
+		nil,
+		nil,
+		[]netip.Prefix{netip.MustParsePrefix("192.0.2.1/32")},
+		true,
+		3,
+	)
+	require.NoError(t, err)
+	require.Equal(t, decisionBypass, entries4[lpmKey4{PrefixLen: 32, Address: netip.MustParseAddr("192.0.2.1").As4()}])
+	require.Equal(t, decisionProxy, entries4[lpmKey4{PrefixLen: 0, Address: [4]byte{}}])
+	require.Equal(t, decisionProxy, entries6[lpmKey6{PrefixLen: 0, Address: [16]byte{}}])
+	require.Equal(t, 2, len(entries4))
+	require.Equal(t, 1, len(entries6))
+}
+
+func TestBuildLPMEntriesProxyWinsExistingKeyWhenBudgetExhausted(t *testing.T) {
+	// overhead is 1 static DIRECT + 2 PROXY defaults; learned budget is 0.
+	// The colliding PROXY prefix must still overwrite the reserved DIRECT key.
+	proxy := mustIPSet(t, "8.8.8.8", "1.1.1.1")
+	entries4, _, err := buildLPMEntries(
+		DecisionSets{Proxy: proxy},
+		[]netip.Prefix{netip.MustParsePrefix("8.8.8.8/32")},
+		nil,
+		nil,
+		true,
+		3,
+	)
+	require.NoError(t, err)
+	require.Equal(t, decisionProxy, entries4[lpmKey4{PrefixLen: 32, Address: netip.MustParseAddr("8.8.8.8").As4()}], "PROXY must win an exact-prefix collision even with no learned budget")
+	_, learnedExtra := entries4[lpmKey4{PrefixLen: 32, Address: netip.MustParseAddr("1.1.1.1").As4()}]
+	require.False(t, learnedExtra, "new PROXY keys must still respect the learned budget")
+	require.Equal(t, decisionProxy, entries4[lpmKey4{PrefixLen: 0, Address: [4]byte{}}])
+}
+
+func TestBuildLPMEntriesLearnedOverlapDoesNotConsumeBudget(t *testing.T) {
+	// 8.8.8.8 is already reserved as static DIRECT. It must not spend the
+	// single learned slot that 1.1.1.1 needs.
+	direct := mustIPSet(t, "8.8.8.8", "1.1.1.1")
+	entries4, _, err := buildLPMEntries(
+		DecisionSets{Direct: direct},
+		[]netip.Prefix{netip.MustParsePrefix("8.8.8.8/32")},
+		nil,
+		nil,
+		true,
+		4,
+	)
+	require.NoError(t, err)
+	require.Equal(t, decisionDirect, entries4[lpmKey4{PrefixLen: 32, Address: netip.MustParseAddr("8.8.8.8").As4()}])
+	require.Equal(t, decisionDirect, entries4[lpmKey4{PrefixLen: 32, Address: netip.MustParseAddr("1.1.1.1").As4()}])
+}
+
+func TestBuildLPMEntriesIgnoresStaticProxyWithoutSteering(t *testing.T) {
+	direct := mustIPSet(t, "203.0.113.1", "198.51.100.1")
+	entries4, entries6, err := buildLPMEntries(
+		DecisionSets{Direct: direct},
+		nil,
+		[]netip.Prefix{netip.MustParsePrefix("1.1.1.0/24"), netip.MustParsePrefix("2001:db8::/32")},
+		nil,
+		false,
+		2,
+	)
+	require.NoError(t, err)
+	require.Equal(t, decisionDirect, entries4[lpmKey4{PrefixLen: 32, Address: netip.MustParseAddr("203.0.113.1").As4()}])
+	require.Equal(t, decisionDirect, entries4[lpmKey4{PrefixLen: 32, Address: netip.MustParseAddr("198.51.100.1").As4()}])
+	require.Equal(t, 2, len(entries4))
+	require.Empty(t, entries6)
+	_, hasDefault := entries4[lpmKey4{PrefixLen: 0, Address: [4]byte{}}]
+	require.False(t, hasDefault)
+}
+
 func TestBuildLPMEntriesRejectsPrefixOverflow(t *testing.T) {
 	_, _, err := buildLPMEntries(
 		DecisionSets{},

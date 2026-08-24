@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"net/netip"
+	"testing"
+)
 
 func TestParseTunKernelDirectRequirements(t *testing.T) {
 	for _, rawTun := range []RawTun{
@@ -76,6 +79,14 @@ func TestParseTunKernelDirectEBPFRequirementsAndPropagation(t *testing.T) {
 		func(tun *RawTun) { tun.KernelDirectEBPFRequired = true },
 		func(tun *RawTun) { tun.KernelDirectEBPFProxy = true },
 		func(tun *RawTun) { tun.KernelDirectEBPFProxyRedirect = true },
+		func(tun *RawTun) {
+			tun.KernelDirectEBPF = true
+			tun.KernelDirectEBPFInterfaces = []string{"br-lan"}
+			tun.KernelDirectEBPFProxyPrefixes = []netip.Prefix{netip.MustParsePrefix("1.1.1.0/24")}
+		},
+		func(tun *RawTun) {
+			tun.KernelDirectEBPFDirectPrefixes = []netip.Prefix{netip.MustParsePrefix("8.8.8.0/24")}
+		},
 	} {
 		raw := base
 		mutate(&raw)
@@ -94,6 +105,8 @@ func TestParseTunKernelDirectEBPFRequirementsAndPropagation(t *testing.T) {
 	raw.KernelDirectEBPFProxyRedirect = true
 	raw.KernelDirectEBPFProxyMark = 0x20000000
 	raw.KernelDirectEBPFFlowEntries = 8192
+	raw.KernelDirectEBPFDirectPrefixes = []netip.Prefix{netip.MustParsePrefix("8.8.8.0/24")}
+	raw.KernelDirectEBPFProxyPrefixes = []netip.Prefix{netip.MustParsePrefix("1.1.1.0/24")}
 	general := &General{}
 	if err := parseTun(raw, &DNS{}, general); err != nil {
 		t.Fatal(err)
@@ -109,5 +122,11 @@ func TestParseTunKernelDirectEBPFRequirementsAndPropagation(t *testing.T) {
 	}
 	if !general.Tun.KernelDirectEBPFProxy || !general.Tun.KernelDirectEBPFProxyRedirect || general.Tun.KernelDirectEBPFProxyMark != raw.KernelDirectEBPFProxyMark || general.Tun.KernelDirectEBPFFlowEntries != raw.KernelDirectEBPFFlowEntries {
 		t.Fatal("eBPF proxy/flow options were not propagated")
+	}
+	if len(general.Tun.KernelDirectEBPFDirectPrefixes) != 1 || general.Tun.KernelDirectEBPFDirectPrefixes[0].String() != "8.8.8.0/24" {
+		t.Fatalf("eBPF direct prefixes were not propagated: %v", general.Tun.KernelDirectEBPFDirectPrefixes)
+	}
+	if len(general.Tun.KernelDirectEBPFProxyPrefixes) != 1 || general.Tun.KernelDirectEBPFProxyPrefixes[0].String() != "1.1.1.0/24" {
+		t.Fatalf("eBPF proxy prefixes were not propagated: %v", general.Tun.KernelDirectEBPFProxyPrefixes)
 	}
 }

@@ -2,7 +2,6 @@ package tproxy
 
 import (
 	"errors"
-	"fmt"
 	"net"
 	"net/netip"
 
@@ -18,6 +17,7 @@ type packet struct {
 	buf       []byte
 	tunnel    C.Tunnel
 	additions []inbound.Addition
+	natKey    C.UDPNatKey
 }
 
 func (c *packet) Data() []byte {
@@ -27,7 +27,7 @@ func (c *packet) Data() []byte {
 // WriteBack opens a new socket binding `addr` to write UDP packet back
 func (c *packet) WriteBack(b []byte, addr net.Addr) (n int, err error) {
 	rAddr := addr.(*net.UDPAddr).AddrPort() // tunnel's handleUDPToLocal will ensure addr is *net.UDPAddr
-	tc, err := createOrGetLocalConn(rAddr, c.lAddr, c.tunnel, c.additions...)
+	tc, err := createOrGetLocalConn(c.natKey, rAddr, c.lAddr, c.tunnel, c.additions...)
 	if err != nil {
 		return
 	}
@@ -52,41 +52,16 @@ func (c *packet) InAddr() net.Addr {
 // this function listen at rAddr and write to lAddr
 // for here, rAddr is the ip/port client want to access
 // lAddr is the ip/port client opened
-func createOrGetLocalConn(rAddr, lAddr netip.AddrPort, tunnel C.Tunnel, additions ...inbound.Addition) (*net.UDPConn, error) {
+func createOrGetLocalConn(flow C.UDPNatKey, rAddr, lAddr netip.AddrPort, tunnel C.Tunnel, additions ...inbound.Addition) (*net.UDPConn, error) {
 	remote := rAddr.String()
 	local := lAddr.String()
-	natTable := tunnel.NatTable()
-	localConn := natTable.GetForLocalConn(local, remote)
-	// localConn not exist
-	if localConn == nil {
-		cond, loaded := natTable.GetOrCreateLockForLocalConn(local, remote)
-		if loaded {
-			cond.L.Lock()
-			cond.Wait()
-			// we should get localConn here
-			localConn = natTable.GetForLocalConn(local, remote)
-			cond.L.Unlock()
-			if localConn == nil {
-				return nil, fmt.Errorf("localConn is nil, nat entry not exist")
-			}
-		} else {
-			if cond == nil {
-				return nil, fmt.Errorf("cond is nil, nat entry not exist")
-			}
-			defer func() {
-				natTable.DeleteLockForLocalConn(local, remote)
-				cond.Broadcast()
-			}()
-			conn, err := listenLocalConn(rAddr, lAddr, tunnel, additions...)
-			if err != nil {
-				log.Errorln("listenLocalConn failed with error: %s, packet loss (rAddr[%T]=%s lAddr[%T]=%s)", err.Error(), rAddr, remote, lAddr, local)
-				return nil, err
-			}
-			natTable.AddForLocalConn(local, remote, conn)
-			localConn = conn
+	return tunnel.NatTable().GetOrCreateLocalConn(flow, remote, func() (*net.UDPConn, error) {
+		conn, err := listenLocalConn(rAddr, lAddr, tunnel, additions...)
+		if err != nil {
+			log.Errorln("listenLocalConn failed with error: %s, packet loss (rAddr[%T]=%s lAddr[%T]=%s)", err.Error(), rAddr, remote, lAddr, local)
 		}
-	}
-	return localConn, nil
+		return conn, err
+	})
 }
 
 // this function listen at rAddr

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	N "github.com/Miku0139oao/aster-core/common/net"
@@ -22,12 +23,21 @@ type PoolClient struct {
 	tcpClientsMutex sync.Mutex
 	udpClients      list.List[Client]
 	udpClientsMutex sync.Mutex
+	closed          atomic.Bool
+	closeOnce       sync.Once
 }
 
 func (t *PoolClient) DialContext(ctx context.Context, metadata *C.Metadata) (net.Conn, error) {
-	conn, err := t.getClient(false).DialContext(ctx, metadata)
+	client, err := t.getClient(false)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := client.DialContext(ctx, metadata)
 	if errors.Is(err, TooManyOpenStreams) {
-		conn, err = t.newClient(false).DialContext(ctx, metadata)
+		client, err = t.newClient(false)
+		if err == nil {
+			conn, err = client.DialContext(ctx, metadata)
+		}
 	}
 	if err != nil {
 		return nil, err
@@ -36,9 +46,16 @@ func (t *PoolClient) DialContext(ctx context.Context, metadata *C.Metadata) (net
 }
 
 func (t *PoolClient) ListenPacket(ctx context.Context, metadata *C.Metadata) (net.PacketConn, error) {
-	pc, err := t.getClient(true).ListenPacket(ctx, metadata)
+	client, err := t.getClient(true)
+	if err != nil {
+		return nil, err
+	}
+	pc, err := client.ListenPacket(ctx, metadata)
 	if errors.Is(err, TooManyOpenStreams) {
-		pc, err = t.newClient(true).ListenPacket(ctx, metadata)
+		client, err = t.newClient(true)
+		if err == nil {
+			pc, err = client.ListenPacket(ctx, metadata)
+		}
 	}
 	if err != nil {
 		return nil, err
@@ -46,7 +63,10 @@ func (t *PoolClient) ListenPacket(ctx context.Context, metadata *C.Metadata) (ne
 	return N.NewRefPacketConn(pc, t), nil
 }
 
-func (t *PoolClient) newClient(udp bool) (client Client) {
+func (t *PoolClient) newClient(udp bool) (client Client, err error) {
+	if t.closed.Load() {
+		return nil, net.ErrClosed
+	}
 	clients := &t.tcpClients
 	clientsMutex := &t.tcpClientsMutex
 	if udp {
@@ -56,6 +76,9 @@ func (t *PoolClient) newClient(udp bool) (client Client) {
 
 	clientsMutex.Lock()
 	defer clientsMutex.Unlock()
+	if t.closed.Load() {
+		return nil, net.ErrClosed
+	}
 
 	if t.newClientOptionV4 != nil {
 		client = NewClientV4(t.newClientOptionV4, udp, t.dialFn)
@@ -66,10 +89,13 @@ func (t *PoolClient) newClient(udp bool) (client Client) {
 	client.SetLastVisited(time.Now())
 
 	clients.PushFront(client)
-	return client
+	return client, nil
 }
 
-func (t *PoolClient) getClient(udp bool) Client {
+func (t *PoolClient) getClient(udp bool) (Client, error) {
+	if t.closed.Load() {
+		return nil, net.ErrClosed
+	}
 	clients := &t.tcpClients
 	clientsMutex := &t.tcpClientsMutex
 	if udp {
@@ -113,10 +139,42 @@ func (t *PoolClient) getClient(udp bool) Client {
 
 	if bestClient == nil {
 		return t.newClient(udp)
-	} else {
-		bestClient.SetLastVisited(time.Now())
-		return bestClient
 	}
+	if t.closed.Load() {
+		return nil, net.ErrClosed
+	}
+	bestClient.SetLastVisited(time.Now())
+	return bestClient, nil
+}
+
+func (t *PoolClient) Close() {
+	t.closeOnce.Do(func() {
+		t.closed.Store(true)
+		clients := make([]Client, 0)
+		t.tcpClientsMutex.Lock()
+		for item := t.tcpClients.Front(); item != nil; {
+			next := item.Next()
+			if item.Value != nil {
+				clients = append(clients, item.Value)
+			}
+			t.tcpClients.Remove(item)
+			item = next
+		}
+		t.tcpClientsMutex.Unlock()
+		t.udpClientsMutex.Lock()
+		for item := t.udpClients.Front(); item != nil; {
+			next := item.Next()
+			if item.Value != nil {
+				clients = append(clients, item.Value)
+			}
+			t.udpClients.Remove(item)
+			item = next
+		}
+		t.udpClientsMutex.Unlock()
+		for _, client := range clients {
+			client.Close()
+		}
+	})
 }
 
 func NewPoolClientV4(clientOption *ClientOptionV4, dialFn DialFunc) *PoolClient {

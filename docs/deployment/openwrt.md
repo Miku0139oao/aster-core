@@ -132,8 +132,8 @@ status 顯示 `backend: nftables` 是推薦且正常的工作狀態，不代表 
 `auto-redirect` 會把 Aster 自己打出去的 DIRECT SYN 再導回 REDIR／TUN。這時封包只剩這一份：
 
 - **不要**在 `handleTCPConn` 看到本機來源的 REDIR／TUN SYN 就直接 return。那會把 DIRECT 和未綁定介面的節點一起黑洞（延遲測試全掛、網頁打不開）。
-- 迴圈防護放在三處：`DIRECT.CheckConn` 只拒絕 **已登記的 outbound AddrPort**（connMap）；`ObserveFlow` 在 dial 前把可安全判定的 DIRECT 目的位址寫進 nftables exclude；30 秒零位元組 TCP reaper 清掉沒有 payload 的殘留 tracker。
-- Reaper **只關 TCP**。UDP（含 ePDG / Wi‑Fi 通話的 `500`／`4500`）與仍有上下載的連線不會被關。不要用 `DELETE /connections` 當日常清理，那會拆掉 IKE。
+- 迴圈防護放在三處：`DIRECT.CheckConn` 只拒絕 **已登記的 outbound AddrPort**（connMap）；`ObserveFlow` 在 dial 前把可安全判定的 DIRECT 目的位址寫進 nftables exclude；每五秒檢查一次的 30 秒零位元組 TCP reaper 清掉透明代理路徑（REDIR／TPROXY／TUN）沒有 payload 的殘留 tracker。
+- Reaper **只關透明代理 TCP**。一般 HTTP／SOCKS／VLESS server-first 連線、UDP（含 ePDG / Wi‑Fi 通話的 `500`／`4500`）與仍有上下載的連線不會被關。Bulk `DELETE /connections` 已移除；不要以 controller mass-close 取代正常 idle cleanup。
 
 遊戲或必須釘在單一 WAN 的埠級流量，mark 本身擋不住 auto-redirect。要嘛把目的位址學進 exclude set，要嘛在 Aster 的 `dstnat + 1` 之前做 identity DNAT／`exclude-dst-port`，讓封包根本不進 TUN。
 

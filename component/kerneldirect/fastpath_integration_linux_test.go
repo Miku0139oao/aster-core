@@ -224,20 +224,32 @@ func TestTCFastPathIntegration(t *testing.T) {
 		return false
 	}, "TC filter was not attached")
 
-	var overflowBuilder netipx.IPSetBuilder
+	var boundedBuilder netipx.IPSetBuilder
 	for index := 0; index < 255; index++ {
-		overflowBuilder.Add(netip.AddrFrom4([4]byte{11, byte(index), 0, 1}))
+		boundedBuilder.Add(netip.AddrFrom4([4]byte{11, byte(index), 0, 1}))
 	}
-	overflowSet, err := overflowBuilder.IPSet()
+	boundedSet, err := boundedBuilder.IPSet()
 	require.NoError(t, err)
-	require.ErrorContains(t, path.Replace(DecisionSets{Direct: overflowSet}), "exceed 256 prefixes")
+	require.NoError(t, path.Replace(DecisionSets{Direct: boundedSet}))
+	status = path.Status()
+	require.LessOrEqual(t, status.IPv4+status.IPv6, 256, "bounded replacement must fit the configured LPM capacity")
+	require.Equal(t, status.DirectPrefixes+status.ProxyPrefixes+status.BypassPrefixes, status.IPv4+status.IPv6)
+	require.Less(t, status.DirectPrefixes, 255, "learned DIRECT entries must be truncated to reserve fixed entries")
+	require.Equal(t, 2, status.ProxyPrefixes, "IPv4/IPv6 PROXY defaults must remain installed")
+	require.Positive(t, status.BypassPrefixes, "reserved bypass entries must remain installed")
+	requireProgramMarksWith(t, fastPath, makeIPv4EthernetFrame(netip.MustParseAddr("1.1.1.1")), initialMark, DefaultEBPFProxyMark)
+	requireProgramDoesNotMark(t, fastPath, makeIPv4EthernetFrame(netip.MustParseAddr("198.18.0.2")), initialMark)
+
 	filters, err = netlink.FilterList(dummy, netlink.HANDLE_MIN_INGRESS)
 	require.NoError(t, err)
-	for _, filter := range filters {
-		if bpfFilter, ok := filter.(*netlink.BpfFilter); ok {
-			require.NotEqual(t, tcFilterName, bpfFilter.Name, "map failure must detach TC before returning")
+	require.Condition(t, func() bool {
+		for _, filter := range filters {
+			if bpfFilter, ok := filter.(*netlink.BpfFilter); ok && bpfFilter.Name == tcFilterName {
+				return true
+			}
 		}
-	}
+		return false
+	}, "TC filter must remain attached after bounded truncation")
 
 	require.NoError(t, path.Close())
 	filters, err = netlink.FilterList(dummy, netlink.HANDLE_MIN_INGRESS)

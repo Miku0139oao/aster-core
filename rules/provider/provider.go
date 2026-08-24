@@ -7,6 +7,7 @@ import (
 	"io"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/Miku0139oao/aster-core/common/pool"
@@ -59,9 +60,25 @@ type mrsRuleStrategy interface {
 	DumpMrs(f func(key string) bool)
 }
 
+type strategySnapshot struct {
+	strategy ruleStrategy
+}
+
 type baseProvider struct {
 	behavior P.RuleBehavior
-	strategy ruleStrategy
+	strategy atomic.Pointer[strategySnapshot]
+}
+
+func (bp *baseProvider) setStrategy(strategy ruleStrategy) {
+	bp.strategy.Store(&strategySnapshot{strategy: strategy})
+}
+
+func (bp *baseProvider) loadStrategy() ruleStrategy {
+	snapshot := bp.strategy.Load()
+	if snapshot == nil {
+		return nil
+	}
+	return snapshot.strategy
 }
 
 func (bp *baseProvider) Type() P.ProviderType {
@@ -73,15 +90,20 @@ func (bp *baseProvider) Behavior() P.RuleBehavior {
 }
 
 func (bp *baseProvider) Count() int {
-	return bp.strategy.Count()
+	strategy := bp.loadStrategy()
+	if strategy == nil {
+		return 0
+	}
+	return strategy.Count()
 }
 
 func (bp *baseProvider) Match(metadata *C.Metadata, helper C.RuleMatchHelper) bool {
-	return bp.strategy != nil && bp.strategy.Match(metadata, helper)
+	strategy := bp.loadStrategy()
+	return strategy != nil && strategy.Match(metadata, helper)
 }
 
 func (bp *baseProvider) Strategy() any {
-	return bp.strategy
+	return bp.loadStrategy()
 }
 
 type ruleSetProvider struct {
@@ -110,7 +132,7 @@ func (rp *ruleSetProvider) MarshalJSON() ([]byte, error) {
 			Behavior:    rp.behavior.String(),
 			Format:      rp.format.String(),
 			Name:        rp.Fetcher.Name(),
-			RuleCount:   rp.strategy.Count(),
+			RuleCount:   rp.Count(),
 			Type:        rp.Type().String(),
 			UpdatedAt:   rp.UpdatedAt(),
 			VehicleType: rp.VehicleType().String(),
@@ -131,14 +153,15 @@ func NewRuleSetProvider(name string, behavior P.RuleBehavior, format P.RuleForma
 	}
 
 	onUpdate := func(strategy ruleStrategy) {
-		rp.strategy = strategy
+		rp.setStrategy(strategy)
 		tunnel.RuleUpdateCallback().Emit(rp)
 	}
 
-	rp.strategy = newStrategy(behavior, parse)
+	strategy := newStrategy(behavior, parse)
 	if len(payload) > 0 { // using as fallback rules
-		rp.strategy = rulesParseInline(payload, rp.strategy)
+		strategy = rulesParseInline(payload, strategy)
 	}
+	rp.setStrategy(strategy)
 	rp.Fetcher = resource.NewFetcher(name, interval, vehicle, bundleFile, func(bytes []byte) (ruleStrategy, error) {
 		return rulesParse(bytes, newStrategy(behavior, parse), format)
 	}, onUpdate)
@@ -302,7 +325,7 @@ type InlineProvider struct {
 type inlineProvider struct {
 	baseProvider
 	name     string
-	updateAt time.Time
+	updateAt atomic.Int64
 	payload  []string
 }
 
@@ -316,7 +339,7 @@ func (i *inlineProvider) Initial() error {
 
 func (i *inlineProvider) Update() error {
 	// make api update happy
-	i.updateAt = time.Now()
+	i.updateAt.Store(time.Now().UnixNano())
 	return nil
 }
 
@@ -329,25 +352,24 @@ func (i *inlineProvider) MarshalJSON() ([]byte, error) {
 		providerForApi{
 			Behavior:    i.behavior.String(),
 			Name:        i.Name(),
-			RuleCount:   i.strategy.Count(),
+			RuleCount:   i.Count(),
 			Type:        i.Type().String(),
 			VehicleType: i.VehicleType().String(),
-			UpdatedAt:   i.updateAt,
+			UpdatedAt:   time.Unix(0, i.updateAt.Load()),
 			Payload:     i.payload,
 		})
 }
 
 func NewInlineProvider(name string, behavior P.RuleBehavior, payload []string, parse common.ParseRuleFunc) P.RuleProvider {
+	strategy := newStrategy(behavior, parse)
+	strategy = rulesParseInline(payload, strategy)
 	ip := &inlineProvider{
-		baseProvider: baseProvider{
-			behavior: behavior,
-			strategy: newStrategy(behavior, parse),
-		},
-		payload:  payload,
-		name:     name,
-		updateAt: time.Now(),
+		baseProvider: baseProvider{behavior: behavior},
+		payload:      payload,
+		name:         name,
 	}
-	ip.strategy = rulesParseInline(payload, ip.strategy)
+	ip.setStrategy(strategy)
+	ip.updateAt.Store(time.Now().UnixNano())
 
 	wrapper := &InlineProvider{
 		ip,
