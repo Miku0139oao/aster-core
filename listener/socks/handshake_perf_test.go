@@ -4,12 +4,11 @@ import (
 	"bytes"
 	"io"
 	"net"
+	"testing"
 	"time"
 
 	"github.com/Miku0139oao/aster-core/adapter/inbound"
 	authStore "github.com/Miku0139oao/aster-core/listener/auth"
-
-	"testing"
 )
 
 type benchConn struct {

@@ -22,6 +22,7 @@ func (t *packetTestNatTable) Delete(C.UDPNatKey) {}
 func (t *packetTestNatTable) GetOrCreateLocalConn(C.UDPNatKey, string, func() (*net.UDPConn, error)) (*net.UDPConn, error) {
 	return nil, t.err
 }
+
 func (t *packetTestNatTable) RangeForLocalConn(C.UDPNatKey, func(string, *net.UDPConn) bool) {
 }
 

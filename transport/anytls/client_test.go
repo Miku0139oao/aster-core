@@ -4,9 +4,9 @@ import (
 	"encoding/binary"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/Miku0139oao/aster-core/transport/anytls/padding"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewAuthenticationPreambleUsesExactPaddingLength(t *testing.T) {

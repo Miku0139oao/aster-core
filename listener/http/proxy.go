@@ -48,6 +48,11 @@ func writeConnectEstablished(w io.Writer, protoMajor, protoMinor int) error {
 	return err
 }
 
+func newClientWithContext(c net.Conn, tunnel C.Tunnel, additions []inbound.Addition) (*http.Client, context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
+	return newClient(c, tunnel, additions), ctx, cancel
+}
+
 func HandleConn(c net.Conn, tunnel C.Tunnel, store auth.AuthStore, additions ...inbound.Addition) {
 	conn := N.NewBufferedConn(c)
 
@@ -111,8 +116,7 @@ func HandleConn(c net.Conn, tunnel C.Tunnel, store auth.AuthStore, additions ...
 			additions[inUserIdx] = inbound.WithInUser(user)
 
 			if client == nil {
-				client = newClient(c, tunnel, additions)
-				ctx, cancel = context.WithCancel(context.Background())
+				client, ctx, cancel = newClientWithContext(c, tunnel, additions)
 			}
 
 			host := request.Header.Get("Host")

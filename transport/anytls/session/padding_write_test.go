@@ -5,9 +5,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/Miku0139oao/aster-core/transport/anytls/padding"
+
+	"github.com/stretchr/testify/require"
 )
 
 type captureConn struct {

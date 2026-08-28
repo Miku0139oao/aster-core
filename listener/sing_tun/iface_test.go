@@ -19,18 +19,21 @@ func (s *stubInterfaceFinder) Update() error { return nil }
 func (s *stubInterfaceFinder) Interfaces() []control.Interface {
 	return []control.Interface{s.iface}
 }
+
 func (s *stubInterfaceFinder) ByName(name string) (*control.Interface, error) {
 	if name == s.iface.Name {
 		return &s.iface, nil
 	}
 	return nil, errIfaceNotFoundForTest
 }
+
 func (s *stubInterfaceFinder) ByIndex(index int) (*control.Interface, error) {
 	if index == s.iface.Index {
 		return &s.iface, nil
 	}
 	return nil, errIfaceNotFoundForTest
 }
+
 func (s *stubInterfaceFinder) ByAddr(netip.Addr) (*control.Interface, error) {
 	return &s.iface, nil
 }
@@ -83,8 +86,10 @@ func TestInterfacesSnapshotStable(t *testing.T) {
 	}
 }
 
-var ifaceListSink []control.Interface
-var ifaceNameSink string
+var (
+	ifaceListSink []control.Interface
+	ifaceNameSink string
+)
 
 func BenchmarkFindInterfaceName(b *testing.B) {
 	old := DefaultInterfaceFinder

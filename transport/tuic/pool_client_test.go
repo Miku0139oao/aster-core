@@ -19,6 +19,7 @@ type poolClientLifecycleProbe struct {
 func (*poolClientLifecycleProbe) DialContext(context.Context, *C.Metadata) (net.Conn, error) {
 	return nil, errors.New("not used")
 }
+
 func (*poolClientLifecycleProbe) ListenPacket(context.Context, *C.Metadata) (net.PacketConn, error) {
 	return nil, errors.New("not used")
 }
@@ -26,6 +27,7 @@ func (*poolClientLifecycleProbe) OpenStreams() int64 { return 0 }
 func (c *poolClientLifecycleProbe) LastVisited() time.Time {
 	return time.Unix(0, c.lastVisited.Load())
 }
+
 func (c *poolClientLifecycleProbe) SetLastVisited(value time.Time) {
 	c.lastVisited.Store(value.UnixNano())
 }

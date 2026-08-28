@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/Miku0139oao/aster-core/transport/anytls/padding"
 	"github.com/Miku0139oao/aster-core/transport/anytls/util"
+
+	"github.com/stretchr/testify/require"
 )
 
 type sessionTestConn struct {
