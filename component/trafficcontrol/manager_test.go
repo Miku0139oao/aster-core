@@ -432,3 +432,52 @@ func TestOverQuotaSessionRecoversWhenRollingWindowExpires(t *testing.T) {
 	require.False(t, session.binding.Load().policies[0].state.OverQuota.Load())
 	session.Close()
 }
+
+func TestRecordDoesNotFalseExceedFromStaleRollingWindow(t *testing.T) {
+	manager := NewManager()
+	now := time.Date(2026, time.August, 6, 12, 0, 0, 0, time.UTC)
+	manager.now = func() time.Time { return now }
+	config := testManagerConfig(filepath.Join(t.TempDir(), "traffic.db"))
+	config.Policies[0].Quota.TotalBytes = 100
+	config.Policies[0].Quota.Window = time.Hour
+	require.NoError(t, manager.Configure(config))
+	require.NoError(t, manager.stopFlusher())
+	defer manager.Close()
+
+	session := manager.Open(Flow{})
+	require.NotNil(t, session)
+	session.Record(Upload, 90)
+	require.False(t, session.binding.Load().policies[0].state.OverQuota.Load())
+
+	now = now.Add(2 * time.Hour)
+	session.Record(Upload, 20)
+	state := session.binding.Load().policies[0].state
+	require.False(t, state.OverQuota.Load())
+	require.Zero(t, state.Counters.ExceededEvents)
+	require.Equal(t, int64(20), state.rolling.UploadBytes)
+	session.Close()
+}
+
+func TestRecordRecoversAfterQuotaWindowWithoutRescanningEveryPacket(t *testing.T) {
+	manager := NewManager()
+	now := time.Date(2026, time.August, 6, 12, 0, 0, 0, time.UTC)
+	manager.now = func() time.Time { return now }
+	config := testManagerConfig(filepath.Join(t.TempDir(), "traffic.db"))
+	config.Policies[0].Quota.Window = time.Hour
+	require.NoError(t, manager.Configure(config))
+	require.NoError(t, manager.stopFlusher())
+	defer manager.Close()
+
+	session := manager.Open(Flow{})
+	require.NotNil(t, session)
+	session.Record(Upload, 100)
+	require.True(t, session.binding.Load().policies[0].state.OverQuota.Load())
+
+	now = now.Add(2 * time.Hour)
+	session.Record(Upload, 1)
+	state := session.binding.Load().policies[0].state
+	require.False(t, state.OverQuota.Load())
+	require.Equal(t, int64(1), state.rolling.UploadBytes)
+	require.Equal(t, int64(101), state.Counters.UploadBytes)
+	session.Close()
+}

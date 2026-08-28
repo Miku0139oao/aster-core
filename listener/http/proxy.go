@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"strings"
 	"sync"
 
 	"github.com/Miku0139oao/aster-core/adapter/inbound"
@@ -31,49 +30,89 @@ func (b *bodyWrapper) Read(p []byte) (n int, err error) {
 	return n, err
 }
 
-func HandleConn(c net.Conn, tunnel C.Tunnel, store auth.AuthStore, additions ...inbound.Addition) {
-	additions = append(additions, inbound.Placeholder) // Add a placeholder for InUser
-	inUserIdx := len(additions) - 1
-	client := newClient(c, tunnel, additions)
-	defer client.CloseIdleConnections()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	peekMutex := sync.Mutex{}
+var (
+	connectEstablishedHTTP10 = []byte("HTTP/1.0 200 Connection established\r\n\r\n")
+	connectEstablishedHTTP11 = []byte("HTTP/1.1 200 Connection established\r\n\r\n")
+)
 
+func writeConnectEstablished(w io.Writer, protoMajor, protoMinor int) error {
+	var err error
+	switch {
+	case protoMajor == 1 && protoMinor == 1:
+		_, err = w.Write(connectEstablishedHTTP11)
+	case protoMajor == 1 && protoMinor == 0:
+		_, err = w.Write(connectEstablishedHTTP10)
+	default:
+		_, err = fmt.Fprintf(w, "HTTP/%d.%d 200 Connection established\r\n\r\n", protoMajor, protoMinor)
+	}
+	return err
+}
+
+func HandleConn(c net.Conn, tunnel C.Tunnel, store auth.AuthStore, additions ...inbound.Addition) {
 	conn := N.NewBufferedConn(c)
 
 	authenticator := store.Authenticator()
 	trusted := authenticator == nil // disable authenticate if lru is nil
 	lastUser := ""
+	inUserIdx := -1
+
+	var (
+		client    *http.Client
+		ctx       context.Context
+		cancel    context.CancelFunc
+		peekMutex sync.Mutex
+	)
+	defer func() {
+		if client != nil {
+			client.CloseIdleConnections()
+		}
+		if cancel != nil {
+			cancel()
+		}
+	}()
 
 	for {
-		peekMutex.Lock()
+		if client != nil {
+			peekMutex.Lock()
+		}
 		request, err := ReadRequest(conn.Reader())
-		peekMutex.Unlock()
+		if client != nil {
+			peekMutex.Unlock()
+		}
 		if err != nil {
 			break
 		}
 
 		request.RemoteAddr = conn.RemoteAddr().String()
 
-		keepAlive := strings.TrimSpace(strings.ToLower(request.Header.Get("Proxy-Connection"))) == "keep-alive"
-
 		resp, user := authenticate(request, authenticator) // always call authenticate function to get user
 		if resp == nil {
 			trusted = true
 		}
-		additions[inUserIdx] = inbound.WithInUser(user)
 
 		if trusted {
 			if request.Method == http.MethodConnect {
 				// Manual writing to support CONNECT for http 1.0 (workaround for uplay client)
-				if _, err = fmt.Fprintf(conn, "HTTP/%d.%d %03d %s\r\n\r\n", request.ProtoMajor, request.ProtoMinor, http.StatusOK, "Connection established"); err != nil {
+				if err = writeConnectEstablished(conn, request.ProtoMajor, request.ProtoMinor); err != nil {
 					break // close connection
 				}
 
-				tunnel.HandleTCPConn(inbound.NewHTTPS(request, conn, additions...))
+				hijacked, metadata := inbound.NewHTTPS(request, conn, additions...)
+				metadata.InUser = user
+				tunnel.HandleTCPConn(hijacked, metadata)
 
 				return // hijack connection
+			}
+
+			if inUserIdx < 0 {
+				additions = append(additions, inbound.Placeholder) // Add a placeholder for InUser
+				inUserIdx = len(additions) - 1
+			}
+			additions[inUserIdx] = inbound.WithInUser(user)
+
+			if client == nil {
+				client = newClient(c, tunnel, additions)
+				ctx, cancel = context.WithCancel(context.Background())
 			}
 
 			host := request.Header.Get("Host")
@@ -128,6 +167,7 @@ func HandleConn(c net.Conn, tunnel C.Tunnel, store auth.AuthStore, additions ...
 			removeHopByHopHeaders(resp.Header)
 		}
 
+		keepAlive := isProxyKeepAlive(request.Header.Get("Proxy-Connection"))
 		if !keepAlive {
 			resp.Close = true // close connection if keep-alive is not set
 		}
@@ -152,9 +192,13 @@ func HandleConn(c net.Conn, tunnel C.Tunnel, store auth.AuthStore, additions ...
 
 func authenticate(request *http.Request, authenticator auth.Authenticator) (resp *http.Response, user string) {
 	credential := parseBasicProxyAuthorization(request)
-	if credential == "" && authenticator != nil {
-		resp = responseWith(request, http.StatusProxyAuthRequired)
-		resp.Header.Set("Proxy-Authenticate", "Basic")
+	if credential == "" {
+		if authenticator != nil {
+			resp = responseWith(request, http.StatusProxyAuthRequired)
+			resp.Header.Set("Proxy-Authenticate", "Basic")
+			return
+		}
+		log.Debugln("Auth success from %s -> %s", request.RemoteAddr, user)
 		return
 	}
 	user, pass, err := decodeBasicProxyAuthorization(credential)

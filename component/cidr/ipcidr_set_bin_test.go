@@ -20,6 +20,38 @@ func writeBinaryRange(t *testing.T, buffer *bytes.Buffer, value netipx.IPRange) 
 	}
 }
 
+func TestIpCidrSetWriteBinMatchesBinaryPackage(t *testing.T) {
+	set := NewIpCidrSet()
+	for _, cidr := range []string{"10.0.0.0/8", "2001:db8::/32"} {
+		if err := set.AddIpCidrForString(cidr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := set.Merge(); err != nil {
+		t.Fatal(err)
+	}
+	var got bytes.Buffer
+	if err := set.WriteBin(&got); err != nil {
+		t.Fatal(err)
+	}
+	var want bytes.Buffer
+	want.WriteByte(1)
+	if err := binary.Write(&want, binary.BigEndian, int64(len(set.rr))); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range set.rr {
+		if err := binary.Write(&want, binary.BigEndian, r.From().As16()); err != nil {
+			t.Fatal(err)
+		}
+		if err := binary.Write(&want, binary.BigEndian, r.To().As16()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !bytes.Equal(got.Bytes(), want.Bytes()) {
+		t.Fatal("WriteBin wire format changed")
+	}
+}
+
 func TestReadIpCidrSetNormalizesUnsortedRanges(t *testing.T) {
 	var encoded bytes.Buffer
 	encoded.WriteByte(1)
@@ -54,6 +86,50 @@ func TestReadIpCidrSetRejectsUnboundedRangeCount(t *testing.T) {
 	}
 	if _, err := ReadIpCidrSet(&encoded); err == nil {
 		t.Fatal("expected excessive range count to fail before allocation")
+	}
+}
+
+func benchMergedIpCidrSet(b *testing.B, size int) *IpCidrSet {
+	b.Helper()
+	set := NewIpCidrSet()
+	for i := 0; i < size; i++ {
+		value := i * 2
+		addr := netip.AddrFrom4([4]byte{10, byte(value >> 16), byte(value >> 8), byte(value)})
+		if err := set.AddIpCidr(netip.PrefixFrom(addr, 32)); err != nil {
+			b.Fatal(err)
+		}
+	}
+	if err := set.Merge(); err != nil {
+		b.Fatal(err)
+	}
+	return set
+}
+
+func BenchmarkIpCidrSetWriteBin(b *testing.B) {
+	set := benchMergedIpCidrSet(b, 10_000)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		var encoded bytes.Buffer
+		if err := set.WriteBin(&encoded); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkReadIpCidrSet(b *testing.B) {
+	set := benchMergedIpCidrSet(b, 10_000)
+	var encoded bytes.Buffer
+	if err := set.WriteBin(&encoded); err != nil {
+		b.Fatal(err)
+	}
+	payload := encoded.Bytes()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := ReadIpCidrSet(bytes.NewReader(payload)); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 

@@ -39,6 +39,8 @@ func (c *testReaderConn) Read(p []byte) (int, error) {
 	return c.Reader.Read(p)
 }
 
+func (*testReaderConn) Close() error { return nil }
+
 func TestBufferedConnGrow(t *testing.T) {
 	data := make([]byte, 32*1024)
 	for i := range data {
@@ -216,4 +218,75 @@ func TestBufferedConnPrependData(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, append(prepended, original...), data)
 	})
+}
+
+func BenchmarkNewBufferedConn(b *testing.B) {
+	payload := []byte("0123456789abcdef")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		conn := NewBufferedConn(&testReaderConn{Reader: bytes.NewReader(payload)})
+		_, _ = conn.Peek(1)
+		_ = conn.ReadCached()
+		_ = conn.ReadCached()
+	}
+}
+
+func TestReadCachedBytesSurviveReaderRecycle(t *testing.T) {
+	payload := bytes.Repeat([]byte("x"), 32)
+	conn := NewBufferedConn(&testReaderConn{Reader: bytes.NewReader(payload)})
+	_, err := conn.Peek(len(payload))
+	require.NoError(t, err)
+	cached := conn.ReadCached()
+	require.NotNil(t, cached)
+	require.Equal(t, payload, cached.Bytes())
+	require.Nil(t, conn.ReadCached())
+
+	other := NewBufferedConn(&testReaderConn{Reader: bytes.NewReader(bytes.Repeat([]byte("y"), 32))})
+	_, err = other.Peek(32)
+	require.NoError(t, err)
+	require.Equal(t, payload, cached.Bytes())
+	_ = other.ReadCached()
+	_ = other.ReadCached()
+}
+
+func TestBufferedConnReaderPoolIsolation(t *testing.T) {
+	for i := 0; i < 64; i++ {
+		a := bytes.Repeat([]byte{'a'}, 32)
+		b := bytes.Repeat([]byte{'b'}, 32)
+		ca := NewBufferedConn(&testReaderConn{Reader: bytes.NewReader(a)})
+		peeked, err := ca.Peek(len(a))
+		require.NoError(t, err)
+		require.Equal(t, a, peeked)
+		_ = ca.ReadCached()
+		_ = ca.ReadCached()
+
+		cb := NewBufferedConn(&testReaderConn{Reader: bytes.NewReader(b)})
+		peeked, err = cb.Peek(len(b))
+		require.NoError(t, err)
+		require.Equal(t, b, peeked)
+		_ = cb.ReadCached()
+		_ = cb.ReadCached()
+	}
+}
+
+func TestWarpConnWithBioReaderDoesNotRecycleExternalReader(t *testing.T) {
+	payload := []byte("external-reader")
+	br := bufio.NewReader(bytes.NewReader(payload))
+	_, err := br.Peek(1)
+	require.NoError(t, err)
+	conn := WarpConnWithBioReader(&testReaderConn{Reader: bytes.NewReader(nil)}, br)
+	bc, ok := conn.(*BufferedConn)
+	require.True(t, ok)
+	require.Same(t, br, bc.Reader())
+	cached := bc.ReadCached()
+	require.NotNil(t, cached)
+	require.Equal(t, payload, cached.Bytes())
+	require.Nil(t, bc.ReadCached())
+	require.False(t, bc.owned)
+	require.Equal(t, 0, br.Buffered())
+	br.Reset(bytes.NewReader([]byte("still-usable")))
+	got, err := io.ReadAll(br)
+	require.NoError(t, err)
+	require.Equal(t, []byte("still-usable"), got)
 }

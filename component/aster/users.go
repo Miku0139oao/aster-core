@@ -221,20 +221,22 @@ func (m *Manager) ListUserRecords(inbound string) ([]UserRecord, error) {
 }
 
 func (m *Manager) GetUser(userID string) (User, int64, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.config == nil {
+	runtime := m.runtime.Load()
+	if len(runtime.secret) == 0 {
 		return User{}, 0, ErrDisabled
 	}
-	_, state, user := m.indexedUserLocked(userID)
-	if user == nil {
+	snapshot := runtime.users[userID]
+	if snapshot == nil {
 		return User{}, 0, ErrNotFound
 	}
-	if _, managed := m.runtime.Load().managed[user.Inbound]; !managed {
-		return User{}, 0, ErrNotFound
+	user := snapshot.user
+	// Live atomics are billing truth. Snapshot bytes are only the last publish
+	// copy and must not be returned as current usage when a matching counter exists.
+	if counter := runtime.traffic[trafficKey{inbound: user.Inbound, userID: user.ID}]; counter != nil && counter.generation == user.TrafficGeneration {
+		user.UploadBytes = counter.upload.Load()
+		user.DownloadBytes = counter.download.Load()
 	}
-	m.syncUserTrafficLocked(user)
-	return *user, state.Revision, nil
+	return user, snapshot.revision, nil
 }
 
 func (m *Manager) CreateUser(input CreateUserInput, expectedRevision int64) (User, int64, error) {

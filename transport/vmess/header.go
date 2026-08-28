@@ -1,14 +1,11 @@
 package vmess
 
 import (
-	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
-	"hash"
 	"hash/crc32"
 	"time"
 )
@@ -26,78 +23,129 @@ const (
 	kdfSaltConstVMessHeaderPayloadLengthAEADIV  = "VMess Header AEAD Nonce_Length"
 )
 
-func kdf(key []byte, path ...string) []byte {
-	hmacCreator := &hMacCreator{value: []byte(kdfSaltConstVMessAEADKDF)}
-	for _, v := range path {
-		hmacCreator = &hMacCreator{value: []byte(v), parent: hmacCreator}
-	}
-	hmacf := hmacCreator.Create()
-	hmacf.Write(key)
-	return hmacf.Sum(nil)
+var (
+	kdfSaltVMessAEADKDF                    = []byte(kdfSaltConstVMessAEADKDF)
+	kdfSaltAuthIDEncryptionKey             = []byte(kdfSaltConstAuthIDEncryptionKey)
+	kdfSaltAEADRespHeaderLenKey            = []byte(kdfSaltConstAEADRespHeaderLenKey)
+	kdfSaltAEADRespHeaderLenIV             = []byte(kdfSaltConstAEADRespHeaderLenIV)
+	kdfSaltAEADRespHeaderPayloadKey        = []byte(kdfSaltConstAEADRespHeaderPayloadKey)
+	kdfSaltAEADRespHeaderPayloadIV         = []byte(kdfSaltConstAEADRespHeaderPayloadIV)
+	kdfSaltVMessHeaderPayloadAEADKey       = []byte(kdfSaltConstVMessHeaderPayloadAEADKey)
+	kdfSaltVMessHeaderPayloadAEADIV        = []byte(kdfSaltConstVMessHeaderPayloadAEADIV)
+	kdfSaltVMessHeaderPayloadLengthAEADKey = []byte(kdfSaltConstVMessHeaderPayloadLengthAEADKey)
+	kdfSaltVMessHeaderPayloadLengthAEADIV  = []byte(kdfSaltConstVMessHeaderPayloadLengthAEADIV)
+)
+
+const kdfMaxPath = 8
+
+// kdf implements VMess AEAD KDF (nested HMAC-SHA256) without the exponential
+// hmac.New(parent.Create) allocations. Output matches the historical nested
+// hmac.New construction byte-for-byte.
+func kdf(key []byte, path ...[]byte) []byte {
+	out := make([]byte, sha256.Size)
+	kdfTo(out, key, path...)
+	return out
 }
 
-type hMacCreator struct {
-	parent *hMacCreator
-	value  []byte
+func kdfTo(dst, key []byte, path ...[]byte) {
+	n := 1 + len(path)
+	if n > kdfMaxPath {
+		panic("vmess: kdf path too long")
+	}
+	var keys [kdfMaxPath][]byte
+	keys[0] = kdfSaltVMessAEADKDF
+	for i, p := range path {
+		keys[i+1] = p
+	}
+	kdfEval(n, keys[:n], key, dst)
 }
 
-func (h *hMacCreator) Create() hash.Hash {
-	if h.parent == nil {
-		return hmac.New(sha256.New, h.value)
+func kdfEval(level int, keys [][]byte, msg, dst []byte) {
+	if level == 0 {
+		sum := sha256.Sum256(msg)
+		copy(dst, sum[:])
+		return
 	}
-	return hmac.New(h.parent.Create, h.value)
+
+	macKey := keys[level-1]
+	var hashedKey [sha256.Size]byte
+	if len(macKey) > sha256.BlockSize {
+		kdfEval(level-1, keys, macKey, hashedKey[:])
+		macKey = hashedKey[:]
+	}
+	var ipad, opad [sha256.BlockSize]byte
+	copy(ipad[:], macKey)
+	copy(opad[:], macKey)
+	for i := 0; i < sha256.BlockSize; i++ {
+		ipad[i] ^= 0x36
+		opad[i] ^= 0x5c
+	}
+
+	var innerBuf [512]byte
+	innerLen := sha256.BlockSize + len(msg)
+	var innerIn []byte
+	if innerLen <= len(innerBuf) {
+		innerIn = innerBuf[:innerLen]
+	} else {
+		innerIn = make([]byte, innerLen)
+	}
+	copy(innerIn, ipad[:])
+	copy(innerIn[sha256.BlockSize:], msg)
+
+	var innerSum [sha256.Size]byte
+	kdfEval(level-1, keys, innerIn, innerSum[:])
+
+	var outerBuf [sha256.BlockSize + sha256.Size]byte
+	copy(outerBuf[:], opad[:])
+	copy(outerBuf[sha256.BlockSize:], innerSum[:])
+	kdfEval(level-1, keys, outerBuf[:], dst)
 }
 
 func createAuthID(cmdKey []byte, time int64) [16]byte {
-	buf := &bytes.Buffer{}
-	binary.Write(buf, binary.BigEndian, time)
+	var buf [16]byte
+	binary.BigEndian.PutUint64(buf[:8], uint64(time))
+	rand.Read(buf[8:12])
+	binary.BigEndian.PutUint32(buf[12:], crc32.ChecksumIEEE(buf[:12]))
 
-	random := make([]byte, 4)
-	rand.Read(random)
-	buf.Write(random)
-	zero := crc32.ChecksumIEEE(buf.Bytes())
-	binary.Write(buf, binary.BigEndian, zero)
-
-	aesBlock, _ := aes.NewCipher(kdf(cmdKey[:], kdfSaltConstAuthIDEncryptionKey)[:16])
+	var derived [sha256.Size]byte
+	kdfTo(derived[:], cmdKey, kdfSaltAuthIDEncryptionKey)
+	aesBlock, _ := aes.NewCipher(derived[:16])
 	var result [16]byte
-	aesBlock.Encrypt(result[:], buf.Bytes())
+	aesBlock.Encrypt(result[:], buf[:])
 	return result
 }
 
 func sealVMessAEADHeader(key [16]byte, data []byte, t time.Time) []byte {
 	generatedAuthID := createAuthID(key[:], t.Unix())
-	connectionNonce := make([]byte, 8)
-	rand.Read(connectionNonce)
+	var connectionNonce [8]byte
+	rand.Read(connectionNonce[:])
 
-	aeadPayloadLengthSerializedByte := make([]byte, 2)
-	binary.BigEndian.PutUint16(aeadPayloadLengthSerializedByte, uint16(len(data)))
+	const (
+		authIDLen = 16
+		nonceLen  = 8
+		gcmTag    = 16
+		lenPlain  = 2
+		headerLen = authIDLen + lenPlain + gcmTag + nonceLen
+	)
+	out := make([]byte, headerLen+len(data)+gcmTag)
+	copy(out[:authIDLen], generatedAuthID[:])
+	copy(out[authIDLen+lenPlain+gcmTag:headerLen], connectionNonce[:])
 
-	var payloadHeaderLengthAEADEncrypted []byte
+	var payloadLen [2]byte
+	binary.BigEndian.PutUint16(payloadLen[:], uint16(len(data)))
 
-	{
-		payloadHeaderLengthAEADKey := kdf(key[:], kdfSaltConstVMessHeaderPayloadLengthAEADKey, string(generatedAuthID[:]), string(connectionNonce))[:16]
-		payloadHeaderLengthAEADNonce := kdf(key[:], kdfSaltConstVMessHeaderPayloadLengthAEADIV, string(generatedAuthID[:]), string(connectionNonce))[:12]
-		payloadHeaderLengthAEADAESBlock, _ := aes.NewCipher(payloadHeaderLengthAEADKey)
-		payloadHeaderAEAD, _ := cipher.NewGCM(payloadHeaderLengthAEADAESBlock)
-		payloadHeaderLengthAEADEncrypted = payloadHeaderAEAD.Seal(nil, payloadHeaderLengthAEADNonce, aeadPayloadLengthSerializedByte, generatedAuthID[:])
-	}
+	var derived [sha256.Size]byte
+	kdfTo(derived[:], key[:], kdfSaltVMessHeaderPayloadLengthAEADKey, generatedAuthID[:], connectionNonce[:])
+	lengthBlock, _ := aes.NewCipher(derived[:16])
+	kdfTo(derived[:], key[:], kdfSaltVMessHeaderPayloadLengthAEADIV, generatedAuthID[:], connectionNonce[:])
+	lengthAEAD, _ := cipher.NewGCM(lengthBlock)
+	lengthAEAD.Seal(out[authIDLen:authIDLen], derived[:12], payloadLen[:], generatedAuthID[:])
 
-	var payloadHeaderAEADEncrypted []byte
+	kdfTo(derived[:], key[:], kdfSaltVMessHeaderPayloadAEADKey, generatedAuthID[:], connectionNonce[:])
+	payloadBlock, _ := aes.NewCipher(derived[:16])
+	kdfTo(derived[:], key[:], kdfSaltVMessHeaderPayloadAEADIV, generatedAuthID[:], connectionNonce[:])
+	payloadAEAD, _ := cipher.NewGCM(payloadBlock)
+	payloadAEAD.Seal(out[headerLen:headerLen], derived[:12], data, generatedAuthID[:])
 
-	{
-		payloadHeaderAEADKey := kdf(key[:], kdfSaltConstVMessHeaderPayloadAEADKey, string(generatedAuthID[:]), string(connectionNonce))[:16]
-		payloadHeaderAEADNonce := kdf(key[:], kdfSaltConstVMessHeaderPayloadAEADIV, string(generatedAuthID[:]), string(connectionNonce))[:12]
-		payloadHeaderAEADAESBlock, _ := aes.NewCipher(payloadHeaderAEADKey)
-		payloadHeaderAEAD, _ := cipher.NewGCM(payloadHeaderAEADAESBlock)
-		payloadHeaderAEADEncrypted = payloadHeaderAEAD.Seal(nil, payloadHeaderAEADNonce, data, generatedAuthID[:])
-	}
-
-	outputBuffer := &bytes.Buffer{}
-
-	outputBuffer.Write(generatedAuthID[:])
-	outputBuffer.Write(payloadHeaderLengthAEADEncrypted)
-	outputBuffer.Write(connectionNonce)
-	outputBuffer.Write(payloadHeaderAEADEncrypted)
-
-	return outputBuffer.Bytes()
+	return out
 }

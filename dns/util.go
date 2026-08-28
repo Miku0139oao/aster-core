@@ -15,7 +15,6 @@ import (
 	"github.com/Miku0139oao/aster-core/log"
 
 	D "github.com/miekg/dns"
-	"github.com/samber/lo"
 	"golang.org/x/exp/slices"
 )
 
@@ -26,13 +25,46 @@ const (
 const serverFailureCacheTTL uint32 = 5
 
 func minimalTTL(records []D.RR) uint32 {
-	rr := lo.MinBy(records, func(r1 D.RR, r2 D.RR) bool {
-		return r1.Header().Ttl < r2.Header().Ttl
-	})
-	if rr == nil {
+	var min uint32
+	found := false
+	for _, rr := range records {
+		if rr == nil {
+			continue
+		}
+		ttl := rr.Header().Ttl
+		if !found || ttl < min {
+			min = ttl
+			found = true
+		}
+	}
+	if !found {
 		return 0
 	}
-	return rr.Header().Ttl
+	return min
+}
+
+func minTTLAll(answer, ns, extra []D.RR) uint32 {
+	var min uint32
+	found := false
+	consider := func(records []D.RR) {
+		for _, rr := range records {
+			if rr == nil {
+				continue
+			}
+			ttl := rr.Header().Ttl
+			if !found || ttl < min {
+				min = ttl
+				found = true
+			}
+		}
+	}
+	consider(answer)
+	consider(ns)
+	consider(extra)
+	if !found {
+		return 0
+	}
+	return min
 }
 
 func updateTTL(records []D.RR, ttl uint32) {
@@ -41,16 +73,176 @@ func updateTTL(records []D.RR, ttl uint32) {
 	}
 	delta := minimalTTL(records) - ttl
 	for i := range records {
-		records[i].Header().Ttl = lo.Clamp(records[i].Header().Ttl-delta, 1, records[i].Header().Ttl)
+		if records[i] == nil {
+			continue
+		}
+		hdr := records[i].Header()
+		next := hdr.Ttl - delta
+		// Match lo.Clamp(next, 1, hdr.Ttl): apply the lower bound first so a 0 TTL
+		// becomes 1 instead of being pulled back down by the upper bound.
+		if next < 1 {
+			next = 1
+		} else if next > hdr.Ttl {
+			next = hdr.Ttl
+		}
+		hdr.Ttl = next
 	}
+}
+
+func cacheKey(q D.Question) dnsCacheKey {
+	return dnsCacheKey{name: q.Name, qtype: q.Qtype, qclass: q.Qclass}
+}
+
+func questionFlightKey(q D.Question) string {
+	// name + NUL + type/class. Avoids miekg Question.String() concatenations.
+	b := make([]byte, 0, len(q.Name)+5)
+	b = append(b, q.Name...)
+	b = append(b, 0, byte(q.Qtype>>8), byte(q.Qtype), byte(q.Qclass>>8), byte(q.Qclass))
+	return string(b)
+}
+
+func trimDots(s string) string {
+	for len(s) > 0 && s[len(s)-1] == '.' {
+		s = s[:len(s)-1]
+	}
+	return s
+}
+
+func canShareRdata(rrs []D.RR) bool {
+	for _, rr := range rrs {
+		switch rr.(type) {
+		case nil, *D.A, *D.AAAA, *D.CNAME, *D.DNAME, *D.NS, *D.PTR:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func cloneIP(ip []byte) []byte {
+	if ip == nil {
+		return nil
+	}
+	out := make([]byte, len(ip))
+	copy(out, ip)
+	return out
+}
+
+func cloneShareRdata(rr D.RR) (D.RR, bool) {
+	switch r := rr.(type) {
+	case *D.A:
+		if r == nil {
+			return (*D.A)(nil), true
+		}
+		n := *r
+		n.A = cloneIP(r.A)
+		return &n, true
+	case *D.AAAA:
+		if r == nil {
+			return (*D.AAAA)(nil), true
+		}
+		n := *r
+		n.AAAA = cloneIP(r.AAAA)
+		return &n, true
+	case *D.CNAME:
+		if r == nil {
+			return (*D.CNAME)(nil), true
+		}
+		n := *r
+		return &n, true
+	case *D.DNAME:
+		if r == nil {
+			return (*D.DNAME)(nil), true
+		}
+		n := *r
+		return &n, true
+	case *D.NS:
+		if r == nil {
+			return (*D.NS)(nil), true
+		}
+		n := *r
+		return &n, true
+	case *D.PTR:
+		if r == nil {
+			return (*D.PTR)(nil), true
+		}
+		n := *r
+		return &n, true
+	case nil:
+		return nil, true
+	default:
+		return nil, false
+	}
+}
+
+func cloneRRs(rrs []D.RR) ([]D.RR, bool) {
+	if len(rrs) == 0 {
+		return nil, true
+	}
+	out := make([]D.RR, len(rrs))
+	for i, rr := range rrs {
+		cloned, ok := cloneShareRdata(rr)
+		if !ok {
+			return nil, false
+		}
+		out[i] = cloned
+	}
+	return out, true
+}
+
+// cloneMsg returns a message the caller may mutate without affecting msg.
+// RR headers/TTL are unique. A/AAAA IP bytes are copied. CNAME/NS/PTR/DNAME
+// strings are shared (Go strings are immutable).
+func cloneMsg(msg *D.Msg) *D.Msg {
+	if msg == nil {
+		return nil
+	}
+	if !canShareRdata(msg.Answer) || !canShareRdata(msg.Ns) || !canShareRdata(msg.Extra) {
+		return msg.Copy()
+	}
+	answer, ok1 := cloneRRs(msg.Answer)
+	ns, ok2 := cloneRRs(msg.Ns)
+	extra, ok3 := cloneRRs(msg.Extra)
+	if !ok1 || !ok2 || !ok3 {
+		return msg.Copy()
+	}
+	out := new(D.Msg)
+	out.MsgHdr = msg.MsgHdr
+	out.Compress = msg.Compress
+	if n := len(msg.Question); n > 0 {
+		out.Question = make([]D.Question, n)
+		copy(out.Question, msg.Question)
+	}
+	out.Answer = answer
+	out.Ns = ns
+	out.Extra = extra
+	return out
+}
+
+func dropOPT(extra []D.RR) []D.RR {
+	if len(extra) == 0 {
+		return extra
+	}
+	n := 0
+	for _, rr := range extra {
+		if rr != nil && rr.Header().Rrtype == D.TypeOPT {
+			continue
+		}
+		extra[n] = rr
+		n++
+	}
+	if n == 0 {
+		return nil
+	}
+	return extra[:n]
 }
 
 // getMsgFromCache returns a cached dns message if it exists, otherwise returns nil.
 // the returned msg is a copy of the original msg, so it can be modified without affecting the original msg.
 func getMsgFromCache(c dnsCache, q D.Question) (*D.Msg, time.Time, bool) {
-	msg, expireTime, hit := c.GetWithExpire(q.String())
+	msg, expireTime, hit := c.GetWithExpire(cacheKey(q))
 	if msg != nil {
-		msg = msg.Copy() // never modify the original msg
+		msg = cloneMsg(msg) // never modify the original msg
 	}
 	return msg, expireTime, hit
 }
@@ -60,16 +252,16 @@ func getMsgFromCache(c dnsCache, q D.Question) (*D.Msg, time.Time, bool) {
 func putMsgToCache(c dnsCache, q D.Question, msg *D.Msg) {
 	// skip dns cache for acme challenge
 	if q.Qtype == D.TypeTXT && strings.HasPrefix(q.Name, "_acme-challenge.") {
-		log.Debugln("[DNS] dns cache ignored because of acme challenge for: %s", q.Name)
+		if log.Enabled(log.DEBUG) {
+			log.Debugln("[DNS] dns cache ignored because of acme challenge for: %s", q.Name)
+		}
 		return
 	}
 
-	msg = msg.Copy() // never modify the original msg
+	msg = cloneMsg(msg) // never modify the original msg
 
 	// OPT RRs MUST NOT be cached, forwarded, or stored in or loaded from master files.
-	msg.Extra = lo.Filter(msg.Extra, func(rr D.RR, index int) bool {
-		return rr.Header().Rrtype != D.TypeOPT
-	})
+	msg.Extra = dropOPT(msg.Extra)
 
 	var ttl uint32
 	if msg.Rcode == D.RcodeServerFailure {
@@ -77,13 +269,13 @@ func putMsgToCache(c dnsCache, q D.Question, msg *D.Msg) {
 		// If it does so it MUST NOT cache it for longer than five (5) minutes [...]
 		ttl = serverFailureCacheTTL
 	} else {
-		ttl = minimalTTL(lo.Concat(msg.Answer, msg.Ns, msg.Extra))
+		ttl = minTTLAll(msg.Answer, msg.Ns, msg.Extra)
 	}
 	if ttl == 0 {
 		return
 	}
 
-	c.SetWithExpire(q.String(), msg, time.Now().Add(time.Duration(ttl)*time.Second))
+	c.SetWithExpire(cacheKey(q), msg, time.Now().Add(time.Duration(ttl)*time.Second))
 }
 
 func setMsgTTL(msg *D.Msg, ttl uint32) {
@@ -280,7 +472,7 @@ func msgToIP(msg *D.Msg) (ips []netip.Addr) {
 
 func msgToDomain(msg *D.Msg) string {
 	if len(msg.Question) > 0 {
-		return strings.TrimRight(msg.Question[0].Name, ".")
+		return trimDots(msg.Question[0].Name)
 	}
 
 	return ""
@@ -373,8 +565,12 @@ func batchExchange(ctx context.Context, clients []dnsClient, m *D.Msg) (msg *D.M
 	cache = true
 	fast, ctx := picker.WithTimeout[*D.Msg](ctx, resolver.DefaultDNSTimeout)
 	defer fast.Close()
-	domain := msgToDomain(m)
-	_, qTypeStr := msgToQtype(m)
+	debug := log.Enabled(log.DEBUG)
+	var domain, qTypeStr string
+	if debug {
+		domain = msgToDomain(m)
+		_, qTypeStr = msgToQtype(m)
+	}
 	for _, client := range clients {
 		if _, isRCodeClient := client.(rcodeClient); isRCodeClient {
 			msg, err = client.ExchangeContext(ctx, m)
@@ -382,7 +578,9 @@ func batchExchange(ctx context.Context, clients []dnsClient, m *D.Msg) (msg *D.M
 		}
 		client := client // shadow define client to ensure the value captured by the closure will not be changed in the next loop
 		fast.Go(func() (*D.Msg, error) {
-			log.Debugln("[DNS] resolve %s %s from %s", domain, qTypeStr, client.Address())
+			if debug {
+				log.Debugln("[DNS] resolve %s %s from %s", domain, qTypeStr, client.Address())
+			}
 			m, err := client.ExchangeContext(ctx, m)
 			if err != nil {
 				return nil, err
@@ -391,7 +589,9 @@ func batchExchange(ctx context.Context, clients []dnsClient, m *D.Msg) (msg *D.M
 				// so we would ignore RCode errors from RCode clients.
 				return nil, errors.New("server failure: " + D.RcodeToString[m.Rcode])
 			}
-			log.Debugln("[DNS] %s --> %s from %s", domain, msgToLogString(m), client.Address())
+			if debug {
+				log.Debugln("[DNS] %s --> %s from %s", domain, msgToLogString(m), client.Address())
+			}
 			return m, nil
 		})
 	}

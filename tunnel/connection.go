@@ -222,6 +222,29 @@ func handleUDPToRemote(packet C.UDPPacket, pc C.PacketConn, addr *net.UDPAddr) e
 	return nil
 }
 
+type udpWriteAddrCache struct {
+	addr     *net.UDPAddr
+	addrPort netip.AddrPort
+}
+
+// resolve returns a *net.UDPAddr for WriteBack. Destination NAT that leaves the
+// WaitReadFrom endpoint unchanged reuses that address, so the per-packet
+// UDPAddr+IP allocation from net.UDPAddrFromAddrPort is skipped in the common
+// identity path. A mapped endpoint is cached for the association.
+func (c *udpWriteAddrCache) resolve(from *net.UDPAddr, restored netip.AddrPort) *net.UDPAddr {
+	if from != nil && from.AddrPort() == restored {
+		if ip, ok := netip.AddrFromSlice(from.IP); ok && !ip.Is4In6() {
+			return from
+		}
+	}
+	if c.addr != nil && c.addrPort == restored {
+		return c.addr
+	}
+	c.addr = net.UDPAddrFromAddrPort(restored)
+	c.addrPort = restored
+	return c.addr
+}
+
 func handleUDPToLocal(writeBack C.WriteBack, pc C.PacketConn, sender C.PacketSender, key C.UDPNatKey, oAddrPort netip.AddrPort) {
 	defer func() {
 		sender.Close()
@@ -229,6 +252,11 @@ func handleUDPToLocal(writeBack C.WriteBack, pc C.PacketConn, sender C.PacketSen
 		closeAllLocalCoon(key)
 		natTable.Delete(key)
 	}()
+
+	var (
+		writeCache   udpWriteAddrCache
+		fallbackAddr *net.UDPAddr
+	)
 
 	for {
 		sender.RefreshReadDeadline(pc)
@@ -239,10 +267,16 @@ func handleUDPToLocal(writeBack C.WriteBack, pc C.PacketConn, sender C.PacketSen
 
 		fromUDPAddr, isUDPAddr := from.(*net.UDPAddr)
 		if !isUDPAddr {
-			fromUDPAddr = net.UDPAddrFromAddrPort(oAddrPort) // oAddrPort was Unmapped
+			if fallbackAddr == nil {
+				fallbackAddr = net.UDPAddrFromAddrPort(oAddrPort) // oAddrPort was Unmapped
+			}
+			fromUDPAddr = fallbackAddr
 			log.Warnln("server return a [%T](%s) which isn't a *net.UDPAddr, force replace to (%s), this may be caused by a wrongly implemented server", from, from, oAddrPort)
 		} else if fromUDPAddr == nil {
-			fromUDPAddr = net.UDPAddrFromAddrPort(oAddrPort) // oAddrPort was Unmapped
+			if fallbackAddr == nil {
+				fallbackAddr = net.UDPAddrFromAddrPort(oAddrPort) // oAddrPort was Unmapped
+			}
+			fromUDPAddr = fallbackAddr
 			log.Warnln("server return a nil *net.UDPAddr, force replace to (%s), this may be caused by a wrongly implemented server", oAddrPort)
 		}
 
@@ -250,9 +284,9 @@ func handleUDPToLocal(writeBack C.WriteBack, pc C.PacketConn, sender C.PacketSen
 
 		// restore DestinationNAT, including the original port when aliases share
 		// one resolved IP but target different services.
-		fromAddrPort = sender.RestoreReadFrom(fromAddrPort)
+		restored := sender.RestoreReadFrom(fromAddrPort)
 
-		_, err = writeBack.WriteBack(data, net.UDPAddrFromAddrPort(fromAddrPort))
+		_, err = writeBack.WriteBack(data, writeCache.resolve(fromUDPAddr, restored))
 		if put != nil {
 			put()
 		}

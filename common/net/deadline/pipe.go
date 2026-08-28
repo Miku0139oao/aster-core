@@ -6,6 +6,7 @@ package deadline
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -14,6 +15,7 @@ type PipeDeadline struct {
 	mu     sync.Mutex // Guards timer and cancel
 	timer  *time.Timer
 	cancel chan struct{} // Must be non-nil
+	cached atomic.Value  // chan struct{}, lock-free Wait() after first Set/Wait
 }
 
 func MakePipeDeadline() PipeDeadline {
@@ -30,42 +32,61 @@ func (d *PipeDeadline) Set(t time.Time) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	ch := d.cancel
 	if d.timer != nil && !d.timer.Stop() {
-		<-d.cancel // Wait for the timer callback to finish and close cancel
+		<-ch // Wait for the timer callback to finish and close cancel
 	}
 	d.timer = nil
 
 	// Time is zero, then there is no deadline.
-	closed := isClosedChan(d.cancel)
+	closed := isClosedChan(ch)
 	if t.IsZero() {
 		if closed {
-			d.cancel = make(chan struct{})
+			ch = make(chan struct{})
+			d.cancel = ch
 		}
+		d.cached.Store(ch)
 		return
 	}
 
 	// Time in the future, setup a timer to cancel in the future.
 	if dur := time.Until(t); dur > 0 {
 		if closed {
-			d.cancel = make(chan struct{})
+			ch = make(chan struct{})
+			d.cancel = ch
 		}
+		d.cached.Store(ch)
 		d.timer = time.AfterFunc(dur, func() {
-			close(d.cancel)
+			close(ch)
 		})
 		return
 	}
 
 	// Time in the past, so close immediately.
 	if !closed {
-		close(d.cancel)
+		close(ch)
 	}
+	d.cached.Store(ch)
 }
 
 // Wait returns a channel that is closed when the deadline is exceeded.
 func (d *PipeDeadline) Wait() chan struct{} {
+	if ch, ok := d.cached.Load().(chan struct{}); ok && ch != nil {
+		return ch
+	}
+	return d.syncWait()
+}
+
+func (d *PipeDeadline) syncWait() chan struct{} {
 	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.cancel
+	ch := d.cancel
+	if ch == nil {
+		ch = make(chan struct{})
+		d.cancel = ch
+	}
+	d.cached.Store(ch)
+	d.mu.Unlock()
+	return ch
 }
 
 func isClosedChan(c <-chan struct{}) bool {

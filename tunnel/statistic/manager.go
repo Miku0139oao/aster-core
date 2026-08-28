@@ -53,6 +53,7 @@ type Manager struct {
 	observer      stdatomic.Pointer[trafficObserverHolder]
 	principalMu   sync.RWMutex
 	principals    map[Principal]int
+	blipMu        sync.Mutex
 }
 
 type Principal struct {
@@ -148,12 +149,16 @@ func (m *Manager) Range(f func(c Tracker) bool) {
 }
 
 func (m *Manager) PushUploaded(size int64) {
-	m.uploadTemp.Add(size)
+	if size <= 0 {
+		return
+	}
 	m.uploadTotal.Add(size)
 }
 
 func (m *Manager) PushDownloaded(size int64) {
-	m.downloadTemp.Add(size)
+	if size <= 0 {
+		return
+	}
 	m.downloadTotal.Add(size)
 }
 
@@ -220,12 +225,14 @@ func (m *Manager) updateMemory() {
 }
 
 func (m *Manager) ResetStatistic() {
-	m.uploadTemp.Store(0)
-	m.uploadBlip.Store(0)
+	m.blipMu.Lock()
 	m.uploadTotal.Store(0)
-	m.downloadTemp.Store(0)
-	m.downloadBlip.Store(0)
 	m.downloadTotal.Store(0)
+	m.uploadTemp.Store(0)
+	m.downloadTemp.Store(0)
+	m.uploadBlip.Store(0)
+	m.downloadBlip.Store(0)
+	m.blipMu.Unlock()
 }
 
 const zeroByteReapInterval = 5 * time.Second
@@ -235,13 +242,31 @@ func (m *Manager) handle() {
 	nextReap := time.Now().Add(zeroByteReapInterval)
 
 	for now := range ticker.C {
-		m.uploadBlip.Store(m.uploadTemp.Swap(0))
-		m.downloadBlip.Store(m.downloadTemp.Swap(0))
+		m.rollBlip()
 		if !now.Before(nextReap) {
 			m.reapIdleZeroByteTCP(now)
 			nextReap = now.Add(zeroByteReapInterval)
 		}
 	}
+}
+
+// rollBlip publishes bytes accumulated since the last tick. PushUploaded only
+// touches the running total, so the hot path is one atomic instead of two; the
+// per-second snapshot is the delta of that total.
+func (m *Manager) rollBlip() {
+	m.blipMu.Lock()
+	m.uploadBlip.Store(blipDelta(&m.uploadTotal, &m.uploadTemp))
+	m.downloadBlip.Store(blipDelta(&m.downloadTotal, &m.downloadTemp))
+	m.blipMu.Unlock()
+}
+
+func blipDelta(total, last *atomic.Int64) int64 {
+	now := total.Load()
+	prev := last.Swap(now)
+	if now >= prev {
+		return now - prev
+	}
+	return now
 }
 
 func (m *Manager) reapIdleZeroByteTCP(now time.Time) int {

@@ -3,11 +3,11 @@ package mixed
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"sync/atomic"
 
 	"github.com/Miku0139oao/aster-core/adapter/inbound"
-	N "github.com/Miku0139oao/aster-core/common/net"
 	"github.com/Miku0139oao/aster-core/component/auth"
 	"github.com/Miku0139oao/aster-core/component/ca"
 	"github.com/Miku0139oao/aster-core/component/ech"
@@ -153,20 +153,43 @@ func NewWithConfig(config LC.AuthServer, lc C.InboundListenConfig, tunnel C.Tunn
 	return ml, nil
 }
 
+type prefixConn struct {
+	net.Conn
+	head byte
+	read bool
+}
+
+func (c *prefixConn) Read(p []byte) (int, error) {
+	if c.read {
+		return c.Conn.Read(p)
+	}
+	if len(p) == 0 {
+		return 0, nil
+	}
+	p[0] = c.head
+	c.read = true
+	if len(p) == 1 {
+		return 1, nil
+	}
+	n, err := c.Conn.Read(p[1:])
+	return 1 + n, err
+}
+
 func handleConn(conn net.Conn, tunnel C.Tunnel, store auth.AuthStore, additions ...inbound.Addition) {
-	bufConn := N.NewBufferedConn(conn)
-	head, err := bufConn.Peek(1)
+	var head [1]byte
+	_, err := io.ReadFull(conn, head[:])
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return
 	}
 
+	prefixed := &prefixConn{Conn: conn, head: head[0]}
 	switch head[0] {
 	case socks4.Version:
-		socks.HandleSocks4(bufConn, tunnel, store, additions...)
+		socks.HandleSocks4(prefixed, tunnel, store, additions...)
 	case socks5.Version:
-		socks.HandleSocks5(bufConn, tunnel, store, additions...)
+		socks.HandleSocks5(prefixed, tunnel, store, additions...)
 	default:
-		http.HandleConn(bufConn, tunnel, store, additions...)
+		http.HandleConn(prefixed, tunnel, store, additions...)
 	}
 }

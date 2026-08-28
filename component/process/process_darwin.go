@@ -110,6 +110,9 @@ func findProcessName(network string, ip netip.Addr, port int) (uint32, string, e
 }
 
 func getExecPathFromPID(pid uint32) (string, error) {
+	if path, ok := lookupPidPath(pid); ok {
+		return path, nil
+	}
 	buf := make([]byte, procpidpathinfosize)
 	_, _, errno := syscall.Syscall6(
 		syscall.SYS_PROC_INFO,
@@ -123,7 +126,9 @@ func getExecPathFromPID(pid uint32) (string, error) {
 		return "", errno
 	}
 
-	return unix.ByteSliceToString(buf), nil
+	path := unix.ByteSliceToString(buf)
+	storePidPath(pid, path)
+	return path, nil
 }
 
 func readNativeUint32(b []byte) uint32 {

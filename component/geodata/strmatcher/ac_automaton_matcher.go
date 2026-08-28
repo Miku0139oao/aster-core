@@ -29,97 +29,46 @@ type ACAutomaton struct {
 }
 
 func newNode() [validCharCount]Edge {
-	var s [validCharCount]Edge
-	for i := range s {
-		s[i] = Edge{
-			edgeType: FailEdge,
-			nextNode: 0,
-		}
-	}
-	return s
+	// Zero value is FailEdge (false) with nextNode 0.
+	return [validCharCount]Edge{}
 }
 
-var char2Index = [...]int{
-	'A':  0,
-	'a':  0,
-	'B':  1,
-	'b':  1,
-	'C':  2,
-	'c':  2,
-	'D':  3,
-	'd':  3,
-	'E':  4,
-	'e':  4,
-	'F':  5,
-	'f':  5,
-	'G':  6,
-	'g':  6,
-	'H':  7,
-	'h':  7,
-	'I':  8,
-	'i':  8,
-	'J':  9,
-	'j':  9,
-	'K':  10,
-	'k':  10,
-	'L':  11,
-	'l':  11,
-	'M':  12,
-	'm':  12,
-	'N':  13,
-	'n':  13,
-	'O':  14,
-	'o':  14,
-	'P':  15,
-	'p':  15,
-	'Q':  16,
-	'q':  16,
-	'R':  17,
-	'r':  17,
-	'S':  18,
-	's':  18,
-	'T':  19,
-	't':  19,
-	'U':  20,
-	'u':  20,
-	'V':  21,
-	'v':  21,
-	'W':  22,
-	'w':  22,
-	'X':  23,
-	'x':  23,
-	'Y':  24,
-	'y':  24,
-	'Z':  25,
-	'z':  25,
-	'!':  26,
-	'$':  27,
-	'&':  28,
-	'\'': 29,
-	'(':  30,
-	')':  31,
-	'*':  32,
-	'+':  33,
-	',':  34,
-	';':  35,
-	'=':  36,
-	':':  37,
-	'%':  38,
-	'-':  39,
-	'.':  40,
-	'_':  41,
-	'~':  42,
-	'0':  43,
-	'1':  44,
-	'2':  45,
-	'3':  46,
-	'4':  47,
-	'5':  48,
-	'6':  49,
-	'7':  50,
-	'8':  51,
-	'9':  52,
-}
+const acInvalid int8 = -1
+
+// acIndex maps a byte to the compact 53-slot alphabet, or acInvalid.
+// A 256-entry table avoids a bounds check and the A/a-vs-zero special case
+// on every character of Match.
+var acIndex = func() [256]int8 {
+	var t [256]int8
+	for i := range t {
+		t[i] = acInvalid
+	}
+	for i := int8(0); i < 26; i++ {
+		t['A'+byte(i)] = i
+		t['a'+byte(i)] = i
+	}
+	t['!'] = 26
+	t['$'] = 27
+	t['&'] = 28
+	t['\''] = 29
+	t['('] = 30
+	t[')'] = 31
+	t['*'] = 32
+	t['+'] = 33
+	t[','] = 34
+	t[';'] = 35
+	t['='] = 36
+	t[':'] = 37
+	t['%'] = 38
+	t['-'] = 39
+	t['.'] = 40
+	t['_'] = 41
+	t['~'] = 42
+	for i := int8(0); i < 10; i++ {
+		t['0'+byte(i)] = 43 + i
+	}
+	return t
+}()
 
 func NewACAutomaton() *ACAutomaton {
 	ac := new(ACAutomaton)
@@ -133,16 +82,11 @@ func NewACAutomaton() *ACAutomaton {
 }
 
 func acCharIndex(char byte) (int, bool) {
-	if int(char) >= len(char2Index) {
+	idx := acIndex[char]
+	if idx < 0 {
 		return 0, false
 	}
-	index := char2Index[char]
-	// The zero value is also the valid A/a index; every other byte mapped to
-	// zero was absent from the compact alphabet and must not alias A.
-	if index == 0 && char != 'A' && char != 'a' {
-		return 0, false
-	}
-	return index, true
+	return int(idx), true
 }
 
 func acPatternSupported(pattern string) bool {
@@ -190,7 +134,7 @@ func (ac *ACAutomaton) Add(domain string, t Type) bool {
 			matchType: Full,
 			exist:     true,
 		}
-		idx := char2Index['.']
+		idx := int(acIndex['.'])
 		if ac.trie[node][idx].nextNode == 0 {
 			ac.count++
 			if len(ac.trie) < ac.count+1 {
@@ -253,16 +197,17 @@ func (ac *ACAutomaton) Match(s string) bool {
 	// 2. the match string is through a fail edge. NOT FULL MATCH
 	// 2.1 Through a fail edge, but there exists a valid node. SUBSTR
 	for i := len(s) - 1; i >= 0; i-- {
-		idx, supported := acCharIndex(s[i])
-		if !supported {
+		idx := acIndex[s[i]]
+		if idx < 0 {
 			// An unsupported byte is a hard boundary for compact-alphabet
 			// patterns. Resetting preserves substring matches on either side.
 			node = 0
 			fullMatch = false
 			continue
 		}
-		fullMatch = fullMatch && ac.trie[node][idx].edgeType
-		node = ac.trie[node][idx].nextNode
+		e := ac.trie[node][idx]
+		fullMatch = fullMatch && e.edgeType
+		node = e.nextNode
 		switch ac.exists[node].matchType {
 		case Substr:
 			return true

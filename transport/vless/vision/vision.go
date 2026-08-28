@@ -28,13 +28,13 @@ var (
 
 func NewConn(conn net.Conn, tlsConn net.Conn, userUUID uuid.UUID) (*Conn, error) {
 	c := &Conn{
-		ExtendedReader:    N.NewExtendedReader(conn),
-		ExtendedWriter:    N.NewExtendedWriter(conn),
-		Conn:              conn,
-		userUUID:          userUUID,
-		packetsToFilter:   8,
-		writeOnceUserUUID: userUUID.Bytes(),
+		ExtendedReader:  N.NewExtendedReader(conn),
+		ExtendedWriter:  N.NewExtendedWriter(conn),
+		Conn:            conn,
+		userUUID:        userUUID,
+		packetsToFilter: 8,
 	}
+	c.writeOnceUserUUID = c.userUUID[:]
 	c.readProcess.Store(true)
 	c.readFilterUUID.Store(true)
 	c.writeFilterApplicationData.Store(true)

@@ -266,7 +266,7 @@ func (s *Service[T]) newConnection(ctx context.Context, conn net.Conn, metadata 
 		if requestFlow == vless.XRV {
 			return E.New(vless.XRV, " flow does not support UDP")
 		}
-		return s.handler.NewPacketConnection(ctx, &serverPacketConn{ExtendedConn: bufio.NewExtendedConn(conn), destination: destination}, metadata)
+		return s.handler.NewPacketConnection(ctx, newServerPacketConn(bufio.NewExtendedConn(conn), destination), metadata)
 	case vless.CommandMux:
 		return vmess.HandleMuxConnection(ctx, conn, metadata, s.handler)
 	default:
@@ -339,7 +339,27 @@ func (c *serverConn) Upstream() any {
 type serverPacketConn struct {
 	N.ExtendedConn
 	destination     M.Socksaddr
+	cachedAddr      net.Addr
 	readWaitOptions N.ReadWaitOptions
+}
+
+func newServerPacketConn(conn N.ExtendedConn, destination M.Socksaddr) *serverPacketConn {
+	c := &serverPacketConn{ExtendedConn: conn, destination: destination}
+	if destination.IsFqdn() {
+		c.cachedAddr = destination
+	} else {
+		c.cachedAddr = destination.UDPAddr()
+	}
+	return c
+}
+
+func readPacketLength(r io.Reader) (uint16, error) {
+	var header [2]byte
+	_, err := io.ReadFull(r, header[:])
+	if err != nil {
+		return 0, err
+	}
+	return binary.BigEndian.Uint16(header[:]), nil
 }
 
 func (c *serverPacketConn) InitializeReadWaiter(options N.ReadWaitOptions) (needCopy bool) {
@@ -348,8 +368,7 @@ func (c *serverPacketConn) InitializeReadWaiter(options N.ReadWaitOptions) (need
 }
 
 func (c *serverPacketConn) WaitReadPacket() (buffer *buf.Buffer, destination M.Socksaddr, err error) {
-	var packetLen uint16
-	err = binary.Read(c.ExtendedConn, binary.BigEndian, &packetLen)
+	packetLen, err := readPacketLength(c.ExtendedConn)
 	if err != nil {
 		return
 	}
@@ -367,8 +386,7 @@ func (c *serverPacketConn) WaitReadPacket() (buffer *buf.Buffer, destination M.S
 }
 
 func (c *serverPacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
-	var packetLen uint16
-	err = binary.Read(c.ExtendedConn, binary.BigEndian, &packetLen)
+	packetLen, err := readPacketLength(c.ExtendedConn)
 	if err != nil {
 		return
 	}
@@ -380,25 +398,21 @@ func (c *serverPacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) 
 	if err != nil {
 		return
 	}
-	if c.destination.IsFqdn() {
-		addr = c.destination
-	} else {
-		addr = c.destination.UDPAddr()
-	}
+	addr = c.cachedAddr
 	return
 }
 
 func (c *serverPacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
-	err = binary.Write(c.ExtendedConn, binary.BigEndian, uint16(len(p)))
-	if err != nil {
+	var header [2]byte
+	binary.BigEndian.PutUint16(header[:], uint16(len(p)))
+	if _, err = c.ExtendedConn.Write(header[:]); err != nil {
 		return
 	}
 	return c.ExtendedConn.Write(p)
 }
 
 func (c *serverPacketConn) ReadPacket(buffer *buf.Buffer) (destination M.Socksaddr, err error) {
-	var packetLen uint16
-	err = binary.Read(c.ExtendedConn, binary.BigEndian, &packetLen)
+	packetLen, err := readPacketLength(c.ExtendedConn)
 	if err != nil {
 		return
 	}

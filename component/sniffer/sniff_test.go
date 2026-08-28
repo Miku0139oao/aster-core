@@ -412,14 +412,15 @@ func TestQUICPacketNumbers(t *testing.T) {
 
 	t.Run("uses reconstructed packet number in nonce", func(t *testing.T) {
 		destConnID := []byte("initial dcid")
-		labels, err := expandLabels(destConnID, &quicV1)
+		key, err := newQUICInitialKey(destConnID, &quicV1)
 		require.NoError(t, err)
 		plaintext := []byte("initial payload")
-		packet, packetNumberOffset := makeProtectedQUICInitialPacket(t, destConnID, labels, 256, 1, plaintext)
+		packet, packetNumberOffset := makeProtectedQUICInitialPacket(t, destConnID, &key, 256, 1, plaintext)
 
 		cache := buf.NewPacket()
 		defer cache.Release()
-		decrypted, packetNumber, err := decryptQUICInitialPacket(packet, packetNumberOffset, len(packet), labels, 127, cache)
+		key.largestPacketNumber = 127
+		decrypted, packetNumber, err := decryptQUICInitialPacket(packet, packetNumberOffset, len(packet), &key, cache)
 		require.NoError(t, err)
 		assert.Equal(t, int64(256), packetNumber)
 		assert.Equal(t, plaintext, decrypted)
@@ -440,7 +441,7 @@ func TestQUICPacketNumbers(t *testing.T) {
 		cache := buf.NewPacket()
 		defer cache.Release()
 		plaintext := []byte("retry payload")
-		packet, packetNumberOffset := makeProtectedQUICInitialPacket(t, retryDestConnID, retryKey.labels, 256, 1, plaintext)
+		packet, packetNumberOffset := makeProtectedQUICInitialPacket(t, retryDestConnID, &retryKey, 256, 1, plaintext)
 		decrypted, err := packetSender.decryptQUICInitialPacket(packet, packetNumberOffset, len(packet), retryDestConnID, &quicV1, cache)
 		require.NoError(t, err)
 		assert.Equal(t, plaintext, decrypted)
@@ -448,7 +449,7 @@ func TestQUICPacketNumbers(t *testing.T) {
 		assert.Equal(t, int64(256), packetSender.initialKeys[1].largestPacketNumber)
 
 		plaintext = []byte("changed dcid payload")
-		packet, packetNumberOffset = makeProtectedQUICInitialPacket(t, originalDestConnID, retryKey.labels, 257, 1, plaintext)
+		packet, packetNumberOffset = makeProtectedQUICInitialPacket(t, originalDestConnID, &retryKey, 257, 1, plaintext)
 		decrypted, err = packetSender.decryptQUICInitialPacket(packet, packetNumberOffset, len(packet), originalDestConnID, &quicV1, cache)
 		require.NoError(t, err)
 		assert.Equal(t, plaintext, decrypted)
@@ -466,16 +467,16 @@ func TestQUICPacketNumbers(t *testing.T) {
 		}
 		t.Cleanup(packetSender.close)
 
-		delayed, _ := makeProtectedQUICInitialPacket(t, destConnID, initialKey.labels, 0, 1, []byte{framePing, framePadding, framePadding})
+		delayed, _ := makeProtectedQUICInitialPacket(t, destConnID, &initialKey, 0, 1, []byte{framePing, framePadding, framePadding})
 		require.NoError(t, packetSender.readQUICData(delayed))
-		assert.False(t, packetSender.closed)
+		assert.False(t, packetSender.closed.Load())
 
 		clientHello := makeTestClientHello("example.com", 0)
 		cryptoFrame := []byte{frameCrypto}
 		cryptoFrame = quicvarint.Append(cryptoFrame, 0)
 		cryptoFrame = quicvarint.Append(cryptoFrame, uint64(len(clientHello)))
 		cryptoFrame = append(cryptoFrame, clientHello...)
-		next, _ := makeProtectedQUICInitialPacket(t, destConnID, initialKey.labels, 201, 1, cryptoFrame)
+		next, _ := makeProtectedQUICInitialPacket(t, destConnID, &initialKey, 201, 1, cryptoFrame)
 		require.NoError(t, packetSender.readQUICData(next))
 		assert.Equal(t, "example.com", packetSender.result)
 	})
@@ -490,7 +491,7 @@ func TestQUICFrames(t *testing.T) {
 	})
 }
 
-func makeProtectedQUICInitialPacket(t *testing.T, destConnID []byte, labels quicLabels, packetNumber int64, packetNumberLength int, plaintext []byte) ([]byte, int) {
+func makeProtectedQUICInitialPacket(t *testing.T, destConnID []byte, key *quicInitialKey, packetNumber int64, packetNumberLength int, plaintext []byte) ([]byte, int) {
 	t.Helper()
 
 	header := []byte{0xc0 | byte(packetNumberLength-1), 0, 0, 0, 1, byte(len(destConnID))}
@@ -502,17 +503,17 @@ func makeProtectedQUICInitialPacket(t *testing.T, destConnID []byte, labels quic
 		header = append(header, byte(uint64(packetNumber)>>shift))
 	}
 
-	block, err := aes.NewCipher(labels.key)
+	block, err := aes.NewCipher(key.key[:])
 	require.NoError(t, err)
 	aead, err := cipher.NewGCM(block)
 	require.NoError(t, err)
-	nonce := bytes.Clone(labels.iv)
+	nonce := bytes.Clone(key.iv[:])
 	for i := 0; i < 8; i++ {
 		nonce[len(nonce)-1-i] ^= byte(uint64(packetNumber) >> (8 * i))
 	}
 	packet := aead.Seal(bytes.Clone(header), nonce, plaintext, header)
 
-	headerProtection, err := aes.NewCipher(labels.hp)
+	headerProtection, err := aes.NewCipher(key.hp[:])
 	require.NoError(t, err)
 	mask := make([]byte, headerProtection.BlockSize())
 	headerProtection.Encrypt(mask, packet[packetNumberOffset+4:packetNumberOffset+4+headerProtection.BlockSize()])
@@ -1050,4 +1051,74 @@ func makeTestHTTP2Input(frames ...[]byte) []byte {
 		input = append(input, frame...)
 	}
 	return input
+}
+
+func TestParseHost(t *testing.T) {
+	tests := []struct {
+		in  string
+		out string
+		err bool
+	}{
+		{in: "www.example.com", out: "www.example.com"},
+		{in: "EXAMPLE.COM", out: "example.com"},
+		{in: "example.com.", out: "example.com"},
+		{in: "example.com:80", out: "example.com"},
+		{in: "EXAMPLE.COM:443", out: "example.com"},
+		{in: "1.2.3.4", err: true},
+		{in: "1.2.3.4:80", err: true},
+		{in: "[::1]", err: true},
+		{in: "[::1]:443", err: true},
+		{in: "", err: true},
+		{in: ".", err: true},
+	}
+	for _, test := range tests {
+		t.Run(test.in, func(t *testing.T) {
+			got, err := parseHost([]byte(test.in))
+			if test.err {
+				assert.Error(t, err)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, test.out, got)
+		})
+	}
+}
+
+func TestHTTP2DecoderReuse(t *testing.T) {
+	s, err := NewHTTPSniffer(SnifferConfig{})
+	require.NoError(t, err)
+	for _, domain := range []string{"first.example.com", "second.example.net"} {
+		headerBlock := append([]byte{0x41, byte(len(domain))}, domain...)
+		input := makeTestHTTP2Input(
+			makeTestHTTP2Frame(h2FrameHeaders, h2FlagEndHeaders, 1, headerBlock),
+		)
+		got, err := s.SniffData(input)
+		require.NoError(t, err, domain)
+		assert.Equal(t, domain, got)
+	}
+}
+
+func TestHTTP2DecoderPoolDoesNotLeakDynamicTable(t *testing.T) {
+	s, err := NewHTTPSniffer(SnifferConfig{})
+	require.NoError(t, err)
+
+	domain := "first.example.com"
+	// 0x41 = literal with incremental indexing, name index 1 (:authority).
+	// A successful sniff must not leave that entry in a pooled decoder.
+	headerBlock := append([]byte{0x41, byte(len(domain))}, domain...)
+	input := makeTestHTTP2Input(
+		makeTestHTTP2Frame(h2FrameHeaders, h2FlagEndHeaders, 1, headerBlock),
+	)
+	got, err := s.SniffData(input)
+	require.NoError(t, err)
+	assert.Equal(t, domain, got)
+
+	// Indexed representation of static-table length 61 + first dynamic entry = 62.
+	// 0x80 | 62 = 0xbe. A leaked table would emit first.example.com again.
+	leaked := makeTestHTTP2Input(
+		makeTestHTTP2Frame(h2FrameHeaders, h2FlagEndHeaders, 1, []byte{0xbe}),
+	)
+	got, err = s.SniffData(leaked)
+	assert.Error(t, err)
+	assert.Empty(t, got)
 }

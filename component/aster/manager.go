@@ -51,12 +51,18 @@ type trafficCounter struct {
 	download   atomic.Int64
 }
 
+type runtimeUser struct {
+	revision int64
+	user     User
+}
+
 type runtimeState struct {
 	secret        []byte
 	publicBaseURL string
 	storePath     string
 	managed       map[string]struct{}
 	traffic       map[trafficKey]*trafficCounter
+	users         map[string]*runtimeUser
 	subscriptions map[string]string
 	recorders     atomic.Uint64
 	drained       chan struct{}
@@ -670,6 +676,7 @@ func newRuntimeState() *runtimeState {
 	return &runtimeState{
 		managed:       make(map[string]struct{}),
 		traffic:       make(map[trafficKey]*trafficCounter),
+		users:         make(map[string]*runtimeUser),
 		subscriptions: make(map[string]string),
 		drained:       make(chan struct{}),
 	}
@@ -687,6 +694,7 @@ func buildRuntimeState(config *Config, storePath string, store *Store, previous 
 		runtime.managed[name] = struct{}{}
 	}
 	for inbound, state := range store.Listeners {
+		_, managed := runtime.managed[inbound]
 		for _, user := range state.Users {
 			key := trafficKey{inbound: inbound, userID: user.ID}
 			var counter *trafficCounter
@@ -699,6 +707,14 @@ func buildRuntimeState(config *Config, storePath string, store *Store, previous 
 				counter.download.Store(user.DownloadBytes)
 			}
 			runtime.traffic[key] = counter
+			if managed {
+				copied := *user
+				if counter.generation == copied.TrafficGeneration {
+					copied.UploadBytes = counter.upload.Load()
+					copied.DownloadBytes = counter.download.Load()
+				}
+				runtime.users[user.ID] = &runtimeUser{revision: state.Revision, user: copied}
+			}
 		}
 	}
 	for userID, token := range store.Subscriptions {

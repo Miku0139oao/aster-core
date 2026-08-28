@@ -7,7 +7,6 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/Miku0139oao/aster-core/common/utils"
 	"github.com/Miku0139oao/aster-core/component/trie"
 
 	"github.com/metacubex/randv2"
@@ -55,12 +54,54 @@ type Resolver interface {
 	ResetConnection()
 }
 
+func filterIPv4(ips []netip.Addr) []netip.Addr {
+	n := 0
+	for i := range ips {
+		if ips[i].Is4() {
+			n++
+		}
+	}
+	if n == 0 {
+		return nil
+	}
+	if n == len(ips) {
+		return ips
+	}
+	out := make([]netip.Addr, 0, n)
+	for i := range ips {
+		if ips[i].Is4() {
+			out = append(out, ips[i])
+		}
+	}
+	return out
+}
+
+func filterIPv6(ips []netip.Addr) []netip.Addr {
+	n := 0
+	for i := range ips {
+		if ips[i].Is6() {
+			n++
+		}
+	}
+	if n == 0 {
+		return nil
+	}
+	if n == len(ips) {
+		return ips
+	}
+	out := make([]netip.Addr, 0, n)
+	for i := range ips {
+		if ips[i].Is6() {
+			out = append(out, ips[i])
+		}
+	}
+	return out
+}
+
 // LookupIPv4WithResolver same as LookupIPv4, but with a resolver
 func LookupIPv4WithResolver(ctx context.Context, host string, r Resolver) ([]netip.Addr, error) {
 	if node, ok := DefaultHosts.Search(host, false); ok {
-		if addrs := utils.Filter(node.IPs, func(ip netip.Addr) bool {
-			return ip.Is4()
-		}); len(addrs) > 0 {
+		if addrs := filterIPv4(node.IPs); len(addrs) > 0 {
 			return addrs, nil
 		}
 	}
@@ -109,9 +150,7 @@ func LookupIPv6WithResolver(ctx context.Context, host string, r Resolver) ([]net
 	}
 
 	if node, ok := DefaultHosts.Search(host, false); ok {
-		if addrs := utils.Filter(node.IPs, func(ip netip.Addr) bool {
-			return ip.Is6()
-		}); len(addrs) > 0 {
+		if addrs := filterIPv6(node.IPs); len(addrs) > 0 {
 			return addrs, nil
 		}
 	}

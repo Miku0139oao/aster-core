@@ -47,7 +47,9 @@ func ApplyPadding(buffer *buf.Buffer, command byte, userUUID *[]byte, paddingTLS
 	for i := range padding {
 		padding[i] = 0
 	}
-	log.Debugln("XTLS Vision write padding: command=%d, payloadLen=%d, paddingLen=%d", command, contentLen, paddingLen)
+	if log.Enabled(log.DEBUG) {
+		log.Debugln("XTLS Vision write padding: command=%d, payloadLen=%d, paddingLen=%d", command, contentLen, paddingLen)
+	}
 }
 
 const xrayBufSize = 8192

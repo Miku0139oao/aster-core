@@ -27,3 +27,36 @@ func TestApplyPaddingClearsReusedBackingMemory(t *testing.T) {
 		}
 	}
 }
+
+func resetVisionPayload(buffer *buf.Buffer, payload []byte) {
+	buffer.Resize(PaddingHeaderLen, 0)
+	if _, err := buffer.Write(payload); err != nil {
+		panic(err)
+	}
+}
+
+func BenchmarkApplyPaddingTLS(b *testing.B) {
+	payload := make([]byte, 100)
+	buffer := buf.NewSize(2048)
+	defer buffer.Release()
+	resetVisionPayload(buffer, payload)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		resetVisionPayload(buffer, payload)
+		ApplyPadding(buffer, commandPaddingContinue, nil, true)
+	}
+}
+
+func BenchmarkReshapeBufferSmall(b *testing.B) {
+	payload := make([]byte, 512)
+	buffer := buf.NewSize(2048)
+	defer buffer.Release()
+	resetVisionPayload(buffer, payload)
+	vc := &Conn{}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = vc.ReshapeBuffer(buffer)
+	}
+}

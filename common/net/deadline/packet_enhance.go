@@ -4,6 +4,7 @@ import (
 	"net"
 	"os"
 	"runtime"
+	"sync"
 
 	"github.com/Miku0139oao/aster-core/common/net/packet"
 )
@@ -26,6 +27,22 @@ type enhanceReadResult struct {
 	err  error
 }
 
+var enhanceReadResultPool = sync.Pool{
+	New: func() any { return new(enhanceReadResult) },
+}
+
+func acquireEnhanceReadResult() *enhanceReadResult {
+	return enhanceReadResultPool.Get().(*enhanceReadResult)
+}
+
+func releaseEnhanceReadResult(result *enhanceReadResult) {
+	result.data = nil
+	result.put = nil
+	result.addr = nil
+	result.err = nil
+	enhanceReadResultPool.Put(result)
+}
+
 type enhancePacketConn struct {
 	netPacketConn     *NetPacketConn
 	enhancePacketConn packet.EnhancePacketConn
@@ -42,6 +59,7 @@ FOR:
 					put = result.put
 					addr = result.addr
 					err = result.err
+					releaseEnhanceReadResult(result)
 					c.netPacketConn.resultCh <- nil // finish cache read
 					return
 				}
@@ -74,7 +92,7 @@ FOR:
 
 func (c *enhancePacketConn) pipeWaitReadFrom() {
 	data, put, addr, err := c.enhancePacketConn.WaitReadFrom()
-	result := &enhanceReadResult{}
+	result := acquireEnhanceReadResult()
 	result.data = data
 	result.put = put
 	result.addr = addr

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 
 	"github.com/klauspost/compress/zstd"
 )
@@ -16,6 +17,7 @@ const (
 	maxMRSDecodedBytes  = int64(64 << 20)
 	maxMRSReservedBytes = int64(1 << 20)
 	maxMRSRuleCount     = int64(1 << 24)
+	mrsHeaderSize       = 4 + 1 + 8 + 8
 )
 
 var errMRSDecodedTooLarge = errors.New("decoded MRS exceeds size limit")
@@ -42,80 +44,96 @@ func (r *boundedMRSReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-func rulesMrsParse(buf []byte, strategy ruleStrategy) (ruleStrategy, error) {
-	if _strategy, ok := strategy.(mrsRuleStrategy); ok {
-		decoder, err := zstd.NewReader(
-			bytes.NewReader(buf),
+var (
+	mrsDecoderOnce sync.Once
+	mrsDecoder     *zstd.Decoder
+	mrsDecoderErr  error
+	mrsDecodedPool = sync.Pool{New: func() any {
+		b := make([]byte, 0, 64<<10)
+		return &b
+	}}
+)
+
+func getMRSDecoder() (*zstd.Decoder, error) {
+	mrsDecoderOnce.Do(func() {
+		mrsDecoder, mrsDecoderErr = zstd.NewReader(nil,
 			zstd.WithDecoderConcurrency(1),
 			zstd.WithDecoderLowmem(true),
 			zstd.WithDecoderMaxMemory(uint64(maxMRSDecodedBytes)),
 			zstd.WithDecoderMaxWindow(uint64(maxMRSDecodedBytes)),
-			zstd.WithDecodeBuffersBelow(0),
 		)
-		if err != nil {
-			return nil, err
-		}
-		defer decoder.Close()
-		reader := &boundedMRSReader{reader: decoder, remaining: maxMRSDecodedBytes}
+	})
+	return mrsDecoder, mrsDecoderErr
+}
 
-		// header
-		var header [4]byte
-		_, err = io.ReadFull(reader, header[:])
-		if err != nil {
-			return nil, err
-		}
-		if header != MrsMagicBytes {
-			return nil, fmt.Errorf("invalid MrsMagic bytes")
-		}
+func recycleMRSDecoded(slot *[]byte, decoded []byte) {
+	if slot == nil {
+		return
+	}
+	buf := decoded
+	if cap(buf) == 0 || cap(buf) > int(maxMRSDecodedBytes) {
+		buf = *slot
+	}
+	if cap(buf) == 0 || cap(buf) > int(maxMRSDecodedBytes) {
+		buf = make([]byte, 0, 64<<10)
+	}
+	*slot = buf[:0]
+	mrsDecodedPool.Put(slot)
+}
 
-		// behavior
-		var _behavior [1]byte
-		_, err = io.ReadFull(reader, _behavior[:])
-		if err != nil {
-			return nil, err
-		}
-		if _behavior[0] != strategy.Behavior().Byte() {
-			return nil, fmt.Errorf("invalid behavior")
-		}
-
-		// count
-		var count int64
-		err = binary.Read(reader, binary.BigEndian, &count)
-		if err != nil {
-			return nil, err
-		}
-
-		if count < 0 || count > maxMRSRuleCount {
-			return nil, fmt.Errorf("MRS rule count %d is outside 0..%d", count, maxMRSRuleCount)
-		}
-
-		// extra (reserved for future use). Skip it without allocating based on
-		// untrusted input, and keep it within the decoded-document budget.
-		var length int64
-		err = binary.Read(reader, binary.BigEndian, &length)
-		if err != nil {
-			return nil, err
-		}
-		if length < 0 || length > maxMRSReservedBytes {
-			return nil, fmt.Errorf("MRS reserved length %d is outside 0..%d", length, maxMRSReservedBytes)
-		}
-		if length > 0 {
-			if _, err = io.CopyN(io.Discard, reader, length); err != nil {
-				return nil, err
-			}
-		}
-
-		if err = _strategy.FromMrs(reader, int(count)); err != nil {
-			return nil, err
-		}
-		var trailing [1]byte
-		if _, err = io.ReadFull(reader, trailing[:]); err == nil {
-			return nil, errors.New("MRS contains trailing data")
-		} else if !errors.Is(err, io.EOF) {
-			return nil, err
-		}
-		return strategy, nil
-	} else {
+func rulesMrsParse(buf []byte, strategy ruleStrategy) (ruleStrategy, error) {
+	_strategy, ok := strategy.(mrsRuleStrategy)
+	if !ok {
 		return nil, ErrInvalidFormat
 	}
+	decoder, err := getMRSDecoder()
+	if err != nil {
+		return nil, err
+	}
+	slot := mrsDecodedPool.Get().(*[]byte)
+	decoded, err := decoder.DecodeAll(buf, (*slot)[:0])
+	if err != nil {
+		recycleMRSDecoded(slot, decoded)
+		if errors.Is(err, zstd.ErrDecoderSizeExceeded) {
+			return nil, errMRSDecodedTooLarge
+		}
+		return nil, err
+	}
+	defer recycleMRSDecoded(slot, decoded)
+	return parseMRSDecoded(decoded, _strategy)
+}
+
+func parseMRSDecoded(decoded []byte, strategy mrsRuleStrategy) (ruleStrategy, error) {
+	if len(decoded) < mrsHeaderSize {
+		return nil, io.ErrUnexpectedEOF
+	}
+	if !bytes.Equal(decoded[:4], MrsMagicBytes[:]) {
+		return nil, fmt.Errorf("invalid MrsMagic bytes")
+	}
+	if decoded[4] != strategy.Behavior().Byte() {
+		return nil, fmt.Errorf("invalid behavior")
+	}
+	count := int64(binary.BigEndian.Uint64(decoded[5:13]))
+	if count < 0 || count > maxMRSRuleCount {
+		return nil, fmt.Errorf("MRS rule count %d is outside 0..%d", count, maxMRSRuleCount)
+	}
+	length := int64(binary.BigEndian.Uint64(decoded[13:21]))
+	if length < 0 || length > maxMRSReservedBytes {
+		return nil, fmt.Errorf("MRS reserved length %d is outside 0..%d", length, maxMRSReservedBytes)
+	}
+	body := decoded[mrsHeaderSize:]
+	if length > 0 {
+		if int64(len(body)) < length {
+			return nil, io.ErrUnexpectedEOF
+		}
+		body = body[length:]
+	}
+	reader := bytes.NewReader(body)
+	if err := strategy.FromMrs(reader, int(count)); err != nil {
+		return nil, err
+	}
+	if reader.Len() != 0 {
+		return nil, errors.New("MRS contains trailing data")
+	}
+	return strategy, nil
 }

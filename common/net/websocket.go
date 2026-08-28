@@ -5,7 +5,15 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"math/bits"
+	"unsafe"
 )
+
+// nativeLittleEndian is true on amd64/arm64/386 and most OpenWrt targets.
+// The word-XOR fast path is only valid on little-endian machines.
+var nativeLittleEndian = func() bool {
+	x := uint16(1)
+	return *(*byte)(unsafe.Pointer(&x)) == 1
+}()
 
 // kanged from https://github.com/nhooyr/websocket/blob/master/frame.go
 // License: MIT
@@ -22,6 +30,48 @@ import (
 //
 // See https://github.com/golang/go/issues/31586
 func MaskWebSocket(key uint32, b []byte) uint32 {
+	// Word XOR after 8-byte alignment beats encoding/binary on data-sized
+	// frames. Tiny control frames stay on the generic path to avoid the
+	// alignment prologue. Payload in WriteBuffer is typically offset by
+	// FrontHeadroom (14), so the aligned path is the real WS data plane.
+	if nativeLittleEndian && len(b) >= 32 {
+		return maskWebSocketAligned(key, b)
+	}
+	return maskWebSocketGeneric(key, b)
+}
+
+func maskWebSocketAligned(key uint32, b []byte) uint32 {
+	for len(b) > 0 && uintptr(unsafe.Pointer(unsafe.SliceData(b)))&7 != 0 {
+		b[0] ^= byte(key)
+		key = bits.RotateLeft32(key, -8)
+		b = b[1:]
+	}
+	if len(b) >= 8 {
+		key64 := uint64(key)<<32 | uint64(key)
+		p := unsafe.Pointer(unsafe.SliceData(b))
+		n := len(b)
+		i := 0
+		for n-i >= 64 {
+			*(*uint64)(unsafe.Add(p, i)) ^= key64
+			*(*uint64)(unsafe.Add(p, i+8)) ^= key64
+			*(*uint64)(unsafe.Add(p, i+16)) ^= key64
+			*(*uint64)(unsafe.Add(p, i+24)) ^= key64
+			*(*uint64)(unsafe.Add(p, i+32)) ^= key64
+			*(*uint64)(unsafe.Add(p, i+40)) ^= key64
+			*(*uint64)(unsafe.Add(p, i+48)) ^= key64
+			*(*uint64)(unsafe.Add(p, i+56)) ^= key64
+			i += 64
+		}
+		for n-i >= 8 {
+			*(*uint64)(unsafe.Add(p, i)) ^= key64
+			i += 8
+		}
+		b = b[i:]
+	}
+	return maskWebSocketGeneric(key, b)
+}
+
+func maskWebSocketGeneric(key uint32, b []byte) uint32 {
 	if len(b) >= 8 {
 		key64 := uint64(key)<<32 | uint64(key)
 

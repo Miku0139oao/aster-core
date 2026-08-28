@@ -111,3 +111,24 @@ func TestIpv4InIpv6(t *testing.T) {
 	// Boundary testing
 	assert.NoError(t, trie.AddIpCidrForString("::ffff:198.18.5.138/128"))
 }
+
+func BenchmarkIpCidrTrieIsContain(b *testing.B) {
+	trie := NewIpCidrTrie()
+	for i := 0; i < 256; i++ {
+		cidr := net.IPv4(10, byte(i), 0, 0).String() + "/16"
+		if err := trie.AddIpCidrForString(cidr); err != nil {
+			b.Fatal(err)
+		}
+	}
+	hit := net.IPv4(10, 42, 1, 1).To4()
+	miss := net.IPv4(11, 0, 0, 1).To4()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if i&1 == 0 {
+			_ = trie.IsContain(hit)
+		} else {
+			_ = trie.IsContain(miss)
+		}
+	}
+}

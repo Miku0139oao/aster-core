@@ -115,6 +115,14 @@ type tcpTracker struct {
 	portalOffset   int
 
 	pushToManager bool `json:"-"`
+
+	// Cached UnwrapReader/UnwrapWriter results. Relay unwraps the counter layer
+	// when starting a copy; a wrapper plus CountFunc slice used to be 3 allocs.
+	unwrapOnce    sync.Once
+	readCounts    [1]N.CountFunc
+	writeCounts   [1]N.CountFunc
+	limitedReader io.Reader
+	limitedWriter io.Writer
 }
 
 func (tt *tcpTracker) ID() string {
@@ -126,6 +134,9 @@ func (tt *tcpTracker) Info() *TrackerInfo {
 }
 
 func (tt *tcpTracker) pushDownloaded(download int64) {
+	if download <= 0 {
+		return
+	}
 	if tt.pushToManager {
 		tt.manager.PushDownloaded(download)
 		tt.principal.reportDownload(tt.manager, download)
@@ -134,6 +145,9 @@ func (tt *tcpTracker) pushDownloaded(download int64) {
 }
 
 func (tt *tcpTracker) pushUploaded(upload int64) {
+	if upload <= 0 {
+		return
+	}
 	if tt.pushToManager {
 		tt.manager.PushUploaded(upload)
 		tt.principal.reportUpload(tt.manager, upload)
@@ -141,17 +155,46 @@ func (tt *tcpTracker) pushUploaded(upload int64) {
 	tt.UploadTotal.Add(upload)
 }
 
+func (tt *tcpTracker) countDownload(n int64) {
+	tt.traffic.Record(trafficControl.Download, n)
+	tt.pushDownloaded(n)
+}
+
+func (tt *tcpTracker) countUpload(n int64) {
+	tt.traffic.Record(trafficControl.Upload, n)
+	tt.pushUploaded(n)
+}
+
+func (tt *tcpTracker) ensureUnwrap() {
+	tt.unwrapOnce.Do(func() {
+		tt.readCounts[0] = tt.countDownload
+		tt.writeCounts[0] = tt.countUpload
+		if tt.traffic == nil {
+			return
+		}
+		reader := io.Reader(tt.Conn)
+		writer := io.Writer(tt.Conn)
+		if tt.portalResponse != nil {
+			reader = tt
+			writer = io.Discard
+		}
+		tt.limitedReader = &controlledReader{reader: reader, session: tt.traffic, ctx: tt.ctx}
+		tt.limitedWriter = &controlledWriter{writer: writer, session: tt.traffic, ctx: tt.ctx}
+	})
+}
+
 func (tt *tcpTracker) Read(b []byte) (int, error) {
 	if tt.portalResponse != nil {
 		return tt.readPortal(b)
 	}
 	n, err := tt.Conn.Read(b)
-	download := int64(n)
-	if waitErr := tt.traffic.Wait(tt.ctx, trafficControl.Download, n); waitErr != nil && err == nil {
-		err = waitErr
+	if traffic := tt.traffic; traffic != nil {
+		if waitErr := traffic.Wait(tt.ctx, trafficControl.Download, n); waitErr != nil && err == nil {
+			err = waitErr
+		}
+		traffic.Record(trafficControl.Download, int64(n))
 	}
-	tt.traffic.Record(trafficControl.Download, download)
-	tt.pushDownloaded(download)
+	tt.pushDownloaded(int64(n))
 	return n, err
 }
 
@@ -167,37 +210,40 @@ func (tt *tcpTracker) ReadBuffer(buffer *buf.Buffer) (err error) {
 		return err
 	}
 	err = tt.Conn.ReadBuffer(buffer)
-	download := int64(buffer.Len())
-	if waitErr := tt.traffic.Wait(tt.ctx, trafficControl.Download, buffer.Len()); waitErr != nil && err == nil {
-		err = waitErr
+	if traffic := tt.traffic; traffic != nil {
+		if waitErr := traffic.Wait(tt.ctx, trafficControl.Download, buffer.Len()); waitErr != nil && err == nil {
+			err = waitErr
+		}
+		traffic.Record(trafficControl.Download, int64(buffer.Len()))
 	}
-	tt.traffic.Record(trafficControl.Download, download)
-	tt.pushDownloaded(download)
+	tt.pushDownloaded(int64(buffer.Len()))
 	return
 }
 
 func (tt *tcpTracker) UnwrapReader() (io.Reader, []N.CountFunc) {
-	reader := io.Reader(tt.Conn)
-	if tt.portalResponse != nil {
-		reader = tt
+	tt.ensureUnwrap()
+	if tt.limitedReader != nil {
+		return tt.limitedReader, tt.readCounts[:]
 	}
-	return &controlledReader{reader: reader, session: tt.traffic, ctx: tt.ctx}, []N.CountFunc{func(download int64) {
-		tt.traffic.Record(trafficControl.Download, download)
-		tt.pushDownloaded(download)
-	}}
+	return tt.Conn, tt.readCounts[:]
 }
 
 func (tt *tcpTracker) Write(b []byte) (int, error) {
 	if tt.portalResponse != nil {
 		return len(b), nil
 	}
-	if err := tt.traffic.Wait(tt.ctx, trafficControl.Upload, len(b)); err != nil {
-		return 0, err
+	if traffic := tt.traffic; traffic != nil {
+		if err := traffic.Wait(tt.ctx, trafficControl.Upload, len(b)); err != nil {
+			return 0, err
+		}
+		n, err := tt.Conn.Write(b)
+		upload := int64(n)
+		traffic.Record(trafficControl.Upload, upload)
+		tt.pushUploaded(upload)
+		return n, err
 	}
 	n, err := tt.Conn.Write(b)
-	upload := int64(n)
-	tt.traffic.Record(trafficControl.Upload, upload)
-	tt.pushUploaded(upload)
+	tt.pushUploaded(int64(n))
 	return n, err
 }
 
@@ -206,31 +252,34 @@ func (tt *tcpTracker) WriteBuffer(buffer *buf.Buffer) (err error) {
 		return nil
 	}
 	upload := int64(buffer.Len())
-	if err = tt.traffic.Wait(tt.ctx, trafficControl.Upload, buffer.Len()); err != nil {
-		return err
+	if traffic := tt.traffic; traffic != nil {
+		if err = traffic.Wait(tt.ctx, trafficControl.Upload, buffer.Len()); err != nil {
+			return err
+		}
 	}
 	err = tt.Conn.WriteBuffer(buffer)
 	if err != nil {
 		return err
 	}
-	tt.traffic.Record(trafficControl.Upload, upload)
+	if traffic := tt.traffic; traffic != nil {
+		traffic.Record(trafficControl.Upload, upload)
+	}
 	tt.pushUploaded(upload)
 	return nil
 }
 
 func (tt *tcpTracker) UnwrapWriter() (io.Writer, []N.CountFunc) {
-	writer := io.Writer(tt.Conn)
-	if tt.portalResponse != nil {
-		writer = io.Discard
+	tt.ensureUnwrap()
+	if tt.limitedWriter != nil {
+		return tt.limitedWriter, tt.writeCounts[:]
 	}
-	return &controlledWriter{writer: writer, session: tt.traffic, ctx: tt.ctx}, []N.CountFunc{func(upload int64) {
-		tt.traffic.Record(trafficControl.Upload, upload)
-		tt.pushUploaded(upload)
-	}}
+	return tt.Conn, tt.writeCounts[:]
 }
 
 func (tt *tcpTracker) Close() error {
-	tt.cancel()
+	if tt.cancel != nil {
+		tt.cancel()
+	}
 	tt.traffic.Close()
 	tt.manager.Leave(tt)
 	if tt.pushToManager {
@@ -245,8 +294,12 @@ func (tt *tcpTracker) Upstream() any {
 
 func NewTCPTracker(conn C.Conn, manager *Manager, metadata *C.Metadata, rule C.Rule, uploadTotal int64, downloadTotal int64, pushToManager bool) *tcpTracker {
 	metadata.RemoteDst = conn.RemoteDestination()
-	ctx, cancel := context.WithCancel(context.Background())
-	traffic := trafficControl.Default.Open(trafficFlow(metadata, rule, conn.Chains()))
+	traffic := openTrafficSession(metadata, rule, conn.Chains())
+	var ctx context.Context
+	var cancel context.CancelFunc
+	if traffic != nil {
+		ctx, cancel = context.WithCancel(context.Background())
+	}
 	portalResponse := trafficControlPortalResponse(traffic, metadata)
 
 	t := &tcpTracker{
@@ -334,6 +387,9 @@ func (ut *udpTracker) Info() *TrackerInfo {
 }
 
 func (ut *udpTracker) pushDownloaded(download int64) {
+	if download <= 0 {
+		return
+	}
 	if ut.pushToManager {
 		ut.manager.PushDownloaded(download)
 		ut.principal.reportDownload(ut.manager, download)
@@ -341,7 +397,23 @@ func (ut *udpTracker) pushDownloaded(download int64) {
 	ut.DownloadTotal.Add(download)
 }
 
+func (ut *udpTracker) pushUploaded(upload int64) {
+	if upload <= 0 {
+		return
+	}
+	if ut.pushToManager {
+		ut.manager.PushUploaded(upload)
+		ut.principal.reportUpload(ut.manager, upload)
+	}
+	ut.UploadTotal.Add(upload)
+}
+
 func (ut *udpTracker) ReadFrom(b []byte) (int, net.Addr, error) {
+	if ut.traffic == nil {
+		n, addr, err := ut.PacketConn.ReadFrom(b)
+		ut.pushDownloaded(int64(n))
+		return n, addr, err
+	}
 	for {
 		n, addr, err := ut.PacketConn.ReadFrom(b)
 		if n > 0 && !ut.traffic.AllowPacket(trafficControl.Download, n) {
@@ -358,6 +430,11 @@ func (ut *udpTracker) ReadFrom(b []byte) (int, net.Addr, error) {
 }
 
 func (ut *udpTracker) WaitReadFrom() (data []byte, put func(), addr net.Addr, err error) {
+	if ut.traffic == nil {
+		data, put, addr, err = ut.PacketConn.WaitReadFrom()
+		ut.pushDownloaded(int64(len(data)))
+		return
+	}
 	for {
 		data, put, addr, err = ut.PacketConn.WaitReadFrom()
 		if len(data) > 0 && !ut.traffic.AllowPacket(trafficControl.Download, len(data)) {
@@ -377,17 +454,15 @@ func (ut *udpTracker) WaitReadFrom() (data []byte, put func(), addr net.Addr, er
 }
 
 func (ut *udpTracker) WriteTo(b []byte, addr net.Addr) (int, error) {
-	if !ut.traffic.AllowPacket(trafficControl.Upload, len(b)) {
+	if ut.traffic != nil && !ut.traffic.AllowPacket(trafficControl.Upload, len(b)) {
 		return len(b), nil
 	}
 	n, err := ut.PacketConn.WriteTo(b, addr)
 	upload := int64(n)
-	ut.traffic.Record(trafficControl.Upload, upload)
-	if ut.pushToManager {
-		ut.manager.PushUploaded(upload)
-		ut.principal.reportUpload(ut.manager, upload)
+	if ut.traffic != nil {
+		ut.traffic.Record(trafficControl.Upload, upload)
 	}
-	ut.UploadTotal.Add(upload)
+	ut.pushUploaded(upload)
 	return n, err
 }
 
@@ -406,7 +481,7 @@ func (ut *udpTracker) Upstream() any {
 
 func NewUDPTracker(conn C.PacketConn, manager *Manager, metadata *C.Metadata, rule C.Rule, uploadTotal int64, downloadTotal int64, pushToManager bool) *udpTracker {
 	metadata.RemoteDst = conn.RemoteDestination()
-	traffic := trafficControl.Default.Open(trafficFlow(metadata, rule, conn.Chains()))
+	traffic := openTrafficSession(metadata, rule, conn.Chains())
 
 	ut := &udpTracker{
 		PacketConn: conn,
@@ -448,8 +523,16 @@ func NewUDPTracker(conn C.PacketConn, manager *Manager, metadata *C.Metadata, ru
 	return ut
 }
 
+func openTrafficSession(metadata *C.Metadata, rule C.Rule, chains C.Chain) *trafficControl.Session {
+	if !trafficControl.Default.Enabled() {
+		return nil
+	}
+	return trafficControl.Default.Open(trafficFlow(metadata, rule, chains))
+}
+
 func trafficFlow(metadata *C.Metadata, rule C.Rule, chains C.Chain) trafficControl.Flow {
-	flow := trafficControl.Flow{SourceIP: metadata.SrcIP, Chains: append([]string(nil), chains...)}
+	// Open clones Chains if it keeps a session. Matching only reads the slice.
+	flow := trafficControl.Flow{SourceIP: metadata.SrcIP, Chains: chains}
 	if rule != nil {
 		flow.RuleType = rule.RuleType().String()
 		flow.RulePayload = rule.Payload()

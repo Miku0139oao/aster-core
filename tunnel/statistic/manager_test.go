@@ -374,6 +374,75 @@ func TestPrincipalAccumulatesConcurrently(t *testing.T) {
 	observer.mu.Unlock()
 }
 
+func TestManagerBlipIsDeltaOfTotals(t *testing.T) {
+	manager := &Manager{}
+	manager.PushUploaded(100)
+	manager.PushDownloaded(40)
+	manager.rollBlip()
+	up, down := manager.Now()
+	require.EqualValues(t, 100, up)
+	require.EqualValues(t, 40, down)
+
+	manager.rollBlip()
+	up, down = manager.Now()
+	require.Zero(t, up)
+	require.Zero(t, down)
+
+	manager.PushUploaded(50)
+	manager.ResetStatistic()
+	manager.rollBlip()
+	up, down = manager.Now()
+	require.Zero(t, up, "reset must not publish a stale total-delta as the current rate")
+	require.Zero(t, down)
+	totalUp, totalDown := manager.Total()
+	require.Zero(t, totalUp)
+	require.Zero(t, totalDown)
+
+	manager.PushUploaded(3)
+	manager.PushDownloaded(2)
+	manager.rollBlip()
+	up, down = manager.Now()
+	require.EqualValues(t, 3, up)
+	require.EqualValues(t, 2, down)
+	totalUp, totalDown = manager.Total()
+	require.EqualValues(t, 3, totalUp)
+	require.EqualValues(t, 2, totalDown)
+}
+
+func TestManagerResetConcurrentWithRollBlip(t *testing.T) {
+	manager := &Manager{}
+	done := make(chan struct{})
+	go func() {
+		for i := 0; i < 1000; i++ {
+			manager.PushUploaded(1)
+			manager.PushDownloaded(1)
+			manager.rollBlip()
+		}
+		close(done)
+	}()
+	for i := 0; i < 1000; i++ {
+		manager.ResetStatistic()
+	}
+	<-done
+	manager.ResetStatistic()
+	manager.rollBlip()
+	up, down := manager.Now()
+	require.Zero(t, up)
+	require.Zero(t, down)
+	totalUp, totalDown := manager.Total()
+	require.Zero(t, totalUp)
+	require.Zero(t, totalDown)
+}
+
+func TestManagerPushUploadedIgnoresZero(t *testing.T) {
+	manager := &Manager{}
+	manager.PushUploaded(0)
+	manager.PushDownloaded(-1)
+	up, down := manager.Total()
+	require.Zero(t, up)
+	require.Zero(t, down)
+}
+
 func BenchmarkPrincipalReportUpload(b *testing.B) {
 	manager := &Manager{}
 	manager.SetTrafficObserver(&trafficObserverTest{})

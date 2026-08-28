@@ -5,6 +5,7 @@ import (
 	"net"
 
 	"github.com/Miku0139oao/aster-core/adapter/inbound"
+	C "github.com/Miku0139oao/aster-core/constant"
 
 	"github.com/metacubex/sing/common/auth"
 	"golang.org/x/exp/slices"
@@ -46,4 +47,15 @@ func getInAddr(ctx context.Context) net.Addr {
 		}
 	}
 	return nil
+}
+
+func applyContextAdditions(ctx context.Context, metadata *C.Metadata) {
+	if v := ctx.Value(ctxKeyAdditions); v != nil {
+		if a, ok := v.([]inbound.Addition); ok {
+			inbound.ApplyAdditions(metadata, a...)
+		}
+	}
+	if user, ok := auth.UserFromContext[string](ctx); ok {
+		metadata.InUser = user
+	}
 }

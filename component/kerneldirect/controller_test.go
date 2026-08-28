@@ -1186,7 +1186,7 @@ func TestWaitAppliedSharesBarrierPerGeneration(t *testing.T) {
 	}
 
 	c.mu.Lock()
-	c.applied = 1
+	atomic.StoreUint64(&c.applied, 1)
 	c.releaseWaitersLocked()
 	c.mu.Unlock()
 
@@ -1199,6 +1199,108 @@ func TestWaitAppliedSharesBarrierPerGeneration(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("shared apply barrier did not release all callers")
+	}
+}
+
+func TestControllerRefreshDoesNotReclassifyUnexpired(t *testing.T) {
+	var calls atomic.Int64
+	c := Register(func(string, netip.Addr) bool {
+		calls.Add(1)
+		return true
+	}, func(DecisionSets) {}, ControllerOptions{MaxEntries: 8}).(*controller)
+	defer c.Close()
+
+	addr := netip.MustParseAddr("203.0.113.90")
+	ObserveFlow("refresh.example", addr, time.Minute)
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("first observe classifier calls = %d, want 1", got)
+	}
+	ObserveFlow("refresh.example", addr, time.Minute)
+	ObserveFlow("refresh.example", addr, time.Minute)
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("unexpired refresh reclassified: calls=%d, want 1", got)
+	}
+
+	c.mu.Lock()
+	rec, ok := c.records[addr].byHost["refresh.example"]
+	lastSeen := c.records[addr].lastSeen
+	seq := c.sequence
+	c.mu.Unlock()
+	if !ok {
+		t.Fatal("refresh dropped the cached host")
+	}
+	if !rec.direct {
+		t.Fatal("refresh lost the cached DIRECT bit")
+	}
+	if !rec.expires.After(time.Now()) {
+		t.Fatal("refresh did not keep a live expiry")
+	}
+	if lastSeen != seq {
+		t.Fatalf("refresh did not touch LRU: lastSeen=%d sequence=%d", lastSeen, seq)
+	}
+}
+
+func TestControllerRefreshKeepsCachedDecisionUntilFlush(t *testing.T) {
+	var direct atomic.Bool
+	direct.Store(true)
+	var mu sync.Mutex
+	var current DecisionSets
+	c := Register(func(string, netip.Addr) bool {
+		return direct.Load()
+	}, func(sets DecisionSets) {
+		mu.Lock()
+		current = sets
+		mu.Unlock()
+	}, ControllerOptions{MaxEntries: 8}).(*controller)
+	defer c.Close()
+
+	addr := netip.MustParseAddr("203.0.113.91")
+	ObserveDNS("flip.example", []DNSAnswer{{Addr: addr, TTL: time.Minute}})
+	mu.Lock()
+	learnedDirect := current.Direct != nil && current.Direct.Contains(addr)
+	mu.Unlock()
+	if !learnedDirect {
+		t.Fatal("initial DIRECT observation was not learned")
+	}
+
+	direct.Store(false)
+	ObserveDNS("flip.example", []DNSAnswer{{Addr: addr, TTL: time.Minute}})
+	mu.Lock()
+	stillDirect := current.Direct != nil && current.Direct.Contains(addr)
+	nowProxy := current.Proxy != nil && current.Proxy.Contains(addr)
+	mu.Unlock()
+	if !stillDirect || nowProxy {
+		t.Fatal("unexpired refresh must keep the cached DIRECT bit until Flush")
+	}
+
+	Flush()
+	ObserveDNS("flip.example", []DNSAnswer{{Addr: addr, TTL: time.Minute}})
+	mu.Lock()
+	afterFlushDirect := current.Direct != nil && current.Direct.Contains(addr)
+	afterFlushProxy := current.Proxy != nil && current.Proxy.Contains(addr)
+	mu.Unlock()
+	if afterFlushDirect {
+		t.Fatal("after Flush, classifier=false must not keep DIRECT")
+	}
+	if !afterFlushProxy {
+		t.Fatal("after Flush, classifier=false must learn PROXY")
+	}
+}
+
+func TestControllerRefreshMissReclassifiesNewHost(t *testing.T) {
+	var calls atomic.Int64
+	c := Register(func(string, netip.Addr) bool {
+		calls.Add(1)
+		return true
+	}, func(DecisionSets) {}, ControllerOptions{MaxEntries: 8}).(*controller)
+	defer c.Close()
+
+	first := netip.MustParseAddr("203.0.113.92")
+	second := netip.MustParseAddr("203.0.113.93")
+	ObserveFlow("one.example", first, time.Minute)
+	ObserveFlow("two.example", second, time.Minute)
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("new hosts must still classify: calls=%d, want 2", got)
 	}
 }
 

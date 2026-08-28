@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/netip"
 	"strings"
+	"sync"
 
 	"github.com/Miku0139oao/aster-core/common/utils"
 	C "github.com/Miku0139oao/aster-core/constant"
@@ -199,7 +200,9 @@ func sniffHTTP2(b []byte) (string, error) {
 		host           string
 		headerStreamID uint32
 	)
-	decoder := hpack.NewDecoder(headerTableSize, func(f hpack.HeaderField) {
+	decoder := acquireH2Decoder()
+	defer releaseH2Decoder(decoder)
+	decoder.SetEmitFunc(func(f hpack.HeaderField) {
 		switch f.Name {
 		case ":authority":
 			authority = f.Value
@@ -338,6 +341,19 @@ func parseHost(h []byte) (string, error) {
 	if len(h) == 0 {
 		return "", ErrNoClue
 	}
+
+	// Fast path for the common Host: example.com form. Avoid net.SplitHostPort
+	// (it allocates AddrError on missing port) and ParseAddr (domains are not IPs).
+	if isPlainHostname(h) {
+		hs := string(h)
+		if looksLikeIPv4(h) {
+			if _, err := netip.ParseAddr(hs); err == nil {
+				return "", errHostIsIP
+			}
+		}
+		return strings.ToLower(hs), nil
+	}
+
 	hs := string(h)
 
 	// RFC 3986 §3.2.3
@@ -364,4 +380,50 @@ func parseHost(h []byte) (string, error) {
 	}
 
 	return hs, nil
+}
+
+func isPlainHostname(h []byte) bool {
+	if h[len(h)-1] == '.' {
+		return false
+	}
+	for _, c := range h {
+		if c == ':' || c == '[' || c == ']' {
+			return false
+		}
+	}
+	return true
+}
+
+func looksLikeIPv4(h []byte) bool {
+	hasDot := false
+	for _, c := range h {
+		switch {
+		case c == '.':
+			hasDot = true
+		case c < '0' || c > '9':
+			return false
+		}
+	}
+	return hasDot
+}
+
+var h2DecoderPool = sync.Pool{
+	New: func() any {
+		return hpack.NewDecoder(headerTableSize, func(hpack.HeaderField) {})
+	},
+}
+
+func acquireH2Decoder() *hpack.Decoder {
+	return h2DecoderPool.Get().(*hpack.Decoder)
+}
+
+func releaseH2Decoder(d *hpack.Decoder) {
+	d.SetEmitFunc(func(hpack.HeaderField) {})
+	// Close resets truncated saveBuf, then firstField. Dynamic table entries
+	// from this connection must not leak into the next sniff.
+	_ = d.Close()
+	_ = d.Close()
+	d.SetMaxDynamicTableSize(0)
+	d.SetMaxDynamicTableSize(headerTableSize)
+	h2DecoderPool.Put(d)
 }

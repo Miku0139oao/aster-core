@@ -27,6 +27,20 @@ func TestLookupIP4PEnabledDoesNotPanicOnIPv4(t *testing.T) {
 	}
 }
 
+func BenchmarkLookupIP4PEnabledNonIP4P(b *testing.B) {
+	SetIP4PEnable(true)
+	b.Cleanup(func() { SetIP4PEnable(false) })
+	addr := netip.MustParseAddr("2001:db8::1")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		got, port := LookupIP4P(addr, "443")
+		if got != addr || port != "443" {
+			b.Fatalf("LookupIP4P(%s) = %s:%s", addr, got, port)
+		}
+	}
+}
+
 func TestLookupIP4PConvertsIPv6Encoding(t *testing.T) {
 	SetIP4PEnable(true)
 	t.Cleanup(func() { SetIP4PEnable(false) })

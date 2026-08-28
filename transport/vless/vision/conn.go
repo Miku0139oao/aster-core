@@ -169,7 +169,7 @@ func (vc *Conn) ReadBuffer(buffer *buf.Buffer) error {
 			}
 			if vc.readFilterUUID.Load() {
 				vc.readFilterUUID.Store(false)
-				if !bytes.Equal(vc.userUUID.Bytes(), header[:uuid.Size]) {
+				if !bytes.Equal(vc.userUUID[:], header[:uuid.Size]) {
 					err = fmt.Errorf("XTLS Vision server responded unknown UUID: %s", uuid.FromBytesOrNil(header[:uuid.Size]))
 					log.Errorln(err.Error())
 					return err
@@ -180,8 +180,10 @@ func (vc *Conn) ReadBuffer(buffer *buf.Buffer) error {
 			vc.readRemainingContent = int(binary.BigEndian.Uint16(header[1:]))
 			command := header[0]
 			vc.readLastCommand.Store(uint32(command))
-			log.Debugln("XTLS Vision read padding: command=%d, payloadLen=%d, paddingLen=%d",
-				command, vc.readRemainingContent, vc.readRemainingPadding)
+			if log.Enabled(log.DEBUG) {
+				log.Debugln("XTLS Vision read padding: command=%d, payloadLen=%d, paddingLen=%d",
+					command, vc.readRemainingContent, vc.readRemainingPadding)
+			}
 			return vc.ReadBuffer(buffer)
 			//}
 		case commandPaddingEnd:
@@ -220,14 +222,18 @@ func (vc *Conn) ReadBuffer(buffer *buf.Buffer) error {
 			if vc.input == nil && vc.rawInput == nil {
 				vc.readProcess.Store(false)
 				vc.ExtendedReader = N.NewExtendedReader(vc.netConn)
-				log.Debugln("XTLS Vision direct read start")
+				if log.Enabled(log.DEBUG) {
+					log.Debugln("XTLS Vision direct read start")
+				}
 			}
 			if needReturn {
 				return nil
 			}
 		default:
 			err := fmt.Errorf("XTLS Vision read unknown command: %d", vc.lastCommand())
-			log.Debugln(err.Error())
+			if log.Enabled(log.DEBUG) {
+				log.Debugln(err.Error())
+			}
 			return err
 		}
 	}
@@ -242,52 +248,57 @@ func (vc *Conn) Write(p []byte) (int, error) {
 }
 
 func (vc *Conn) WriteBuffer(buffer *buf.Buffer) (err error) {
+	if !vc.writeFilterApplicationData.Load() {
+		return vc.ExtendedWriter.WriteBuffer(buffer)
+	}
+	if buffer.IsEmpty() {
+		vc.applyPadding(buffer, commandPaddingContinue, true) // we do a long padding to hide vless header
+		return vc.ExtendedWriter.WriteBuffer(buffer)
+	}
+
+	vc.FilterTLS(buffer.Bytes())
+	const bufferLimit = xrayBufSize - PaddingHeaderLen
+	if buffer.Len() < bufferLimit {
+		return vc.writePaddedBuffer(buffer)
+	}
+	buffers := vc.ReshapeBuffer(buffer)
+	for i, buffer := range buffers {
+		err = vc.writePaddedBuffer(buffer)
+		if err != nil {
+			buf.ReleaseMulti(buffers[i:]) // release unwritten buffers
+			return
+		}
+	}
+	return err
+}
+
+func (vc *Conn) writePaddedBuffer(buffer *buf.Buffer) error {
+	command := commandPaddingContinue
 	if vc.writeFilterApplicationData.Load() {
-		if buffer.IsEmpty() {
-			vc.applyPadding(buffer, commandPaddingContinue, true) // we do a long padding to hide vless header
-			return vc.ExtendedWriter.WriteBuffer(buffer)
+		filter := vc.filterState()
+		if filter.isTLS && buffer.Len() > 6 && bytes.Equal(tlsApplicationDataStart, buffer.To(3)) {
+			command = commandPaddingEnd
+			if filter.enableXTLS {
+				command = commandPaddingDirect
+				vc.writeDirect.Store(true)
+			}
+			vc.writeFilterApplicationData.Store(false)
+		} else if !filter.isTLS12orAbove && filter.packetsToFilter <= 1 {
+			command = commandPaddingEnd
+			vc.writeFilterApplicationData.Store(false)
 		}
-
-		vc.FilterTLS(buffer.Bytes())
-		buffers := vc.ReshapeBuffer(buffer)
-		applyPadding := true
-		for i, buffer := range buffers {
-			command := commandPaddingContinue
-			if applyPadding {
-				filter := vc.filterState()
-				if filter.isTLS && buffer.Len() > 6 && bytes.Equal(tlsApplicationDataStart, buffer.To(3)) {
-					command = commandPaddingEnd
-					if filter.enableXTLS {
-						command = commandPaddingDirect
-						vc.writeDirect.Store(true)
-					}
-					vc.writeFilterApplicationData.Store(false)
-					applyPadding = false
-				} else if !filter.isTLS12orAbove && filter.packetsToFilter <= 1 {
-					command = commandPaddingEnd
-					vc.writeFilterApplicationData.Store(false)
-					applyPadding = false
-				}
-				vc.applyPadding(buffer, command, filter.isTLS)
-			}
-
-			err = vc.ExtendedWriter.WriteBuffer(buffer)
-			if err != nil {
-				buf.ReleaseMulti(buffers[i:]) // release unwritten buffers
-				return
-			}
-			if command == commandPaddingDirect {
-				vc.ExtendedWriter = N.NewExtendedWriter(vc.netConn)
-				log.Debugln("XTLS Vision direct write start")
-				// time.Sleep(5 * time.Millisecond)
-			}
-		}
+		vc.applyPadding(buffer, command, filter.isTLS)
+	}
+	if err := vc.ExtendedWriter.WriteBuffer(buffer); err != nil {
 		return err
 	}
-	/*if vc.writeDirect {
-		log.Debugln("XTLS Vision Direct write, payloadLen=%d", buffer.Len())
-	}*/
-	return vc.ExtendedWriter.WriteBuffer(buffer)
+	if command == commandPaddingDirect {
+		vc.ExtendedWriter = N.NewExtendedWriter(vc.netConn)
+		if log.Enabled(log.DEBUG) {
+			log.Debugln("XTLS Vision direct write start")
+		}
+	}
+	return nil
 }
 
 func (vc *Conn) FrontHeadroom() int {

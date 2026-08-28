@@ -94,6 +94,26 @@ var registry = struct {
 	controllers map[*controller]struct{}
 }{controllers: make(map[*controller]struct{})}
 
+// liveControllers is a copy-on-write snapshot so ObserveDNS/ObserveFlow/Flush
+// do not allocate or take registry.RLock on the per-flow refresh path.
+var liveControllers atomic.Pointer[[]*controller]
+
+func liveControllerList() []*controller {
+	list := liveControllers.Load()
+	if list == nil {
+		return nil
+	}
+	return *list
+}
+
+func publishLiveControllersLocked() {
+	list := make([]*controller, 0, len(registry.controllers))
+	for c := range registry.controllers {
+		list = append(list, c)
+	}
+	liveControllers.Store(&list)
+}
+
 // Register installs one kernel DIRECT consumer. The returned closer unregisters
 // it and stops its expiry worker.
 func Register(classifier Classifier, sink Sink, options ...ControllerOptions) io.Closer {
@@ -116,6 +136,7 @@ func Register(classifier Classifier, sink Sink, options ...ControllerOptions) io
 	}
 	registry.Lock()
 	registry.controllers[c] = struct{}{}
+	publishLiveControllersLocked()
 	registry.Unlock()
 	activeControllers.Add(1)
 	go c.expireLoop()
@@ -133,12 +154,7 @@ func HasConsumers() bool {
 // Statuses returns a control-plane snapshot of all active consumers.
 // It holds each controller's mutex and scans its records, so it is not cheap.
 func Statuses() []ControllerStatus {
-	registry.RLock()
-	controllers := make([]*controller, 0, len(registry.controllers))
-	for c := range registry.controllers {
-		controllers = append(controllers, c)
-	}
-	registry.RUnlock()
+	controllers := liveControllerList()
 	statuses := make([]ControllerStatus, 0, len(controllers))
 	for _, c := range controllers {
 		if s := c.status(); s.MaxEntries != 0 {
@@ -170,13 +186,7 @@ func ObserveDNS(host string, answers []DNSAnswer) {
 	if host == "" || len(answers) == 0 {
 		return
 	}
-	registry.RLock()
-	controllers := make([]*controller, 0, len(registry.controllers))
-	for c := range registry.controllers {
-		controllers = append(controllers, c)
-	}
-	registry.RUnlock()
-	for _, c := range controllers {
+	for _, c := range liveControllerList() {
 		c.observe(host, answers)
 	}
 }
@@ -184,18 +194,18 @@ func ObserveDNS(host string, answers []DNSAnswer) {
 // Flush removes all learned addresses. It is called whenever routing state may
 // have changed, so stale DIRECT decisions can never survive a reload.
 func Flush() {
-	registry.RLock()
-	controllers := make([]*controller, 0, len(registry.controllers))
-	for c := range registry.controllers {
-		controllers = append(controllers, c)
-	}
-	registry.RUnlock()
-	for _, c := range controllers {
+	for _, c := range liveControllerList() {
 		c.flush()
 	}
 }
 
 func (c *controller) observe(host string, answers []DNSAnswer) {
+	// Unexpired (host, addr) hits reuse the cached DIRECT/PROXY bit, touch LRU,
+	// and extend TTL. Routing changes must Flush; reclassifying here would take
+	// classifierMu and waitApplied on every live flow refresh.
+	if c.tryRefreshExisting(host, answers) {
+		return
+	}
 	// Classifier used to run under c.mu. Preserve its serialized and
 	// quiescent-on-Close contract without holding the state mutex across a
 	// potentially expensive routing callback.
@@ -325,6 +335,77 @@ func (c *controller) observe(host string, answers []DNSAnswer) {
 	}
 	c.mu.Unlock()
 	c.commitPublish(sets, generation, changed)
+}
+
+func (c *controller) tryRefreshExisting(host string, answers []DNSAnswer) bool {
+	c.mu.Lock()
+	handled, wait := c.refreshExistingLocked(host, answers, time.Now())
+	c.mu.Unlock()
+	if handled && wait != nil {
+		c.waitStop(wait)
+	}
+	return handled
+}
+
+func (c *controller) refreshExistingLocked(host string, answers []DNSAnswer, now time.Time) (handled bool, wait <-chan struct{}) {
+	if c.closed {
+		return true, nil
+	}
+	if c.nextExpiry.IsZero() || !now.Before(c.nextExpiry) {
+		return false, nil
+	}
+	safe := 0
+	for _, answer := range answers {
+		addr := answer.Addr.Unmap()
+		if isUnsafeAddress(addr) {
+			continue
+		}
+		address := c.records[addr]
+		if address == nil {
+			return false, nil
+		}
+		prev, exists := address.byHost[host]
+		if !exists || !prev.expires.After(now) {
+			return false, nil
+		}
+		safe++
+	}
+	if safe == 0 {
+		return false, nil
+	}
+	for _, answer := range answers {
+		addr := answer.Addr.Unmap()
+		if isUnsafeAddress(addr) {
+			continue
+		}
+		ttl := answer.TTL
+		if ttl < minimumTTL {
+			ttl = minimumTTL
+		} else if ttl > maximumTTL {
+			ttl = maximumTTL
+		}
+		expires := now.Add(ttl)
+		address := c.records[addr]
+		prev := address.byHost[host]
+		address.byHost[host] = record{direct: prev.direct, expires: expires}
+		c.touchLocked(address)
+		if c.nextExpiry.IsZero() || expires.Before(c.nextExpiry) {
+			c.nextExpiry = expires
+		}
+	}
+	generation := c.generation
+	if generation <= atomic.LoadUint64(&c.applied) {
+		return true, nil
+	}
+	done := c.applyWaiters[generation]
+	if done == nil {
+		if c.applyWaiters == nil {
+			c.applyWaiters = make(map[uint64]chan struct{})
+		}
+		done = make(chan struct{})
+		c.applyWaiters[generation] = done
+	}
+	return true, done
 }
 
 var (
@@ -593,7 +674,7 @@ func (c *controller) applyPublish(req publishRequest) {
 		}
 		c.mu.Lock()
 		if !c.closed && req.generation == c.generation {
-			c.applied = req.generation
+			atomic.StoreUint64(&c.applied, req.generation)
 			c.releaseWaitersLocked()
 		}
 		c.mu.Unlock()
@@ -602,8 +683,9 @@ func (c *controller) applyPublish(req publishRequest) {
 }
 
 func (c *controller) releaseWaitersLocked() {
+	applied := atomic.LoadUint64(&c.applied)
 	for generation, done := range c.applyWaiters {
-		if generation <= c.applied || c.closed {
+		if generation <= applied || c.closed {
 			close(done)
 			delete(c.applyWaiters, generation)
 		}
@@ -621,8 +703,11 @@ func (c *controller) waitStop(done <-chan struct{}) {
 }
 
 func (c *controller) waitApplied(generation uint64) {
+	if generation <= atomic.LoadUint64(&c.applied) {
+		return
+	}
 	c.mu.Lock()
-	if c.closed || generation <= c.applied {
+	if c.closed || generation <= atomic.LoadUint64(&c.applied) {
 		c.mu.Unlock()
 		return
 	}
@@ -698,6 +783,7 @@ func (c *controller) Close() error {
 	c.closeOnce.Do(func() {
 		registry.Lock()
 		delete(registry.controllers, c)
+		publishLiveControllersLocked()
 		registry.Unlock()
 		activeControllers.Add(-1)
 		atomic.AddUint64(&c.flushSeq, 1)

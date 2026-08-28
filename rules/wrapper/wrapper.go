@@ -55,7 +55,7 @@ func (r *RuleWrapper) Miss() {
 }
 
 func (r *RuleWrapper) Match(metadata *C.Metadata, helper C.RuleMatchHelper) (bool, string) {
-	if r.IsDisabled() {
+	if r.disabled.Load() {
 		return false, ""
 	}
 	ok, adapter := r.Rule.Match(metadata, helper)

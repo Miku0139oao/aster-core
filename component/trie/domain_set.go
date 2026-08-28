@@ -4,8 +4,10 @@ package trie
 // Modify from https://github.com/openacid/succinct/blob/d4684c35d123f7528b14e03c24327231723db704/sskv.go
 
 import (
+	"math/bits"
 	"sort"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/Miku0139oao/aster-core/common/utils"
@@ -23,7 +25,25 @@ type DomainSet struct {
 	leaves, labelBitmap []uint64
 	labels              []byte
 	ranks, selects      []int32
+	// childStart[i] is the index in labels of node i's first child.
+	// childStart[i+1] is exclusive. Built in init(); not serialized.
+	childStart []int32
+	rankOnce   sync.Once
 }
+
+// asciiLower maps a byte to its ASCII lowercase counterpart. Non-letters are
+// unchanged, so UTF-8 payload bytes pass through after the unicode path has
+// already lowercased the string.
+var asciiLower = func() (table [256]byte) {
+	for i := 0; i < 256; i++ {
+		c := byte(i)
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		table[i] = c
+	}
+	return table
+}()
 
 type qElt struct{ s, e, col int }
 
@@ -74,7 +94,7 @@ func (t *DomainTrie[T]) NewDomainSet() *DomainSet {
 
 // Has query for a key and return whether it presents in the DomainSet.
 func (ss *DomainSet) Has(key string) bool {
-	if ss == nil {
+	if ss == nil || len(ss.childStart) < 2 {
 		return false
 	}
 	for i := 0; i < len(key); i++ {
@@ -86,105 +106,80 @@ func (ss *DomainSet) Has(key string) bool {
 			break
 		}
 	}
-	// no more labels in this node
-	// skip character matching
-	// go to next level
-	nodeId, bmIdx := 0, 0
+
 	type wildcardCursor struct {
-		bmIdx, index int
+		nodeId, index int
 	}
-	stack := make([]wildcardCursor, 0)
+	var stackBuf [8]wildcardCursor
+	stack := stackBuf[:0]
 
-	// Backtrack wildcard alternatives at both child boundaries and end of
-	// input. The latter is needed when a specific branch consumes the final
-	// label before a wildcard branch is tried.
-	backtrackWildcard := func() (nextNodeId, nextBmIdx, nextIndex int, ok, matched bool) {
-		for len(stack) > 0 {
-			cursor := stack[len(stack)-1]
-			stack = stack[:len(stack)-1]
-			nextNodeId = countZeros(ss.labelBitmap, ss.ranks, cursor.bmIdx+1)
-			nextBmIdx = selectIthOne(ss.labelBitmap, ss.ranks, ss.selects, nextNodeId-1) + 1
-			nextIndex = cursor.index
-			for ; nextIndex < len(key) && revLowerAt(key, nextIndex) != domainStepByte; nextIndex++ {
-			}
-			if nextIndex == len(key) {
-				if getBit(ss.leaves, nextNodeId) != 0 {
-					return 0, 0, 0, false, true
-				}
-				continue
-			}
-			for ; nextBmIdx-nextNodeId < len(ss.labels); nextBmIdx++ {
-				if ss.labels[nextBmIdx-nextNodeId] == domainStepByte {
-					return nextNodeId, nextBmIdx, nextIndex, true, false
-				}
-			}
-		}
-		return 0, 0, 0, false, false
-	}
-
+	nodeId := 0
+	e := int(ss.childStart[0])
 	i := 0
 	for {
-		restart := false
 		for ; i < len(key); i++ {
 			c := revLowerAt(key, i)
-			for ; ; bmIdx++ {
-				if getBit(ss.labelBitmap, bmIdx) != 0 {
-					nextNodeId, nextBmIdx, nextIndex, ok, matched := backtrackWildcard()
-					if matched {
-						return true
-					}
-					if !ok {
-						return false
-					}
-					nodeId = nextNodeId
-					bmIdx = nextBmIdx
-					i = nextIndex
-					restart = true
-					break
-				}
-				// handle wildcard for domain
-				if ss.labels[bmIdx-nodeId] == complexWildcardByte {
+			end := int(ss.childStart[nodeId+1])
+			found := false
+			for ; e < end; e++ {
+				lab := ss.labels[e]
+				if lab == complexWildcardByte {
 					return true
-				} else if ss.labels[bmIdx-nodeId] == wildcardByte {
-					stack = append(stack, wildcardCursor{bmIdx: bmIdx, index: i})
-				} else if ss.labels[bmIdx-nodeId] == c {
+				}
+				if lab == wildcardByte {
+					stack = append(stack, wildcardCursor{nodeId: e + 1, index: i})
+				} else if lab == c {
+					found = true
 					break
 				}
 			}
-			if restart {
-				break
+			if !found {
+				goto backtrack
 			}
-			nodeId = countZeros(ss.labelBitmap, ss.ranks, bmIdx+1)
-			bmIdx = selectIthOne(ss.labelBitmap, ss.ranks, ss.selects, nodeId-1) + 1
+			nodeId = e + 1
+			e = int(ss.childStart[nodeId])
 		}
-		if restart {
-			continue
-		}
-
 		if getBit(ss.leaves, nodeId) != 0 {
 			return true
 		}
-		nextNodeId, nextBmIdx, nextIndex, ok, matched := backtrackWildcard()
-		if matched {
-			return true
+	backtrack:
+		ok := false
+		for len(stack) > 0 {
+			cursor := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			nodeId = cursor.nodeId
+			i = cursor.index
+			for ; i < len(key) && revLowerAt(key, i) != domainStepByte; i++ {
+			}
+			if i == len(key) {
+				if getBit(ss.leaves, nodeId) != 0 {
+					return true
+				}
+				continue
+			}
+			start := int(ss.childStart[nodeId])
+			end := int(ss.childStart[nodeId+1])
+			for e2 := start; e2 < end; e2++ {
+				if ss.labels[e2] == domainStepByte {
+					e = e2
+					ok = true
+					break
+				}
+			}
+			if ok {
+				break
+			}
 		}
 		if !ok {
 			return false
 		}
-		nodeId = nextNodeId
-		bmIdx = nextBmIdx
-		i = nextIndex
 	}
 }
 
 // revLowerAt returns the i-th byte of key read back to front, lowercased for
 // ASCII. It lets Has walk the reversed key without materializing it.
 func revLowerAt(key string, i int) byte {
-	c := key[len(key)-1-i]
-	if c >= 'A' && c <= 'Z' {
-		c += 'a' - 'A'
-	}
-	return c
+	return asciiLower[key[len(key)-1-i]]
 }
 
 func byteReverse(s string) string {
@@ -196,6 +191,7 @@ func byteReverse(s string) string {
 }
 
 func (ss *DomainSet) keys(f func(key string) bool) {
+	ss.ensureRankSelect()
 	var currentKey []byte
 	var traverse func(int, int) bool
 	traverse = func(nodeId, bmIdx int) bool {
@@ -246,9 +242,47 @@ func getBit(bm []uint64, i int) uint64 {
 	return bm[i>>6] & (1 << uint(i&63))
 }
 
-// init builds pre-calculated cache to speed up rank() and select()
+// init builds the child index used by Has. Rank/select indexes used by
+// Foreach are built lazily; the lookup path never needs them.
 func (ss *DomainSet) init() {
-	ss.selects, ss.ranks = bitmap.IndexSelect32R64(ss.labelBitmap)
+	ss.buildChildIndex()
+}
+
+func (ss *DomainSet) ensureRankSelect() {
+	ss.rankOnce.Do(func() {
+		ss.selects, ss.ranks = bitmap.IndexSelect32R64(ss.labelBitmap)
+	})
+}
+
+// buildChildIndex flattens LOUDS edges into per-node label ranges so Has can
+// walk children without rank/select on every character.
+func (ss *DomainSet) buildChildIndex() {
+	nNodes := 0
+	for _, word := range ss.labelBitmap {
+		nNodes += bits.OnesCount64(word)
+	}
+	if nNodes == 0 {
+		ss.childStart = []int32{0, 0}
+		return
+	}
+	childStart := make([]int32, nNodes+1)
+	node := 0
+	var edge int32
+	for _, word := range ss.labelBitmap {
+		for b := 0; b < 64; b++ {
+			if word&(uint64(1)<<uint(b)) == 0 {
+				edge++
+				continue
+			}
+			node++
+			childStart[node] = edge
+			if node == nNodes {
+				ss.childStart = childStart
+				return
+			}
+		}
+	}
+	ss.childStart = childStart
 }
 
 // countZeros counts the number of "0" in a bitmap before the i-th bit(excluding

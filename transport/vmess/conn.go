@@ -135,8 +135,8 @@ func (vc *Conn) recvResponse() error {
 		}
 		stream.XORKeyStream(buf, buf)
 	} else {
-		aeadResponseHeaderLengthEncryptionKey := kdf(vc.respBodyKey[:], kdfSaltConstAEADRespHeaderLenKey)[:16]
-		aeadResponseHeaderLengthEncryptionIV := kdf(vc.respBodyIV[:], kdfSaltConstAEADRespHeaderLenIV)[:12]
+		aeadResponseHeaderLengthEncryptionKey := kdf(vc.respBodyKey[:], kdfSaltAEADRespHeaderLenKey)[:16]
+		aeadResponseHeaderLengthEncryptionIV := kdf(vc.respBodyIV[:], kdfSaltAEADRespHeaderLenIV)[:12]
 
 		aeadResponseHeaderLengthEncryptionKeyAESBlock, _ := aes.NewCipher(aeadResponseHeaderLengthEncryptionKey)
 		aeadResponseHeaderLengthEncryptionAEAD, _ := cipher.NewGCM(aeadResponseHeaderLengthEncryptionKeyAESBlock)
@@ -152,8 +152,8 @@ func (vc *Conn) recvResponse() error {
 		}
 
 		decryptedResponseHeaderLength := binary.BigEndian.Uint16(decryptedResponseHeaderLengthBinaryBuffer)
-		aeadResponseHeaderPayloadEncryptionKey := kdf(vc.respBodyKey[:], kdfSaltConstAEADRespHeaderPayloadKey)[:16]
-		aeadResponseHeaderPayloadEncryptionIV := kdf(vc.respBodyIV[:], kdfSaltConstAEADRespHeaderPayloadIV)[:12]
+		aeadResponseHeaderPayloadEncryptionKey := kdf(vc.respBodyKey[:], kdfSaltAEADRespHeaderPayloadKey)[:16]
+		aeadResponseHeaderPayloadEncryptionIV := kdf(vc.respBodyIV[:], kdfSaltAEADRespHeaderPayloadIV)[:12]
 		aeadResponseHeaderPayloadEncryptionKeyAESBlock, _ := aes.NewCipher(aeadResponseHeaderPayloadEncryptionKey)
 		aeadResponseHeaderPayloadEncryptionAEAD, _ := cipher.NewGCM(aeadResponseHeaderPayloadEncryptionKeyAESBlock)
 

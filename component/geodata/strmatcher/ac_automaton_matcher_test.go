@@ -47,3 +47,37 @@ func TestMphMatcherFallsBackForUnsupportedSubstringBytes(t *testing.T) {
 		t.Fatal("unsupported @ byte aliased A/a")
 	}
 }
+
+func TestMphMatchFullDomainNoAlloc(t *testing.T) {
+	group := NewMphMatcherGroup()
+	if _, err := group.AddPattern("example.com", Domain); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := group.AddPattern("full.cdn.net", Full); err != nil {
+		t.Fatal(err)
+	}
+	group.Build()
+
+	for _, input := range []string{"www.example.com", "full.cdn.net", "miss.example"} {
+		input := input
+		allocs := testing.AllocsPerRun(1000, func() {
+			_ = group.Match(input)
+		})
+		if allocs != 0 {
+			t.Fatalf("Match(%q) allocated %.2f times; want 0", input, allocs)
+		}
+	}
+}
+
+func TestACIndexDoesNotAliasUnsupportedBytes(t *testing.T) {
+	idx, ok := acCharIndex('A')
+	if !ok || idx != 0 {
+		t.Fatalf("A index = %d, %v", idx, ok)
+	}
+	if _, ok := acCharIndex(0); ok {
+		t.Fatal("NUL aliased A")
+	}
+	if _, ok := acCharIndex('@'); ok {
+		t.Fatal("@ was treated as a compact-alphabet byte")
+	}
+}

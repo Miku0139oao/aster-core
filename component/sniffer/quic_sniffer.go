@@ -2,13 +2,16 @@ package sniffer
 
 import (
 	"bytes"
-	"crypto"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"hash"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Miku0139oao/aster-core/common/buf"
@@ -19,7 +22,6 @@ import (
 	"github.com/Miku0139oao/aster-core/constant/sniffer"
 
 	"github.com/metacubex/quic-go/quicvarint"
-	"golang.org/x/crypto/hkdf"
 )
 
 // Modified from https://github.com/v2fly/v2ray-core/blob/master/common/protocol/quic/sniff.go
@@ -92,16 +94,15 @@ var (
 	listQUICVersions = []*quicStructure{&quicDraft29, &quicV1, &quicV2}
 )
 
-type quicLabels struct {
-	hp  []byte
-	key []byte
-	iv  []byte
-}
-
 type quicInitialKey struct {
-	destConnID          []byte
-	labels              quicLabels
+	destConnID          [20]byte
+	destConnIDLen       uint8
+	hp                  [16]byte
+	key                 [16]byte
+	iv                  [12]byte
 	largestPacketNumber int64
+	hpBlock             cipher.Block
+	aead                cipher.AEAD
 }
 
 var (
@@ -169,7 +170,7 @@ type quicPacketSender struct {
 
 	done chan struct{}
 
-	closed bool
+	closed atomic.Bool
 }
 
 // Send will send PacketAdapter nonblocking
@@ -177,12 +178,9 @@ type quicPacketSender struct {
 func (q *quicPacketSender) Send(current constant.PacketAdapter) {
 	defer q.PacketSender.Send(current)
 
-	q.lock.RLock()
-	if q.closed {
-		q.lock.RUnlock()
+	if q.closed.Load() {
 		return
 	}
-	q.lock.RUnlock()
 
 	err := q.readQUICData(current.Data())
 	if err != nil {
@@ -216,16 +214,17 @@ func (q *quicPacketSender) Close() {
 func (q *quicPacketSender) close() {
 	q.lock.Lock()
 	defer q.lock.Unlock()
-	if !q.closed {
-		close(q.done)
-		q.closed = true
-		if q.buffer != nil {
-			_ = pool.Put(q.buffer)
-			q.buffer = nil
-		}
-		q.receivedCryptoData = bitmap{}
-		q.contiguousCryptoEnd = 0
+	if q.closed.Load() {
+		return
 	}
+	q.closed.Store(true)
+	close(q.done)
+	if q.buffer != nil {
+		_ = pool.Put(q.buffer)
+		q.buffer = nil
+	}
+	q.receivedCryptoData = bitmap{}
+	q.contiguousCryptoEnd = 0
 }
 
 func (q *quicPacketSender) readQUICData(b []byte) error {
@@ -291,12 +290,12 @@ func (q *quicPacketSender) readQUICPacket(b []byte, coalesced bool) (int, error)
 	}
 
 	connIDLen, err := buffer.ReadByte()
-	if err != nil || connIDLen == 0 {
+	if err != nil || connIDLen == 0 || connIDLen > 20 {
 		return 0, errNotQUIC
 	}
 
-	destConnID := make([]byte, int(connIDLen))
-	if _, err := io.ReadFull(buffer, destConnID); err != nil {
+	destConnID, err := buffer.ReadBytes(int(connIDLen))
+	if err != nil {
 		return 0, errNotQUIC
 	}
 
@@ -380,11 +379,11 @@ func (q *quicPacketSender) decryptQUICInitialPacket(b []byte, hdrLen, packetEnd 
 	largestPacketNumber := int64(-1)
 	for i := range q.initialKeys {
 		key := &q.initialKeys[i]
-		hasCurrentDestConnID = hasCurrentDestConnID || bytes.Equal(destConnID, key.destConnID)
+		hasCurrentDestConnID = hasCurrentDestConnID || bytes.Equal(destConnID, key.destConnID[:key.destConnIDLen])
 		if key.largestPacketNumber > largestPacketNumber {
 			largestPacketNumber = key.largestPacketNumber
 		}
-		decrypted, packetNumber, err := decryptQUICInitialPacket(b, hdrLen, packetEnd, key.labels, key.largestPacketNumber, cache)
+		decrypted, packetNumber, err := decryptQUICInitialPacket(b, hdrLen, packetEnd, key, cache)
 		if err == nil {
 			if packetNumber > key.largestPacketNumber {
 				key.largestPacketNumber = packetNumber
@@ -409,7 +408,7 @@ func (q *quicPacketSender) decryptQUICInitialPacket(b []byte, hdrLen, packetEnd 
 		return nil, err
 	}
 	candidate.largestPacketNumber = largestPacketNumber
-	decrypted, packetNumber, err := decryptQUICInitialPacket(b, hdrLen, packetEnd, candidate.labels, candidate.largestPacketNumber, cache)
+	decrypted, packetNumber, err := decryptQUICInitialPacket(b, hdrLen, packetEnd, &candidate, cache)
 	if err != nil {
 		return nil, err
 	}
@@ -424,22 +423,21 @@ func (q *quicPacketSender) decryptQUICInitialPacket(b []byte, hdrLen, packetEnd 
 
 // decryptQUICInitialPacket removes header protection and decrypts one Initial
 // packet with the supplied key set.
-func decryptQUICInitialPacket(b []byte, hdrLen, packetEnd int, labels quicLabels, largestPacketNumber int64, cache *buf.Buffer) ([]byte, int64, error) {
+func decryptQUICInitialPacket(b []byte, hdrLen, packetEnd int, key *quicInitialKey, cache *buf.Buffer) ([]byte, int64, error) {
 	// Failed key epochs leave scratch data behind. Reset it before every attempt
 	// so trying retained Retry keys does not consume the buffer cumulatively.
 	cache.Reset()
 
-	block, err := aes.NewCipher(labels.hp)
-	if err != nil {
-		return nil, -1, err
+	if key.hpBlock == nil || key.aead == nil {
+		return nil, -1, errNotQUIC
 	}
 
 	if hdrLen+4+16 > packetEnd {
 		return nil, -1, errNotQUIC
 	}
 
-	mask := cache.Extend(block.BlockSize())
-	block.Encrypt(mask, b[hdrLen+4:hdrLen+4+16])
+	mask := cache.Extend(key.hpBlock.BlockSize())
+	key.hpBlock.Encrypt(mask, b[hdrLen+4:hdrLen+4+16])
 	firstByte := b[0]
 	// Long headers have their low four bits protected.
 	firstByte ^= mask[0] & 0x0f
@@ -464,27 +462,19 @@ func decryptQUICInitialPacket(b []byte, hdrLen, packetEnd int, labels quicLabels
 	for _, b := range packetNumber {
 		truncatedPacketNumber = truncatedPacketNumber<<8 | int64(b)
 	}
-	decodedPacketNumber := decodeQUICPacketNumber(packetNumberLength, largestPacketNumber, truncatedPacketNumber)
+	decodedPacketNumber := decodeQUICPacketNumber(packetNumberLength, key.largestPacketNumber, truncatedPacketNumber)
 
 	data := b[extHdrLen:packetEnd]
 
-	aesCipher, err := aes.NewCipher(labels.key)
-	if err != nil {
-		return nil, -1, err
-	}
-	aead, err := cipher.NewGCM(aesCipher)
-	if err != nil {
-		return nil, -1, err
-	}
-
 	// We only decrypt once, so we do not need to XOR it back.
 	// https://github.com/quic-go/qtls-go1-20/blob/e132a0e6cb45e20ac0b705454849a11d09ba5a54/cipher_suites.go#L496
-	iv := bytes.Clone(labels.iv)
+	var iv [12]byte
+	copy(iv[:], key.iv[:])
 	for i := 0; i < 8; i++ {
 		iv[len(iv)-1-i] ^= byte(uint64(decodedPacketNumber) >> (8 * i))
 	}
 	dst := cache.Extend(len(data))
-	decrypted, err := aead.Open(dst[:0], iv, data, extHdr)
+	decrypted, err := key.aead.Open(dst[:0], iv[:], data, extHdr)
 	if err != nil {
 		return nil, -1, errQUICDecryptionFailed
 	}
@@ -514,13 +504,10 @@ func decodeQUICPacketNumber(length int, largest, truncated int64) int64 {
 func (q *quicPacketSender) readQUICFrames(data []byte) error {
 	buffer := buf.As(data)
 	for !buffer.IsEmpty() {
-		q.lock.RLock()
-		if q.closed {
-			q.lock.RUnlock()
+		if q.closed.Load() {
 			// close() was called, just return
 			return nil
 		}
-		q.lock.RUnlock()
 
 		frameType := framePadding
 		for frameType == framePadding && !buffer.IsEmpty() {
@@ -616,7 +603,7 @@ func (q *quicPacketSender) addCryptoData(offset uint64, data []byte) error {
 
 	q.lock.Lock()
 	defer q.lock.Unlock()
-	if q.closed {
+	if q.closed.Load() {
 		return nil
 	}
 
@@ -643,7 +630,7 @@ func (q *quicPacketSender) tryAssemble() (string, error) {
 	q.lock.RLock()
 	defer q.lock.RUnlock()
 
-	if q.closed {
+	if q.closed.Load() {
 		// close() was called, just return
 		return "", nil
 	}
@@ -662,7 +649,7 @@ func (q *quicPacketSender) tryAssemble() (string, error) {
 		}
 	}
 
-	domain, err := ReadClientHello(q.buffer[:q.contiguousCryptoEnd])
+	domain, err := readClientHello(q.buffer[:q.contiguousCryptoEnd])
 	if err != nil {
 		var need *errNeedAtLeastData
 		if errors.As(err, &need) {
@@ -674,7 +661,7 @@ func (q *quicPacketSender) tryAssemble() (string, error) {
 		return "", err
 	}
 
-	return *domain, nil
+	return domain, nil
 }
 
 func (q *quicPacketSender) getQUICStructure(vb []byte) (*quicStructure, error) {
@@ -697,53 +684,114 @@ func (q *quicPacketSender) getQUICStructure(vb []byte) (*quicStructure, error) {
 }
 
 func newQUICInitialKey(destConnID []byte, s *quicStructure) (quicInitialKey, error) {
-	labels, err := expandLabels(destConnID, s)
+	if len(destConnID) == 0 || len(destConnID) > 20 {
+		return quicInitialKey{}, errNotQUIC
+	}
+	var key quicInitialKey
+	key.destConnIDLen = uint8(len(destConnID))
+	copy(key.destConnID[:], destConnID)
+	if err := expandLabels(destConnID, s, &key); err != nil {
+		return quicInitialKey{}, err
+	}
+	hpBlock, err := aes.NewCipher(key.hp[:])
 	if err != nil {
 		return quicInitialKey{}, err
 	}
-	return quicInitialKey{
-		destConnID:          bytes.Clone(destConnID),
-		labels:              labels,
-		largestPacketNumber: -1,
-	}, nil
+	aesCipher, err := aes.NewCipher(key.key[:])
+	if err != nil {
+		return quicInitialKey{}, err
+	}
+	aead, err := cipher.NewGCM(aesCipher)
+	if err != nil {
+		return quicInitialKey{}, err
+	}
+	key.hpBlock = hpBlock
+	key.aead = aead
+	key.largestPacketNumber = -1
+	return key, nil
 }
 
-func expandLabels(destConnID []byte, s *quicStructure) (quicLabels, error) {
-	initialSecret := hkdf.Extract(crypto.SHA256.New, destConnID, s.initialSalt)
-	secret, err := hkdfExpandLabel(initialSecret, "client in", crypto.SHA256.Size())
-	if err != nil {
-		return quicLabels{}, err
+func expandLabels(destConnID []byte, s *quicStructure, key *quicInitialKey) error {
+	var initialSecret [sha256.Size]byte
+	mac := hmac.New(sha256.New, s.initialSalt)
+	mac.Write(destConnID)
+	mac.Sum(initialSecret[:0])
+
+	var clientSecret [sha256.Size]byte
+	if err := hkdfExpandLabelInto(initialSecret[:], "client in", clientSecret[:]); err != nil {
+		return err
 	}
 
+	mac = hmac.New(sha256.New, clientSecret[:])
 	lp := s.labelPrefix
-
-	hp, err := hkdfExpandLabel(secret, lp+" hp", 16)
-	if err != nil {
-		return quicLabels{}, err
+	if err := hkdfExpandLabelOnce(mac, lp+" hp", key.hp[:]); err != nil {
+		return err
 	}
-	key, err := hkdfExpandLabel(secret, lp+" key", 16)
-	if err != nil {
-		return quicLabels{}, err
+	if err := hkdfExpandLabelOnce(mac, lp+" key", key.key[:]); err != nil {
+		return err
 	}
-	iv, err := hkdfExpandLabel(secret, lp+" iv", 12)
-	if err != nil {
-		return quicLabels{}, err
-	}
-	return quicLabels{hp: hp, key: key, iv: iv}, nil
+	return hkdfExpandLabelOnce(mac, lp+" iv", key.iv[:])
 }
 
 func hkdfExpandLabel(secret []byte, label string, length int) ([]byte, error) {
-	b := make([]byte, 0, 2+1+6+len(label)+1)
-	b = binary.BigEndian.AppendUint16(b, uint16(length))
-	b = append(b, byte(6+len(label)))
-	b = append(b, "tls13 "...)
-	b = append(b, label...)
-	b = append(b, 0) // context
-
-	out := make([]byte, length)
-	n, err := hkdf.Expand(crypto.SHA256.New, secret, b).Read(out)
-	if err != nil || n != length {
+	if length <= 0 || length > 255*sha256.Size {
 		return nil, errors.New("quic: HKDF-Expand-Label invocation failed")
 	}
+	out := make([]byte, length)
+	if err := hkdfExpandLabelInto(secret, label, out); err != nil {
+		return nil, err
+	}
 	return out, nil
+}
+
+func hkdfExpandLabelInto(secret []byte, label string, out []byte) error {
+	mac := hmac.New(sha256.New, secret)
+	return hkdfExpandLabelIntoMAC(mac, label, out)
+}
+
+func hkdfExpandLabelOnce(mac hash.Hash, label string, out []byte) error {
+	if len(out) > sha256.Size {
+		return errors.New("quic: HKDF-Expand-Label invocation failed")
+	}
+	return hkdfExpandLabelIntoMAC(mac, label, out)
+}
+
+func hkdfExpandLabelIntoMAC(mac hash.Hash, label string, out []byte) error {
+	length := len(out)
+	if length == 0 || length > 255*sha256.Size || 6+len(label) > 255 {
+		return errors.New("quic: HKDF-Expand-Label invocation failed")
+	}
+
+	var info [64]byte
+	infoLen := 2 + 1 + 6 + len(label) + 1
+	if infoLen > len(info) {
+		return errors.New("quic: HKDF-Expand-Label invocation failed")
+	}
+	info[0] = byte(uint16(length) >> 8)
+	info[1] = byte(length)
+	info[2] = byte(6 + len(label))
+	copy(info[3:], "tls13 ")
+	copy(info[9:], label)
+	info[9+len(label)] = 0
+
+	var t [sha256.Size]byte
+	var ctr [1]byte
+	n := 0
+	counter := byte(1)
+	for n < length {
+		mac.Reset()
+		if counter != 1 {
+			mac.Write(t[:])
+		}
+		mac.Write(info[:infoLen])
+		ctr[0] = counter
+		mac.Write(ctr[:])
+		mac.Sum(t[:0])
+		n += copy(out[n:], t[:])
+		counter++
+		if counter == 0 {
+			return errors.New("quic: HKDF-Expand-Label invocation failed")
+		}
+	}
+	return nil
 }

@@ -110,7 +110,7 @@ func (m *ReuseManager) cleanupLocked(now time.Time) {
 			entry.close()
 			continue
 		}
-		if !entry.unreusableAt.IsZero() && now.After(entry.unreusableAt) && entry.openUsage.Load() == 0 {
+		if !now.IsZero() && !entry.unreusableAt.IsZero() && now.After(entry.unreusableAt) && entry.openUsage.Load() == 0 {
 			entry.close()
 			continue
 		}
@@ -191,7 +191,11 @@ func (m *ReuseManager) newEntryLocked(transport http.RoundTripper, now time.Time
 }
 
 func (m *ReuseManager) GetTransport() http.RoundTripper {
-	now := time.Now()
+	needDeadline := m.hMaxReusableSecs.Max > 0
+	var now time.Time
+	if needDeadline {
+		now = time.Now()
+	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -205,6 +209,9 @@ func (m *ReuseManager) GetTransport() http.RoundTripper {
 	reused := entry != nil
 
 	if entry == nil {
+		if needDeadline && now.IsZero() {
+			now = time.Now()
+		}
 		transport := m.maker()
 		entry = m.newEntryLocked(transport, now)
 	}

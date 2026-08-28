@@ -9,11 +9,17 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func bindControl(ifaceName string) controlFn {
+func bindControl(ifaceName string, knownRemote netip.Addr) controlFn {
 	return func(ctx context.Context, network, address string, c syscall.RawConn) (err error) {
-		addrPort, err := netip.ParseAddrPort(address)
-		if err == nil && !addrPort.Addr().IsGlobalUnicast() {
-			return
+		if knownRemote.IsValid() {
+			if !knownRemote.Unmap().IsGlobalUnicast() {
+				return
+			}
+		} else {
+			addrPort, perr := netip.ParseAddrPort(address)
+			if perr == nil && !addrPort.Addr().IsGlobalUnicast() {
+				return
+			}
 		}
 
 		var innerErr error
@@ -29,14 +35,18 @@ func bindControl(ifaceName string) controlFn {
 	}
 }
 
-func bindIfaceToDialer(ifaceName string, dialer *net.Dialer, _ string, _ netip.Addr) error {
-	addControlToDialer(dialer, bindControl(ifaceName))
+func bindIfaceToDialer(ifaceName string, dialer *net.Dialer, _ string, destination netip.Addr) error {
+	if destination.IsValid() && !destination.Unmap().IsGlobalUnicast() {
+		return nil
+	}
+
+	addControlToDialer(dialer, bindControl(ifaceName, destination))
 
 	return nil
 }
 
 func bindIfaceToListenConfig(ifaceName string, lc *net.ListenConfig, _, address string, rAddrPort netip.AddrPort) (string, error) {
-	addControlToListenConfig(lc, bindControl(ifaceName))
+	addControlToListenConfig(lc, bindControl(ifaceName, netip.Addr{}))
 
 	return address, nil
 }

@@ -23,6 +23,19 @@ func TestGenerateRecordPayloadSizes(t *testing.T) {
 	require.Empty(t, factory.GenerateRecordPayloadSizes(2))
 }
 
+func TestGenerateRecordPayloadSizesCallerOwnsSlice(t *testing.T) {
+	factory := NewPaddingFactory([]byte("stop=1\n0=30-30"))
+	require.NotNil(t, factory)
+
+	first := factory.GenerateRecordPayloadSizes(0)
+	require.Equal(t, []int{30}, first)
+	first[0] = 7
+
+	second := factory.GenerateRecordPayloadSizes(0)
+	require.Equal(t, []int{30}, second)
+	require.Equal(t, 7, first[0])
+}
+
 func TestNewPaddingFactoryRejectsInvalidWireValues(t *testing.T) {
 	for _, scheme := range []string{
 		"stop=-1\n0=30-30",

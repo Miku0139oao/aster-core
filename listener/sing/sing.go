@@ -197,11 +197,11 @@ func (h *ListenerHandler) NewPacketConnection(ctx context.Context, conn network.
 		cPacket := &packet{
 			writer: &writer,
 			mutex:  &mutex,
-			rAddr:  metadata.Source.UDPAddr(),
 			lAddr:  conn.LocalAddr(),
 			buff:   buff,
 		}
-		cPacket.rAddr = N.NewCustomAddr(h.Type.String(), connID, cPacket.rAddr) // for tunnel's handleUDPConn
+		assignUDPAddr(&cPacket.rawSrc, &cPacket.srcIP, metadata.Source)
+		cPacket.rAddr = N.NewCustomAddr(h.Type.String(), connID, &cPacket.rawSrc) // for tunnel's handleUDPConn
 		if lAddr := getInAddr(ctx); lAddr != nil {
 			cPacket.lAddr = lAddr
 		}
@@ -220,9 +220,10 @@ func (h *ListenerHandler) NewPacket(ctx context.Context, key netip.AddrPort, buf
 	cPacket := &packet{
 		writer: &writer,
 		mutex:  &mutex,
-		rAddr:  metadata.Source.UDPAddr(),
 		buff:   buffer,
 	}
+	assignUDPAddr(&cPacket.rawSrc, &cPacket.srcIP, metadata.Source)
+	cPacket.rAddr = &cPacket.rawSrc
 	if h.Type != C.TUN { // make the handler-related SNAT key for not TUN listener
 		connID := fmt.Sprintf("%s:%s", h.handlerId, key)
 		cPacket.rAddr = N.NewCustomAddr(h.Type.String(), connID, cPacket.rAddr) // for tunnel's handleUDPConn
@@ -237,14 +238,16 @@ func (h *ListenerHandler) handlePacket(ctx context.Context, cPacket *packet, sou
 	cMetadata := acquirePacketMetadata(h.Type)
 	cPacket.metadata = cMetadata
 	if source.IsIP() && source.Fqdn == "" {
-		cMetadata.RawSrcAddr = source.Unwrap().UDPAddr()
+		assignUDPAddr(&cPacket.rawSrc, &cPacket.srcIP, source)
+		cMetadata.RawSrcAddr = &cPacket.rawSrc
 	}
 	if destination.IsIP() && destination.Fqdn == "" {
-		cMetadata.RawDstAddr = destination.Unwrap().UDPAddr()
+		assignUDPAddr(&cPacket.rawDst, &cPacket.dstIP, destination)
+		cMetadata.RawDstAddr = &cPacket.rawDst
 	}
-	inbound.ApplyAdditions(cMetadata, inbound.WithDstAddr(destination), inbound.WithSrcAddr(source), inbound.WithInAddr(cPacket.InAddr()))
+	applyPacketMetadataAddrs(cMetadata, destination, source, cPacket.InAddr())
 	inbound.ApplyAdditions(cMetadata, h.Additions...)
-	inbound.ApplyAdditions(cMetadata, getAdditions(ctx)...)
+	applyContextAdditions(ctx, cMetadata)
 
 	h.Tunnel.HandleUDPPacket(cPacket, cMetadata)
 }
@@ -274,9 +277,86 @@ type packet struct {
 	lAddr    net.Addr
 	buff     *buf.Buffer
 	metadata *C.Metadata
+	rawSrc   net.UDPAddr
+	rawDst   net.UDPAddr
+	srcIP    [16]byte
+	dstIP    [16]byte
 }
 
 var packetMetadataPool = sync.Pool{New: func() any { return new(C.Metadata) }}
+
+func assignUDPAddr(dst *net.UDPAddr, ipStorage *[16]byte, addr M.Socksaddr) {
+	addr = addr.Unwrap()
+	dst.Port = int(addr.Port)
+	dst.Zone = addr.Addr.Zone()
+	switch {
+	case addr.Addr.Is4():
+		ip4 := addr.Addr.As4()
+		copy(ipStorage[:4], ip4[:])
+		dst.IP = ipStorage[:4]
+	case addr.Addr.Is6():
+		ip16 := addr.Addr.As16()
+		copy(ipStorage[:], ip16[:])
+		dst.IP = ipStorage[:]
+	default:
+		dst.IP = nil
+		dst.Zone = ""
+	}
+}
+
+func applyPacketMetadataAddrs(metadata *C.Metadata, destination, source M.Socksaddr, inAddr net.Addr) {
+	applySocksDestination(metadata, destination)
+	if source.IsIP() {
+		src := source.Unwrap()
+		metadata.SrcIP = src.Addr.Unmap()
+		metadata.SrcPort = src.Port
+	} else if source.Port != 0 {
+		metadata.SrcPort = source.Port
+	}
+	applyInboundAddr(metadata, inAddr)
+}
+
+func applySocksDestination(metadata *C.Metadata, destination M.Socksaddr) {
+	// Match Metadata.SetRemoteAddr: a valid IP wins; otherwise copy Fqdn as Host.
+	// Do not use Socksaddr.IsFqdn() (net.isDomainName) — SetRemoteAddr accepts any Fqdn.
+	if destination.IsIP() {
+		dst := destination.Unwrap()
+		metadata.DstIP = dst.Addr.Unmap()
+		metadata.DstPort = dst.Port
+		return
+	}
+	if destination.Fqdn != "" {
+		metadata.Host = destination.Fqdn
+		metadata.DstPort = destination.Port
+		metadata.DstIP = netip.Addr{}
+	}
+}
+
+func applyInboundAddr(metadata *C.Metadata, inAddr net.Addr) {
+	if inAddr == nil {
+		return
+	}
+	switch addr := inAddr.(type) {
+	case *net.UDPAddr:
+		if addr != nil {
+			ap := addr.AddrPort()
+			metadata.InIP = ap.Addr().Unmap()
+			metadata.InPort = ap.Port()
+		}
+	case *net.TCPAddr:
+		if addr != nil {
+			ap := addr.AddrPort()
+			metadata.InIP = ap.Addr().Unmap()
+			metadata.InPort = ap.Port()
+		}
+	default:
+		var tmp C.Metadata
+		if err := tmp.SetRemoteAddr(inAddr); err == nil {
+			metadata.InIP = tmp.DstIP
+			metadata.InPort = tmp.DstPort
+		}
+	}
+}
 
 func acquirePacketMetadata(inboundType C.Type) *C.Metadata {
 	metadata := packetMetadataPool.Get().(*C.Metadata)
@@ -301,9 +381,16 @@ func (c *packet) WriteBack(b []byte, addr net.Addr) (n int, err error) {
 		return
 	}
 
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
-	conn := *c.writer
+	mutex := c.mutex
+	writer := c.writer
+	if mutex == nil || writer == nil {
+		err = errors.New("writeBack to closed connection")
+		return
+	}
+
+	mutex.Lock()
+	defer mutex.Unlock()
+	conn := *writer
 	if conn == nil {
 		err = errors.New("writeBack to closed connection")
 		return
@@ -318,7 +405,12 @@ func (c *packet) LocalAddr() net.Addr {
 }
 
 func (c *packet) Drop() {
-	c.buff.Release()
+	// Payload/metadata are one-shot. writer/mutex/rAddr are the WriteBack handle
+	// captured by NAT (WriteBackTarget) and must outlive Drop.
+	if c.buff != nil {
+		c.buff.Release()
+		c.buff = nil
+	}
 	if c.metadata != nil {
 		releasePacketMetadata(c.metadata)
 		c.metadata = nil

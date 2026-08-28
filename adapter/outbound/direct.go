@@ -3,6 +3,7 @@ package outbound
 import (
 	"context"
 	"fmt"
+	"net"
 
 	"github.com/Miku0139oao/aster-core/component/dialer"
 	"github.com/Miku0139oao/aster-core/component/loopback"
@@ -27,7 +28,13 @@ func (d *Direct) DialContext(ctx context.Context, metadata *C.Metadata) (C.Conn,
 	}
 	opts := d.DialOptions()
 	opts = append(opts, dialer.WithResolver(resolver.DirectHostResolver))
-	c, err := dialer.DialContext(ctx, "tcp", metadata.RemoteAddress(), opts...)
+	var c net.Conn
+	var err error
+	if metadata.Host == "" && metadata.DstIP.IsValid() {
+		c, err = dialer.DialContextTo(ctx, "tcp", metadata.DstIP, metadata.DstPort, opts...)
+	} else {
+		c, err = dialer.DialContext(ctx, "tcp", metadata.RemoteAddress(), opts...)
+	}
 	if err != nil {
 		return nil, err
 	}

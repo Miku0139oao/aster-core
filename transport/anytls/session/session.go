@@ -45,6 +45,8 @@ type Session struct {
 	sendPadding    bool
 	buffering      bool
 	buffer         []byte
+	padBuf         []byte
+	pktSizes       []int
 	pktCounter     atomic.Uint32
 	clientMetadata string
 
@@ -513,8 +515,8 @@ func (s *Session) writeConn(b []byte) (n int, err error) {
 		pkt := s.pktCounter.Add(1)
 		paddingF := s.padding.Load()
 		if pkt < paddingF.Stop {
-			pktSizes := paddingF.GenerateRecordPayloadSizes(pkt)
-			for _, l := range pktSizes {
+			s.pktSizes = paddingF.AppendRecordPayloadSizes(pkt, s.pktSizes[:0])
+			for _, l := range s.pktSizes {
 				remainPayloadLen := len(b)
 				if l == padding.CheckMark {
 					if remainPayloadLen == 0 {
@@ -533,11 +535,7 @@ func (s *Session) writeConn(b []byte) (n int, err error) {
 				} else if remainPayloadLen > 0 { // this packet contains padding and the last part of payload
 					paddingLen := l - remainPayloadLen - headerOverHeadSize
 					if paddingLen > 0 {
-						padding := make([]byte, headerOverHeadSize+paddingLen)
-						padding[0] = cmdWaste
-						binary.BigEndian.PutUint32(padding[1:5], 0)
-						binary.BigEndian.PutUint16(padding[5:7], uint16(paddingLen))
-						b = append(b, padding...)
+						b = s.appendWastePadding(b, paddingLen)
 					}
 					_, err = s.conn.Write(b)
 					if err != nil {
@@ -546,10 +544,7 @@ func (s *Session) writeConn(b []byte) (n int, err error) {
 					n += remainPayloadLen
 					b = nil
 				} else { // this packet is all padding
-					padding := make([]byte, headerOverHeadSize+l)
-					padding[0] = cmdWaste
-					binary.BigEndian.PutUint32(padding[1:5], 0)
-					binary.BigEndian.PutUint16(padding[5:7], uint16(l))
+					padding := s.wastePadding(l)
 					_, err = s.conn.Write(padding)
 					if err != nil {
 						return 0, err
@@ -570,4 +565,45 @@ func (s *Session) writeConn(b []byte) (n int, err error) {
 	}
 
 	return s.conn.Write(b)
+}
+
+func (s *Session) growPadBuf(n int) []byte {
+	if cap(s.padBuf) < n {
+		s.padBuf = make([]byte, n)
+		return s.padBuf
+	}
+	s.padBuf = s.padBuf[:n]
+	for i := range s.padBuf {
+		s.padBuf[i] = 0
+	}
+	return s.padBuf
+}
+
+func writeWasteHeader(b []byte, payloadLen int) {
+	b[0] = cmdWaste
+	binary.BigEndian.PutUint32(b[1:5], 0)
+	binary.BigEndian.PutUint16(b[5:7], uint16(payloadLen))
+}
+
+func (s *Session) wastePadding(payloadLen int) []byte {
+	b := s.growPadBuf(headerOverHeadSize + payloadLen)
+	writeWasteHeader(b, payloadLen)
+	return b
+}
+
+func (s *Session) appendWastePadding(payload []byte, paddingLen int) []byte {
+	need := len(payload) + headerOverHeadSize + paddingLen
+	if cap(payload) >= need {
+		off := len(payload)
+		payload = payload[:need]
+		writeWasteHeader(payload[off:], paddingLen)
+		for i := off + headerOverHeadSize; i < need; i++ {
+			payload[i] = 0
+		}
+		return payload
+	}
+	out := s.growPadBuf(need)
+	copy(out, payload)
+	writeWasteHeader(out[len(payload):], paddingLen)
+	return out
 }

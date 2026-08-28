@@ -164,6 +164,31 @@ func TestDomainSetOversizedKey(t *testing.T) {
 	assert.False(t, set.Has(builder.String()+"example.net"))
 }
 
+func TestDomainSetHasMatchesTrie(t *testing.T) {
+	tree := trie.New[struct{}]()
+	domains := []string{
+		"example.com", "+.google.com", "*.apple.com", "stun.*.*",
+		"www.baidu.com", "+.cn", ".qq.com", "Mijia Cloud", "中文.example",
+	}
+	for i := 0; i < 200; i++ {
+		domains = append(domains, strconv.Itoa(i)+".range.example.net")
+	}
+	for _, domain := range domains {
+		assert.NoError(t, tree.Insert(domain, struct{}{}))
+	}
+	set := tree.NewDomainSet()
+	assert.NotNil(t, set)
+	queries := []string{
+		"example.com", "EXAMPLE.COM", "www.google.com", "a.b.apple.com",
+		"stun.ab.cd", "www.baidu.com", "test.cn", "www.qq.com", "Mijia Cloud",
+		"中文.example", "42.range.example.net", "no-such.example.org",
+		"qq.com", "apple.com", "a.a.a",
+	}
+	for _, q := range queries {
+		assert.Equalf(t, tree.Search(q) != nil, set.Has(q), "query %q", q)
+	}
+}
+
 func BenchmarkDomainSetHas(b *testing.B) {
 	tree := trie.New[struct{}]()
 	for i := 0; i < 10000; i++ {

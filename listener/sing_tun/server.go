@@ -78,6 +78,9 @@ type ListenerHandler struct {
 	Inet4Address          []netip.Prefix
 	Inet6Address          []netip.Prefix
 	DisableICMPForwarding bool
+	dnsHijackAny53        bool
+	dnsHijackHasNon53     bool
+	dnsHijackReady        bool
 }
 
 var emptyAddressSet = []*netipx.IPSet{{}}
@@ -363,6 +366,7 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 		Inet6Address:          options.Inet6Address,
 		DisableICMPForwarding: options.DisableICMPForwarding,
 	}
+	handler.prepareDNSHijack()
 	l = &Listener{
 		closed:             false,
 		options:            options,
@@ -740,19 +744,34 @@ func (d *cDialerInterfaceFinder) DefaultInterfaceName(destination netip.Addr) st
 }
 
 func (d *cDialerInterfaceFinder) FindInterfaceName(destination netip.Addr) string {
-	for _, dest := range []netip.Addr{destination, netip.IPv4Unspecified(), netip.IPv6Unspecified()} {
-		autoDetectInterfaceName := d.DefaultInterfaceName(dest)
-		if autoDetectInterfaceName == d.tunName {
-			log.Warnln("[TUN] Auto detect interface for %s get same name with tun", destination.String())
-		} else if autoDetectInterfaceName == "" || autoDetectInterfaceName == "<nil>" {
-			log.Warnln("[TUN] Auto detect interface for %s get empty name.", destination.String())
-		} else {
-			log.Debugln("[TUN] Auto detect interface for %s --> %s", destination, autoDetectInterfaceName)
-			return autoDetectInterfaceName
-		}
+	if name := d.pickInterfaceName(destination, destination); name != "" {
+		return name
+	}
+	if name := d.pickInterfaceName(netip.IPv4Unspecified(), destination); name != "" {
+		return name
+	}
+	if name := d.pickInterfaceName(netip.IPv6Unspecified(), destination); name != "" {
+		return name
 	}
 	log.Warnln("[TUN] Auto detect interface for %s failed, return '<invalid>' to avoid lookback", destination)
 	return "<invalid>"
+}
+
+func (d *cDialerInterfaceFinder) pickInterfaceName(query, destination netip.Addr) string {
+	name := d.DefaultInterfaceName(query)
+	switch {
+	case name == d.tunName:
+		log.Warnln("[TUN] Auto detect interface for %s get same name with tun", destination)
+		return ""
+	case name == "" || name == "<nil>":
+		log.Warnln("[TUN] Auto detect interface for %s get empty name.", destination)
+		return ""
+	default:
+		if log.Enabled(log.DEBUG) {
+			log.Debugln("[TUN] Auto detect interface for %s --> %s", destination, name)
+		}
+		return name
+	}
 }
 
 func uidToRange[T constraints.Integer](uidList []T) []ranges.Range[T] {

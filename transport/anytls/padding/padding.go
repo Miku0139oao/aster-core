@@ -26,10 +26,11 @@ var DefaultPaddingScheme = []byte(`stop=8
 7=500-1000`)
 
 type PaddingFactory struct {
-	records   map[uint32][]recordSize
-	RawScheme []byte
-	Stop      uint32
-	Md5       string
+	records    map[uint32][]recordSize
+	staticSize map[uint32][]int
+	RawScheme  []byte
+	Stop       uint32
+	Md5        string
 }
 
 type recordSize struct {
@@ -76,6 +77,12 @@ func NewPaddingFactory(rawScheme []byte) *PaddingFactory {
 			p.records[uint32(pkt)] = records
 		}
 	}
+	p.staticSize = make(map[uint32][]int, len(p.records))
+	for pkt, records := range p.records {
+		if sizes, ok := staticRecordSizes(records); ok {
+			p.staticSize[pkt] = sizes
+		}
+	}
 	return p
 }
 
@@ -113,25 +120,62 @@ func parseRecordSizes(value string) ([]recordSize, bool) {
 	return records, true
 }
 
-func (p *PaddingFactory) GenerateRecordPayloadSizes(pkt uint32) []int {
-	records := p.records[pkt]
-	if len(records) == 0 {
-		return nil
-	}
-
-	pktSizes := make([]int, 0, len(records))
+func staticRecordSizes(records []recordSize) ([]int, bool) {
+	sizes := make([]int, 0, len(records))
 	for _, record := range records {
 		switch {
 		case record.checkMark:
-			pktSizes = append(pktSizes, CheckMark)
+			sizes = append(sizes, CheckMark)
 		case record.randomMax == 0:
-			pktSizes = append(pktSizes, int(record.min))
+			sizes = append(sizes, int(record.min))
+		default:
+			return nil, false
+		}
+	}
+	return sizes, true
+}
+
+// GenerateRecordPayloadSizes returns the record sizes for pkt.
+// The returned slice is uniquely owned by the caller.
+func (p *PaddingFactory) GenerateRecordPayloadSizes(pkt uint32) []int {
+	if sizes, ok := p.staticSize[pkt]; ok {
+		out := make([]int, len(sizes))
+		copy(out, sizes)
+		return out
+	}
+	return p.AppendRecordPayloadSizes(pkt, nil)
+}
+
+// AppendRecordPayloadSizes appends pkt's generated record sizes to dst.
+// Callers may reuse dst across calls to avoid allocating on the random path.
+// Static interned tables are copied into dst and must not be mutated in place.
+func (p *PaddingFactory) AppendRecordPayloadSizes(pkt uint32, dst []int) []int {
+	if sizes, ok := p.staticSize[pkt]; ok {
+		return append(dst[:0], sizes...)
+	}
+	records := p.records[pkt]
+	if len(records) == 0 {
+		if dst == nil {
+			return nil
+		}
+		return dst[:0]
+	}
+	dst = dst[:0]
+	if cap(dst) < len(records) {
+		dst = make([]int, 0, len(records))
+	}
+	for _, record := range records {
+		switch {
+		case record.checkMark:
+			dst = append(dst, CheckMark)
+		case record.randomMax == 0:
+			dst = append(dst, int(record.min))
 		default:
 			random, err := utils.CryptoRandomUint64n(record.randomMax)
 			if err == nil {
-				pktSizes = append(pktSizes, int(int64(random)+record.min))
+				dst = append(dst, int(int64(random)+record.min))
 			}
 		}
 	}
-	return pktSizes
+	return dst
 }

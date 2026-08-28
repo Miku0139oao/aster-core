@@ -84,8 +84,24 @@ func emit(logLevel LogLevel, format string, v ...any) {
 	if !Enabled(logLevel) {
 		return
 	}
-	event := newLog(logLevel, format, v...)
-	logCh <- event
+	payload := format
+	if len(v) > 0 {
+		payload = fmt.Sprintf(format, v...)
+	}
+	dispatch(Event{LogLevel: logLevel, Payload: payload})
+}
+
+func emitArgs(logLevel LogLevel, args ...any) {
+	if !Enabled(logLevel) {
+		return
+	}
+	dispatch(Event{LogLevel: logLevel, Payload: fmt.Sprint(args...)})
+}
+
+func dispatch(event Event) {
+	if source.HasSubscribers() {
+		logCh <- event
+	}
 	print(event)
 }
 
@@ -103,12 +119,5 @@ func print(data Event) {
 		log.Errorln(data.Payload)
 	case DEBUG:
 		log.Debugln(data.Payload)
-	}
-}
-
-func newLog(logLevel LogLevel, format string, v ...any) Event {
-	return Event{
-		LogLevel: logLevel,
-		Payload:  fmt.Sprintf(format, v...),
 	}
 }

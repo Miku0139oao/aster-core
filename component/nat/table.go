@@ -10,15 +10,24 @@ import (
 	"github.com/Miku0139oao/aster-core/constant/features"
 )
 
+const natHitSlots = 64
+
 type Table struct {
 	mapping    xsync.Map[C.UDPNatKey, *entry]
+	hits       [natHitSlots]atomic.Pointer[lastHit]
 	maxEntries int64
 	size       atomic.Int64
 	rejected   atomic.Uint64
 }
 
+type lastHit struct {
+	key   C.UDPNatKey
+	entry *entry
+}
+
 type entry struct {
 	PacketSender    C.PacketSender
+	dead            atomic.Bool
 	LocalUDPConnMap xsync.Map[string, *net.UDPConn]
 	LocalPendingMap xsync.Map[string, *localConnPromise]
 }
@@ -29,8 +38,25 @@ type localConnPromise struct {
 	err  error
 }
 
+func natCacheSlot(key C.UDPNatKey) uint {
+	// Client source ports are the NAT key's hot discriminator and need no extra
+	// hashing. Full-key equality still rejects a slot occupant from another flow.
+	if key.AddrPort.IsValid() {
+		return uint(key.AddrPort.Port()) & (natHitSlots - 1)
+	}
+	if n := len(key.Raw); n > 0 {
+		return uint(key.Raw[0]) & (natHitSlots - 1)
+	}
+	return uint(key.IngressType) & (natHitSlots - 1)
+}
+
 func (t *Table) GetOrCreate(key C.UDPNatKey, maker func() C.PacketSender) (C.PacketSender, bool, bool) {
+	slot := natCacheSlot(key)
+	if hit := t.hits[slot].Load(); hit != nil && hit.key == key && !hit.entry.dead.Load() {
+		return hit.entry.PacketSender, true, true
+	}
 	if item, loaded := t.mapping.Load(key); loaded {
+		t.remember(slot, key, item)
 		return item.PacketSender, true, true
 	}
 	for {
@@ -52,8 +78,22 @@ func (t *Table) GetOrCreate(key C.UDPNatKey, maker func() C.PacketSender) (C.Pac
 	return item.PacketSender, loaded, true
 }
 
+func (t *Table) remember(slot uint, key C.UDPNatKey, item *entry) {
+	if item == nil || item.dead.Load() {
+		return
+	}
+	hit := t.hits[slot].Load()
+	if hit != nil && !hit.entry.dead.Load() {
+		// Sticky per slot: a live occupant is left in place so interleaved
+		// flows cannot allocate a lastHit on every packet.
+		return
+	}
+	t.hits[slot].Store(&lastHit{key: key, entry: item})
+}
+
 func (t *Table) Delete(key C.UDPNatKey) {
-	if _, loaded := t.mapping.LoadAndDelete(key); loaded {
+	if item, loaded := t.mapping.LoadAndDelete(key); loaded {
+		item.dead.Store(true)
 		t.size.Add(-1)
 	}
 }

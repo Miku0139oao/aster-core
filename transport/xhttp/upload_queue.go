@@ -20,6 +20,8 @@ type UploadQueue struct {
 	packets      map[uint64][]byte
 	nextSeq      uint64
 	buf          []byte
+	ready        []byte
+	hasReady     bool
 	closed       bool
 	maxPackets   int
 	maxBytes     int
@@ -52,13 +54,29 @@ func (q *UploadQueue) SetByteBudget(reserve func(int) bool, release func(int)) {
 	q.mu.Unlock()
 }
 
+func (q *UploadQueue) storedPackets() int {
+	n := len(q.packets)
+	if q.hasReady {
+		n++
+	}
+	return n
+}
+
+func (q *UploadQueue) hasSeq(sequence uint64) bool {
+	if sequence == q.nextSeq {
+		return q.hasReady
+	}
+	_, exists := q.packets[sequence]
+	return exists
+}
+
 func (q *UploadQueue) CanPush(sequence uint64) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.closed {
 		return io.ErrClosedPipe
 	}
-	if _, exists := q.packets[sequence]; !exists && q.maxPackets > 0 && len(q.packets) >= q.maxPackets {
+	if !q.hasSeq(sequence) && q.maxPackets > 0 && q.storedPackets() >= q.maxPackets {
 		return ErrQueueTooLarge
 	}
 	return nil
@@ -82,8 +100,15 @@ func (q *UploadQueue) Push(p Packet) error {
 		return nil
 	}
 
-	previous, exists := q.packets[p.Seq]
-	if !exists && q.maxPackets > 0 && len(q.packets) >= q.maxPackets {
+	var previous []byte
+	exists := false
+	if p.Seq == q.nextSeq {
+		previous = q.ready
+		exists = q.hasReady
+	} else {
+		previous, exists = q.packets[p.Seq]
+	}
+	if !exists && q.maxPackets > 0 && q.storedPackets() >= q.maxPackets {
 		return ErrQueueTooLarge
 	}
 	delta := len(p.Payload) - len(previous)
@@ -97,7 +122,12 @@ func (q *UploadQueue) Push(p Packet) error {
 	if delta < 0 && q.releaseBytes != nil {
 		q.releaseBytes(-delta)
 	}
-	q.packets[p.Seq] = p.Payload
+	if p.Seq == q.nextSeq {
+		q.ready = p.Payload
+		q.hasReady = true
+	} else {
+		q.packets[p.Seq] = p.Payload
+	}
 	q.queuedBytes = nextBytes
 	q.condPushed.Broadcast()
 	return nil
@@ -118,6 +148,14 @@ func (q *UploadQueue) Read(b []byte) (int, error) {
 			return n, nil
 		}
 
+		if q.hasReady {
+			q.buf = q.ready
+			q.ready = nil
+			q.hasReady = false
+			q.nextSeq++
+			continue
+		}
+
 		if payload, ok := q.packets[q.nextSeq]; ok {
 			delete(q.packets, q.nextSeq)
 			q.nextSeq++
@@ -135,7 +173,7 @@ func (q *UploadQueue) Read(b []byte) (int, error) {
 			return 0, io.EOF
 		}
 
-		if q.maxPackets > 0 && len(q.packets) >= q.maxPackets {
+		if q.maxPackets > 0 && q.storedPackets() >= q.maxPackets {
 			q.mu.Unlock()
 			// the "reassembly buffer" is too large, and we want to constrain memory usage somehow.
 			// let's tear down the connection and hope the application retries.
@@ -157,6 +195,8 @@ func (q *UploadQueue) Close() error {
 	q.reader = nil
 	q.packets = nil
 	q.buf = nil
+	q.ready = nil
+	q.hasReady = false
 	if q.queuedBytes > 0 && q.releaseBytes != nil {
 		q.releaseBytes(q.queuedBytes)
 	}

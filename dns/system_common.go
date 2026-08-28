@@ -13,8 +13,24 @@ import (
 )
 
 func (c *systemClient) getDnsClients() ([]dnsClient, error) {
+	if last, ok := c.flushAt.Load().(time.Time); ok && !last.IsZero() && time.Since(last) < SystemDnsFlushTime {
+		if live := c.live.Load(); live != nil && len(*live) > 0 {
+			return *live, nil
+		}
+	}
+	return c.refreshDnsClients()
+}
+
+func (c *systemClient) refreshDnsClients() ([]dnsClient, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	if time.Since(c.lastFlush) < SystemDnsFlushTime {
+		if live := c.live.Load(); live != nil && len(*live) > 0 {
+			return *live, nil
+		}
+	}
+
 	var err error
 	if time.Since(c.lastFlush) > SystemDnsFlushTime {
 		var nameservers []string
@@ -58,16 +74,39 @@ func (c *systemClient) getDnsClients() ([]dnsClient, error) {
 			}
 		}
 	}
-	dnsClients := make([]dnsClient, 0, len(c.dnsClients))
+
+	live := c.snapshotLiveClients()
+	if len(live) > 0 {
+		// Store the snapshot before publishing flushAt so a lock-free reader
+		// that observes a fresh timestamp also observes the slice.
+		c.live.Store(&live)
+		if !c.lastFlush.IsZero() {
+			c.flushAt.Store(c.lastFlush)
+		}
+		return live, nil
+	}
+	c.live.Store(nil)
+	return nil, err
+}
+
+func (c *systemClient) snapshotLiveClients() []dnsClient {
+	n := 0
 	for _, sdc := range c.dnsClients {
 		if sdc.disableTimes == 0 {
-			dnsClients = append(dnsClients, sdc.dnsClient)
+			n++
 		}
 	}
-	if len(dnsClients) > 0 {
-		return dnsClients, nil
+	if n == 0 {
+		return nil
 	}
-	return nil, err
+	// cap==len so a caller append cannot alias the stored backing array.
+	live := make([]dnsClient, 0, n)
+	for _, sdc := range c.dnsClients {
+		if sdc.disableTimes == 0 {
+			live = append(live, sdc.dnsClient)
+		}
+	}
+	return live
 }
 
 func (c *systemClient) ResetConnection() {}

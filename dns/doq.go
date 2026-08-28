@@ -93,17 +93,9 @@ func (doq *dnsOverQUIC) Address() string { return doq.addr }
 
 func (doq *dnsOverQUIC) ExchangeContext(ctx context.Context, m *D.Msg) (msg *D.Msg, err error) {
 	// When sending queries over a QUIC connection, the DNS Message ID MUST be
-	// set to zero.
-	m = m.Copy()
-	id := m.Id
-	m.Id = 0
-	defer func() {
-		// Restore the original ID to not break compatibility with proxies.
-		m.Id = id
-		if msg != nil {
-			msg.Id = id
-		}
-	}()
+	// set to zero. Zero it in the packed wire buffer so the caller's Msg is not
+	// copied or mutated.
+	origID := m.Id
 
 	// Check if there was already an active conn before sending the request.
 	// We'll only attempt to re-connect if there was one.
@@ -133,6 +125,9 @@ func (doq *dnsOverQUIC) ExchangeContext(ctx context.Context, m *D.Msg) (msg *D.M
 		doq.closeConnWithError(err)
 	}
 
+	if msg != nil {
+		msg.Id = origID
+	}
 	return msg, err
 }
 
@@ -163,14 +158,16 @@ func (doq *dnsOverQUIC) exchangeQUIC(ctx context.Context, msg *D.Msg) (resp *D.M
 	// Note: we do not support receiving multiple messages over a single connection.
 	buf := pool.Get(2 + MaxMsgSize)
 	defer pool.Put(buf)
-	b, err := msg.PackBuffer(buf[2:])
+	b, _, err := packDNSQueryID0(msg, buf[2:])
 	if err != nil {
 		return nil, fmt.Errorf("failed to pack DNS message for DoQ: %w", err)
 	}
 	if len(b) > MaxMsgSize {
 		return nil, fmt.Errorf("DNS message is too large: %d > %d", len(b), MaxMsgSize)
 	}
-	binary.BigEndian.PutUint16(buf, uint16(len(b)))
+	if err = putLengthPrefixed(buf, b); err != nil {
+		return nil, err
+	}
 
 	var conn *quic.Conn
 	conn, err = doq.getConnection(ctx, true)
@@ -201,11 +198,11 @@ func (doq *dnsOverQUIC) exchangeQUIC(ctx context.Context, msg *D.Msg) (resp *D.M
 	_ = stream.Close()
 
 	// -- reading the response ---
-	var respLen uint16
-	err = binary.Read(stream, binary.BigEndian, &respLen)
+	_, err = io.ReadFull(stream, buf[:2])
 	if err != nil {
 		return nil, fmt.Errorf("reading response length from %s: %w", doq.Address(), err)
 	}
+	respLen := binary.BigEndian.Uint16(buf[:2])
 	if respLen == 0 {
 		return nil, fmt.Errorf("received empty response from %s", doq.Address())
 	}
@@ -267,10 +264,10 @@ func (doq *dnsOverQUIC) getConnection(ctx context.Context, useCached bool) (*qui
 
 // hasConnection returns true if there's an active QUIC connection.
 func (doq *dnsOverQUIC) hasConnection() (ok bool) {
-	doq.connMu.Lock()
-	defer doq.connMu.Unlock()
-
-	return doq.conn != nil
+	doq.connMu.RLock()
+	ok = doq.conn != nil
+	doq.connMu.RUnlock()
+	return
 }
 
 // getQUICConfig returns the QUIC config in a thread-safe manner.  Note, that
@@ -294,9 +291,6 @@ func (doq *dnsOverQUIC) resetQUICConfig() {
 
 // openStream opens a new QUIC stream for the specified connection.
 func (doq *dnsOverQUIC) openStream(ctx context.Context, conn *quic.Conn) (*quic.Stream, error) {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
 	stream, err := conn.OpenStreamSync(ctx)
 	if err == nil {
 		return stream, nil

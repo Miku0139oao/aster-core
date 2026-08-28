@@ -39,6 +39,27 @@ func BenchmarkWriteDataFrame(b *testing.B) {
 	}
 }
 
+func BenchmarkWritePaddedFrame(b *testing.B) {
+	factory := padding.NewPaddingFactory([]byte("stop=1000000\n1=64-64,c,128-128"))
+	var paddingFactory atomic.Pointer[padding.PaddingFactory]
+	paddingFactory.Store(factory)
+	payload := make([]byte, 16)
+	session := &Session{
+		conn:        discardConn{},
+		sendPadding: true,
+		padding:     &paddingFactory,
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		session.pktCounter.Store(0)
+		session.sendPadding = true
+		if _, err := session.writeDataFrame(1, payload); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func BenchmarkSessionUpload(b *testing.B) {
 	for _, size := range []int{1024, 16 * 1024, 64 * 1024} {
 		b.Run(strconv.Itoa(size), func(b *testing.B) {

@@ -6,11 +6,42 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 
 	P "github.com/Miku0139oao/aster-core/constant/provider"
 
 	"github.com/klauspost/compress/zstd"
 )
+
+var mrsEncoderPool = sync.Pool{
+	New: func() any {
+		enc, err := zstd.NewWriter(nil, zstd.WithEncoderConcurrency(1))
+		if err != nil {
+			return nil
+		}
+		return enc
+	},
+}
+
+func acquireMRSEncoder(w io.Writer) (*zstd.Encoder, error) {
+	enc, _ := mrsEncoderPool.Get().(*zstd.Encoder)
+	if enc == nil {
+		return zstd.NewWriter(w, zstd.WithEncoderConcurrency(1))
+	}
+	enc.Reset(w)
+	return enc, nil
+}
+
+func releaseMRSEncoder(encoder *zstd.Encoder, errp *error) {
+	if encoder == nil {
+		return
+	}
+	if closeErr := encoder.Close(); *errp == nil {
+		*errp = closeErr
+	}
+	encoder.Reset(nil)
+	mrsEncoderPool.Put(encoder)
+}
 
 func ConvertToMrs(buf []byte, behavior P.RuleBehavior, format P.RuleFormat, w io.Writer) (err error) {
 	strategy := newStrategy(behavior, nil)
@@ -31,48 +62,19 @@ func ConvertToMrs(buf []byte, behavior P.RuleBehavior, format P.RuleFormat, w io
 		}
 
 		var encoder *zstd.Encoder
-		encoder, err = zstd.NewWriter(w)
+		encoder, err = acquireMRSEncoder(w)
 		if err != nil {
 			return err
 		}
-		defer func() {
-			zstdErr := encoder.Close()
-			if err == nil {
-				err = zstdErr
-			}
-		}()
+		defer releaseMRSEncoder(encoder, &err)
 
-		// header
-		_, err = encoder.Write(MrsMagicBytes[:])
-		if err != nil {
+		var hdr [mrsHeaderSize]byte
+		copy(hdr[:4], MrsMagicBytes[:])
+		hdr[4] = behavior.Byte()
+		binary.BigEndian.PutUint64(hdr[5:13], uint64(_strategy.Count()))
+		if _, err = encoder.Write(hdr[:]); err != nil {
 			return err
 		}
-
-		// behavior
-		_behavior := []byte{behavior.Byte()}
-		_, err = encoder.Write(_behavior[:])
-		if err != nil {
-			return err
-		}
-
-		// count
-		count := int64(_strategy.Count())
-		err = binary.Write(encoder, binary.BigEndian, count)
-		if err != nil {
-			return err
-		}
-
-		// extra (reserved for future using)
-		var extra []byte
-		err = binary.Write(encoder, binary.BigEndian, int64(len(extra)))
-		if err != nil {
-			return err
-		}
-		_, err = encoder.Write(extra)
-		if err != nil {
-			return err
-		}
-
 		return _strategy.WriteMrs(encoder)
 	} else {
 		return ErrInvalidFormat

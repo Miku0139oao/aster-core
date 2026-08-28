@@ -11,7 +11,6 @@ import (
 	"github.com/Miku0139oao/aster-core/transport/vless/vision"
 
 	"github.com/gofrs/uuid/v5"
-	"google.golang.org/protobuf/proto"
 )
 
 type Conn struct {
@@ -71,12 +70,13 @@ func (vc *Conn) WriteBuffer(buffer *buf.Buffer) error {
 }
 
 func (vc *Conn) sendRequest(p []byte) (err error) {
-	var addonsBytes []byte
+	var addonsStorage [128]byte
+	addonsBytes := addonsStorage[:0]
 	if vc.addons != nil {
-		addonsBytes, err = proto.Marshal(vc.addons)
-		if err != nil {
-			return
-		}
+		addonsBytes = appendAddons(addonsBytes, vc.addons)
+	}
+	if len(addonsBytes) > 255 {
+		return errors.New("vless addons exceed maximum length")
 	}
 
 	requestLen := 1  // protocol version
@@ -94,33 +94,62 @@ func (vc *Conn) sendRequest(p []byte) (err error) {
 	buffer := buf.NewSize(requestLen)
 	defer buffer.Release()
 
-	buf.Must(
-		buffer.WriteByte(Version),              // protocol version
-		buf.Error(buffer.Write(vc.id.Bytes())), // 16 bytes of uuid
-		buffer.WriteByte(byte(len(addonsBytes))),
-		buf.Error(buffer.Write(addonsBytes)),
-	)
+	if err = writeRequestBytes(buffer, Version); err != nil {
+		return err
+	}
+	if err = writeRequestSlice(buffer, vc.id[:]); err != nil {
+		return err
+	}
+	if err = writeRequestBytes(buffer, byte(len(addonsBytes))); err != nil {
+		return err
+	}
+	if err = writeRequestSlice(buffer, addonsBytes); err != nil {
+		return err
+	}
 
 	if vc.dst.Mux {
-		buf.Must(buffer.WriteByte(CommandMux))
+		if err = writeRequestBytes(buffer, CommandMux); err != nil {
+			return err
+		}
 	} else {
+		command := CommandTCP
 		if vc.dst.UDP {
-			buf.Must(buffer.WriteByte(CommandUDP))
-		} else {
-			buf.Must(buffer.WriteByte(CommandTCP))
+			command = CommandUDP
+		}
+		if err = writeRequestBytes(buffer, command); err != nil {
+			return err
 		}
 
 		binary.BigEndian.PutUint16(buffer.Extend(2), vc.dst.Port)
-		buf.Must(
-			buffer.WriteByte(vc.dst.AddrType),
-			buf.Error(buffer.Write(vc.dst.Addr)),
-		)
+		if err = writeRequestBytes(buffer, vc.dst.AddrType); err != nil {
+			return err
+		}
+		if err = writeRequestSlice(buffer, vc.dst.Addr); err != nil {
+			return err
+		}
 	}
 
-	buf.Must(buf.Error(buffer.Write(p)))
+	if err = writeRequestSlice(buffer, p); err != nil {
+		return err
+	}
 
 	_, err = vc.ExtendedConn.Write(buffer.Bytes())
 	return
+}
+
+func writeRequestBytes(buffer *buf.Buffer, value byte) error {
+	return buffer.WriteByte(value)
+}
+
+func writeRequestSlice(buffer *buf.Buffer, data []byte) error {
+	n, err := buffer.Write(data)
+	if err != nil {
+		return err
+	}
+	if n != len(data) {
+		return io.ErrShortBuffer
+	}
+	return nil
 }
 
 func (vc *Conn) recvResponse() (err error) {

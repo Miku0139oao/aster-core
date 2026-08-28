@@ -58,19 +58,33 @@ func ReadAddons(data []byte) (*Addons, error) {
 	return &addons, nil
 }
 
-func WriteAddons(addons *Addons) []byte {
-	var writer bytes.Buffer
+func appendUvarint(dst []byte, x uint64) []byte {
+	for x >= 0x80 {
+		dst = append(dst, byte(x)|0x80)
+		x >>= 7
+	}
+	return append(dst, byte(x))
+}
+
+func appendAddons(dst []byte, addons *Addons) []byte {
+	if addons == nil {
+		return dst
+	}
 	if len(addons.Flow) > 0 {
-		WriteUvarint(&writer, (1<<3)|2) // (field << 3) bit-or wire_type encoded as uint32 varint
-		WriteUvarint(&writer, uint64(len(addons.Flow)))
-		writer.WriteString(addons.Flow)
+		dst = appendUvarint(dst, (1<<3)|2) // (field << 3) bit-or wire_type encoded as uint32 varint
+		dst = appendUvarint(dst, uint64(len(addons.Flow)))
+		dst = append(dst, addons.Flow...)
 	}
 	if len(addons.Seed) > 0 {
-		WriteUvarint(&writer, (2<<3)|2) // (field << 3) bit-or wire_type encoded as uint32 varint
-		WriteUvarint(&writer, uint64(len(addons.Seed)))
-		writer.Write(addons.Seed)
+		dst = appendUvarint(dst, (2<<3)|2) // (field << 3) bit-or wire_type encoded as uint32 varint
+		dst = appendUvarint(dst, uint64(len(addons.Seed)))
+		dst = append(dst, addons.Seed...)
 	}
-	return writer.Bytes()
+	return dst
+}
+
+func WriteAddons(addons *Addons) []byte {
+	return appendAddons(nil, addons)
 }
 
 func WriteUvarint(writer *bytes.Buffer, x uint64) {

@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/binary"
-	"encoding/hex"
 	"fmt"
 	"net/netip"
 	"os"
@@ -13,8 +12,8 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
-	"unicode"
 	"unsafe"
 
 	"github.com/mdlayher/netlink"
@@ -90,49 +89,63 @@ func findProcessName(network string, ip netip.Addr, srcPort int) (uint32, string
 	return uid, pp, err
 }
 
+var (
+	diagMu   sync.Mutex
+	diagConn *netlink.Conn
+)
+
 func resolveSocketByNetlink(network string, ip netip.Addr, srcPort int) (uid uint32, inode uint32, err error) {
-	request := &inetDiagRequest{
-		States: 0xffffffff,
-		Cookie: [2]uint32{0xffffffff, 0xffffffff},
-	}
+	var request inetDiagRequest
+	request.States = 0xffffffff
+	request.Cookie = [2]uint32{0xffffffff, 0xffffffff}
 
 	if ip.Is4() {
 		request.Family = unix.AF_INET
+		a := ip.As4()
+		copy(request.Src[:], a[:])
 	} else {
 		request.Family = unix.AF_INET6
+		a := ip.As16()
+		copy(request.Src[:], a[:])
 	}
 
-	if strings.HasPrefix(network, "tcp") {
+	switch {
+	case network == TCP || (len(network) >= 3 && network[0] == 't' && network[1] == 'c' && network[2] == 'p'):
 		request.Protocol = unix.IPPROTO_TCP
-	} else if strings.HasPrefix(network, "udp") {
+	case network == UDP || (len(network) >= 3 && network[0] == 'u' && network[1] == 'd' && network[2] == 'p'):
 		request.Protocol = unix.IPPROTO_UDP
-	} else {
+	default:
 		return 0, 0, ErrInvalidNetwork
 	}
 
-	copy(request.Src[:], ip.AsSlice())
-
 	binary.BigEndian.PutUint16(request.SrcPort[:], uint16(srcPort))
 
-	conn, err := netlink.Dial(unix.NETLINK_INET_DIAG, nil)
-	if err != nil {
-		return 0, 0, err
+	diagMu.Lock()
+	defer diagMu.Unlock()
+	if diagConn == nil {
+		diagConn, err = netlink.Dial(unix.NETLINK_INET_DIAG, nil)
+		if err != nil {
+			return 0, 0, err
+		}
 	}
-	defer conn.Close()
 
 	message := netlink.Message{
 		Header: netlink.Header{
 			Type:  SOCK_DIAG_BY_FAMILY,
 			Flags: netlink.Request | netlink.Dump,
 		},
-		Data: (*(*[inetDiagRequestSize]byte)(unsafe.Pointer(request)))[:],
+		Data: (*(*[inetDiagRequestSize]byte)(unsafe.Pointer(&request)))[:],
 	}
 
-	messages, err := conn.Execute(message)
+	messages, err := diagConn.Execute(message)
 	if err != nil {
+		_ = diagConn.Close()
+		diagConn = nil
 		return 0, 0, err
 	}
 
+	want := ip.Unmap()
+	wantPort := uint16(srcPort)
 	err = ErrNotFound
 	for _, msg := range messages {
 		if len(msg.Data) < inetDiagResponseSize {
@@ -145,7 +158,7 @@ func resolveSocketByNetlink(network string, ip netip.Addr, srcPort int) (uid uin
 		uid, inode, err = response.UID, response.INode, nil
 
 		// check src port
-		if binary.BigEndian.Uint16(response.SrcPort[:]) != uint16(srcPort) {
+		if binary.BigEndian.Uint16(response.SrcPort[:]) != wantPort {
 			continue
 		}
 
@@ -153,17 +166,13 @@ func resolveSocketByNetlink(network string, ip netip.Addr, srcPort int) (uid uin
 		var src netip.Addr
 		switch response.Family {
 		case unix.AF_INET:
-			var a [4]byte
-			copy(a[:], response.Src[:4])
-			src = netip.AddrFrom4(a)
+			src = netip.AddrFrom4(*(*[4]byte)(response.Src[:4]))
 		case unix.AF_INET6:
-			var a [16]byte
-			copy(a[:], response.Src[:])
-			src = netip.AddrFrom16(a).Unmap()
+			src = netip.AddrFrom16(response.Src).Unmap()
 		default:
 			continue
 		}
-		if src != ip.Unmap() {
+		if src != want {
 			continue
 		}
 
@@ -181,7 +190,10 @@ func resolveProcessNameByProcSearch(inode, uid uint32) (string, error) {
 	}
 
 	buffer := make([]byte, unix.PathMax)
-	socket := fmt.Appendf(nil, "socket:[%d]", inode)
+	socket := make([]byte, 0, 24)
+	socket = append(socket, "socket:["...)
+	socket = strconv.AppendUint(socket, uint64(inode), 10)
+	socket = append(socket, ']')
 
 	for _, f := range files {
 		if !f.IsDir() || !isPid(f.Name()) {
@@ -190,14 +202,14 @@ func resolveProcessNameByProcSearch(inode, uid uint32) (string, error) {
 
 		info, err := f.Info()
 		if err != nil {
-			return "", err
+			continue
 		}
 		if info.Sys().(*syscall.Stat_t).Uid != uid {
 			continue
 		}
 
-		processPath := filepath.Join("/proc", f.Name())
-		fdPath := filepath.Join(processPath, "fd")
+		processPath := "/proc/" + f.Name()
+		fdPath := processPath + "/fd"
 
 		fds, err := os.ReadDir(fdPath)
 		if err != nil {
@@ -205,25 +217,28 @@ func resolveProcessNameByProcSearch(inode, uid uint32) (string, error) {
 		}
 
 		for _, fd := range fds {
-			n, err := unix.Readlink(filepath.Join(fdPath, fd.Name()), buffer)
+			n, err := unix.Readlink(fdPath+"/"+fd.Name(), buffer)
 			if err != nil {
 				continue
 			}
 
+			if !bytes.Equal(buffer[:n], socket) {
+				continue
+			}
+			var name string
 			if runtime.GOOS == "android" {
-				if bytes.Equal(buffer[:n], socket) {
-					cmdline, err := os.ReadFile(path.Join(processPath, "cmdline"))
-					if err != nil {
-						return "", err
-					}
-
-					return splitCmdline(cmdline), nil
+				cmdline, err := os.ReadFile(path.Join(processPath, "cmdline"))
+				if err != nil {
+					return "", err
 				}
+				name = splitCmdline(cmdline)
 			} else {
-				if bytes.Equal(buffer[:n], socket) {
-					return os.Readlink(filepath.Join(processPath, "exe"))
+				name, err = os.Readlink(processPath + "/exe")
+				if err != nil {
+					return "", err
 				}
 			}
+			return name, nil
 		}
 	}
 
@@ -271,25 +286,6 @@ func resolveProcessNameByUID(uid uint32) (string, error) {
 	return "", fmt.Errorf("no process found with uid %d", uid)
 }
 
-func splitCmdline(cmdline []byte) string {
-	cmdline = bytes.Trim(cmdline, " ")
-
-	idx := bytes.IndexFunc(cmdline, func(r rune) bool {
-		return unicode.IsControl(r) || unicode.IsSpace(r)
-	})
-
-	if idx == -1 {
-		return filepath.Base(string(cmdline))
-	}
-	return filepath.Base(string(cmdline[:idx]))
-}
-
-func isPid(s string) bool {
-	return strings.IndexFunc(s, func(r rune) bool {
-		return !unicode.IsDigit(r)
-	}) == -1
-}
-
 // resolveSocketByProcFS finds UID and inode from /proc/net/{tcp,tcp6,udp,udp6}.
 // In TUN mode metadata sourceIP is often the gateway (e.g. fake-ip range), not
 // the socket's real local address; we match by local port first and prefer
@@ -297,9 +293,9 @@ func isPid(s string) bool {
 func resolveSocketByProcFS(network string, ip netip.Addr, srcPort int) (uint32, uint32, error) {
 	var proto string
 	switch {
-	case strings.HasPrefix(network, "tcp"):
+	case network == TCP || (len(network) >= 3 && network[0] == 't' && network[1] == 'c' && network[2] == 'p'):
 		proto = "tcp"
-	case strings.HasPrefix(network, "udp"):
+	case network == UDP || (len(network) >= 3 && network[0] == 'u' && network[1] == 'd' && network[2] == 'p'):
 		proto = "udp"
 	default:
 		return 0, 0, ErrInvalidNetwork
@@ -418,67 +414,3 @@ func searchProcNetFileByPort(path string, targetIP netip.Addr, targetPort uint16
 	}
 	return 0, 0, false, ErrNotFound
 }
-
-func parseHexAddrPort(s string, isV6 bool) (netip.Addr, uint16, error) {
-	colon := strings.IndexByte(s, ':')
-	if colon < 0 {
-		return netip.Addr{}, 0, fmt.Errorf("invalid addr:port: %s", s)
-	}
-
-	port64, err := strconv.ParseUint(s[colon+1:], 16, 16)
-	if err != nil {
-		return netip.Addr{}, 0, err
-	}
-
-	var addr netip.Addr
-	if isV6 {
-		addr, err = parseHexIPv6(s[:colon])
-	} else {
-		addr, err = parseHexIPv4(s[:colon])
-	}
-	return addr, uint16(port64), err
-}
-
-func parseHexIPv4(s string) (netip.Addr, error) {
-	if len(s) != 8 {
-		return netip.Addr{}, fmt.Errorf("invalid ipv4 hex len: %d", len(s))
-	}
-	b, err := hex.DecodeString(s)
-	if err != nil {
-		return netip.Addr{}, err
-	}
-	var ip [4]byte
-	if littleEndian {
-		ip[0], ip[1], ip[2], ip[3] = b[3], b[2], b[1], b[0]
-	} else {
-		copy(ip[:], b)
-	}
-	return netip.AddrFrom4(ip), nil
-}
-
-func parseHexIPv6(s string) (netip.Addr, error) {
-	if len(s) != 32 {
-		return netip.Addr{}, fmt.Errorf("invalid ipv6 hex len: %d", len(s))
-	}
-	var ip [16]byte
-	for i := 0; i < 4; i++ {
-		b, err := hex.DecodeString(s[i*8 : (i+1)*8])
-		if err != nil {
-			return netip.Addr{}, err
-		}
-		if littleEndian {
-			ip[i*4+0] = b[3]
-			ip[i*4+1] = b[2]
-			ip[i*4+2] = b[1]
-			ip[i*4+3] = b[0]
-		} else {
-			copy(ip[i*4:(i+1)*4], b)
-		}
-	}
-	return netip.AddrFrom16(ip), nil
-}
-
-var littleEndian = func() bool {
-	x := uint32(0x01020304)
-	return *(*byte)(unsafe.Pointer(&x)) == 0x04
-}()

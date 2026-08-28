@@ -2,13 +2,16 @@ package dns
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
+	"io"
 	"net"
 	"runtime"
 	"sync"
 	"time"
 
 	"github.com/Miku0139oao/aster-core/common/deque"
+	"github.com/Miku0139oao/aster-core/common/pool"
 	"github.com/Miku0139oao/aster-core/component/ca"
 	"github.com/Miku0139oao/aster-core/component/resolver"
 	C "github.com/Miku0139oao/aster-core/constant"
@@ -76,16 +79,7 @@ func (t *dnsOverTLS) ExchangeContext(ctx context.Context, m *D.Msg) (*D.Msg, err
 				isOldConn = false
 			}
 
-			dClient := &D.Client{
-				UDPSize: 4096,
-				Timeout: 5 * time.Second,
-			}
-			dConn := &D.Conn{
-				Conn:    conn,
-				UDPSize: dClient.UDPSize,
-			}
-
-			msg, _, err = dClient.ExchangeWithConn(m, dConn)
+			msg, err = exchangeLengthPrefixedConn(conn, m, 5*time.Second)
 			if err != nil {
 				_ = conn.Close()
 				conn = nil
@@ -116,6 +110,52 @@ func (t *dnsOverTLS) ExchangeContext(ctx context.Context, m *D.Msg) (*D.Msg, err
 	case ret := <-ch:
 		return ret.msg, ret.err
 	}
+}
+
+func exchangeLengthPrefixedConn(conn net.Conn, m *D.Msg, timeout time.Duration) (*D.Msg, error) {
+	if timeout > 0 {
+		if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+			return nil, err
+		}
+		defer conn.SetDeadline(time.Time{})
+	}
+
+	buf := pool.Get(2 + MaxMsgSize)
+	defer pool.Put(buf)
+
+	packed, err := m.PackBuffer(buf[2:])
+	if err != nil {
+		return nil, err
+	}
+	if err = putLengthPrefixed(buf, packed); err != nil {
+		return nil, err
+	}
+	if _, err = conn.Write(buf[:2+len(packed)]); err != nil {
+		return nil, err
+	}
+
+	if _, err = io.ReadFull(conn, buf[:2]); err != nil {
+		return nil, err
+	}
+	respLen := binary.BigEndian.Uint16(buf[:2])
+	if respLen == 0 {
+		return nil, fmt.Errorf("received empty DNS response")
+	}
+	if int(respLen) > MaxMsgSize {
+		return nil, fmt.Errorf("received response that is too large: %d > %d", respLen, MaxMsgSize)
+	}
+	if _, err = io.ReadFull(conn, buf[:respLen]); err != nil {
+		return nil, err
+	}
+
+	resp := new(D.Msg)
+	if err = resp.Unpack(buf[:respLen]); err != nil {
+		return nil, err
+	}
+	if resp.Id != m.Id {
+		return resp, D.ErrId
+	}
+	return resp, nil
 }
 
 func (t *dnsOverTLS) dialContext(ctx context.Context) (net.Conn, error) {

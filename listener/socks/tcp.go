@@ -181,8 +181,9 @@ func HandleSocks4(conn net.Conn, tunnel C.Tunnel, store auth.AuthStore, addition
 		conn.Close()
 		return
 	}
-	additions = append(additions, inbound.WithInUser(user))
-	tunnel.HandleTCPConn(inbound.NewSocket(socks5.ParseAddr(addr), conn, C.SOCKS4, additions...))
+	c, metadata := inbound.NewSocket(socks5.ParseAddr(addr), conn, C.SOCKS4, additions...)
+	metadata.InUser = user
+	tunnel.HandleTCPConn(c, metadata)
 }
 
 func HandleSocks5(conn net.Conn, tunnel C.Tunnel, store auth.AuthStore, additions ...inbound.Addition) {
@@ -197,6 +198,7 @@ func HandleSocks5(conn net.Conn, tunnel C.Tunnel, store auth.AuthStore, addition
 		io.Copy(io.Discard, conn)
 		return
 	}
-	additions = append(additions, inbound.WithInUser(user))
-	tunnel.HandleTCPConn(inbound.NewSocket(target, conn, C.SOCKS5, additions...))
+	c, metadata := inbound.NewSocket(target, conn, C.SOCKS5, additions...)
+	metadata.InUser = user
+	tunnel.HandleTCPConn(c, metadata)
 }

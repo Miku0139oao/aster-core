@@ -16,7 +16,6 @@ import (
 	"github.com/Miku0139oao/aster-core/log"
 
 	D "github.com/miekg/dns"
-	"github.com/samber/lo"
 	"golang.org/x/exp/maps"
 )
 
@@ -26,9 +25,15 @@ type dnsClient interface {
 	ResetConnection()
 }
 
+type dnsCacheKey struct {
+	name   string
+	qtype  uint16
+	qclass uint16
+}
+
 type dnsCache interface {
-	GetWithExpire(key string) (*D.Msg, time.Time, bool)
-	SetWithExpire(key string, value *D.Msg, expire time.Time)
+	GetWithExpire(key dnsCacheKey) (*D.Msg, time.Time, bool)
+	SetWithExpire(key dnsCacheKey, value *D.Msg, expire time.Time)
 	Clear()
 }
 
@@ -175,10 +180,11 @@ func (r *Resolver) ExchangeContext(ctx context.Context, m *D.Msg) (msg *D.Msg, e
 	}()
 
 	q := m.Question[0]
-	domain := msgToDomain(m)
 	msg, expireTime, hit := getMsgFromCache(r.cache, q)
 	if hit {
-		log.Debugln("[DNS] cache hit %s --> %s, expire at %s", domain, msgToLogString(msg), expireTime.Format("2006-01-02 15:04:05"))
+		if log.Enabled(log.DEBUG) {
+			log.Debugln("[DNS] cache hit %s --> %s, expire at %s", msgToDomain(m), msgToLogString(msg), expireTime.Format("2006-01-02 15:04:05"))
+		}
 		now := time.Now()
 		if expireTime.Before(now) {
 			setMsgTTL(msg, uint32(1)) // Continue fetch
@@ -230,7 +236,8 @@ func (r *Resolver) exchangeWithoutCache(ctx context.Context, m *D.Msg) (msg *D.M
 		return
 	}
 
-	ch := r.group.DoChan(q.String(), fn)
+	key := questionFlightKey(q)
+	ch := r.group.DoChan(key, fn)
 
 	var result singleflight.Result[*D.Msg]
 
@@ -246,7 +253,7 @@ func (r *Resolver) exchangeWithoutCache(ctx context.Context, m *D.Msg) (msg *D.M
 				result := <-ch
 				ret, err, shared := result.Val, result.Err, result.Shared
 				if err != nil && !shared && ret.Opcode < retryMax { // retry
-					r.group.DoChan(q.String(), fn)
+					r.group.DoChan(key, fn)
 				}
 			}()
 			return nil, ctx.Err()
@@ -255,7 +262,7 @@ func (r *Resolver) exchangeWithoutCache(ctx context.Context, m *D.Msg) (msg *D.M
 
 	ret, err, shared := result.Val, result.Err, result.Shared
 	if err != nil && !shared && ret.Opcode < retryMax { // retry
-		r.group.DoChan(q.String(), fn)
+		r.group.DoChan(key, fn)
 	}
 
 	if err == nil {
@@ -334,9 +341,13 @@ func (r *Resolver) ipExchange(ctx context.Context, m *D.Msg) (msg *D.Msg, err er
 	res := <-msgCh
 	if res.Error == nil {
 		if ips := msgToIP(res.Msg); len(ips) != 0 {
-			shouldNotFallback := lo.EveryBy(ips, func(ip netip.Addr) bool {
-				return !r.shouldIPFallback(ip)
-			})
+			shouldNotFallback := true
+			for _, ip := range ips {
+				if r.shouldIPFallback(ip) {
+					shouldNotFallback = false
+					break
+				}
+			}
 			if shouldNotFallback {
 				msg, err = res.Msg, res.Error // no need to wait for fallback result
 				return
@@ -477,9 +488,9 @@ func (config Config) newCache() dnsCache {
 	}
 	switch config.CacheAlgorithm {
 	case "arc":
-		return arc.New(arc.WithSize[string, *D.Msg](config.CacheMaxSize))
+		return arc.New(arc.WithSize[dnsCacheKey, *D.Msg](config.CacheMaxSize))
 	default:
-		return lru.New(lru.WithSize[string, *D.Msg](config.CacheMaxSize), lru.WithStale[string, *D.Msg](true))
+		return lru.New(lru.WithSize[dnsCacheKey, *D.Msg](config.CacheMaxSize), lru.WithStale[dnsCacheKey, *D.Msg](true))
 	}
 }
 

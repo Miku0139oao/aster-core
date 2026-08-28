@@ -24,10 +24,9 @@ func (i *ipcidrStrategy) Behavior() P.RuleBehavior {
 }
 
 func (i *ipcidrStrategy) Match(metadata *C.Metadata, helper C.RuleMatchHelper) bool {
-	if helper.ResolveIP != nil {
+	if helper.ResolveIP != nil && !metadata.DstIP.IsValid() {
 		helper.ResolveIP()
 	}
-	// return i.trie != nil && i.trie.IsContain(metadata.DstIP.AsSlice())
 	return i.cidrSet != nil && i.cidrSet.IsContain(metadata.DstIP)
 }
 

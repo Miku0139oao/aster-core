@@ -3,6 +3,7 @@ package loopback
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"os"
 	"strconv"
@@ -36,16 +37,37 @@ func NewDetector() *Detector {
 	return &Detector{}
 }
 
+func addrPortFromNetAddr(addr net.Addr) (netip.AddrPort, bool) {
+	if addr == nil {
+		return netip.AddrPort{}, false
+	}
+	// Match Metadata.SetRemoteAddr: unwrap CustomAddr (DIRECT UDP LocalAddr is a uuid string).
+	if raw, ok := addr.(interface{ RawAddr() net.Addr }); ok {
+		if inner := raw.RawAddr(); inner != nil && inner != addr {
+			if p, ok := addrPortFromNetAddr(inner); ok {
+				return p, true
+			}
+		}
+	}
+	if ap, ok := addr.(interface{ AddrPort() netip.AddrPort }); ok {
+		p := ap.AddrPort()
+		if p.IsValid() && p.Port() != 0 {
+			return netip.AddrPortFrom(p.Addr().Unmap(), p.Port()), true
+		}
+	}
+	p, err := netip.ParseAddrPort(addr.String())
+	if err != nil || !p.IsValid() {
+		return netip.AddrPort{}, false
+	}
+	return netip.AddrPortFrom(p.Addr().Unmap(), p.Port()), true
+}
+
 func (l *Detector) NewConn(conn C.Conn) C.Conn {
 	if l == nil {
 		return conn
 	}
-	metadata := C.Metadata{}
-	if metadata.SetRemoteAddr(conn.LocalAddr()) != nil {
-		return conn
-	}
-	connAddr := metadata.AddrPort()
-	if !connAddr.IsValid() {
+	connAddr, ok := addrPortFromNetAddr(conn.LocalAddr())
+	if !ok {
 		return conn
 	}
 	l.connMap.Store(connAddr, struct{}{})
@@ -58,12 +80,8 @@ func (l *Detector) NewPacketConn(conn C.PacketConn) C.PacketConn {
 	if l == nil {
 		return conn
 	}
-	metadata := C.Metadata{}
-	if metadata.SetRemoteAddr(conn.LocalAddr()) != nil {
-		return conn
-	}
-	connAddr := metadata.AddrPort()
-	if !connAddr.IsValid() {
+	connAddr, ok := addrPortFromNetAddr(conn.LocalAddr())
+	if !ok {
 		return conn
 	}
 	port := connAddr.Port()
@@ -96,12 +114,15 @@ func (l *Detector) CheckPacketConn(metadata *C.Metadata) error {
 		return nil
 	}
 
-	isLocalIp, err := iface.IsLocalIp(connAddr.Addr())
-	if err != nil {
-		return err
-	}
-	if !isLocalIp && !connAddr.Addr().IsLoopback() {
-		return nil
+	src := connAddr.Addr()
+	if !src.IsLoopback() {
+		isLocalIp, err := iface.IsLocalIp(src)
+		if err != nil {
+			return err
+		}
+		if !isLocalIp {
+			return nil
+		}
 	}
 
 	if _, ok := l.packetConnMap.Load(connAddr.Port()); ok {

@@ -73,21 +73,31 @@ func (d *domainStrategy) WriteMrs(w io.Writer) error {
 }
 
 func (d *domainStrategy) DumpMrs(f func(key string) bool) {
-	if d.domainSet != nil {
-		var keys []string
-		d.domainSet.Foreach(func(key string) bool {
-			keys = append(keys, key)
-			return true
-		})
-		slices.Sort(keys)
+	if d.domainSet == nil {
+		return
+	}
+	var keys []string
+	d.domainSet.Foreach(func(key string) bool {
+		keys = append(keys, key)
+		return true
+	})
+	slices.Sort(keys)
 
-		for _, key := range keys {
-			if _, ok := slices.BinarySearch(keys, "+."+key); ok {
-				continue // ignore the rules added by trie internal processing
+	var skipExact map[string]struct{}
+	for _, key := range keys {
+		if strings.HasPrefix(key, "+.") {
+			if skipExact == nil {
+				skipExact = make(map[string]struct{}, len(keys))
 			}
-			if !f(key) {
-				return
-			}
+			skipExact[key[2:]] = struct{}{}
+		}
+	}
+	for _, key := range keys {
+		if _, skip := skipExact[key]; skip {
+			continue // ignore the rules added by trie internal processing
+		}
+		if !f(key) {
+			return
 		}
 	}
 }

@@ -18,7 +18,30 @@ import (
 	"github.com/metacubex/sing/common/network"
 )
 
+func (h *ListenerHandler) prepareDNSHijack() {
+	h.dnsHijackAny53 = false
+	h.dnsHijackHasNon53 = false
+	for _, ap := range h.DnsAddrPorts {
+		if ap.Addr().IsUnspecified() {
+			h.dnsHijackAny53 = true
+		}
+		if ap.Port() != 53 {
+			h.dnsHijackHasNon53 = true
+		}
+	}
+	h.dnsHijackReady = true
+}
+
 func (h *ListenerHandler) ShouldHijackDns(targetAddr netip.AddrPort) bool {
+	if h.dnsHijackReady {
+		port := targetAddr.Port()
+		if port == 53 && h.dnsHijackAny53 {
+			return true
+		}
+		if port != 53 && !h.dnsHijackHasNon53 {
+			return false
+		}
+	}
 	for _, addrPort := range h.DnsAddrPorts {
 		if addrPort == targetAddr || (addrPort.Addr().IsUnspecified() && targetAddr.Port() == 53) {
 			return true
@@ -29,7 +52,9 @@ func (h *ListenerHandler) ShouldHijackDns(targetAddr netip.AddrPort) bool {
 
 func (h *ListenerHandler) NewConnection(ctx context.Context, conn net.Conn, metadata M.Metadata) error {
 	if h.ShouldHijackDns(metadata.Destination.AddrPort()) {
-		log.Debugln("[DNS] hijack tcp:%s", metadata.Destination.String())
+		if log.Enabled(log.DEBUG) {
+			log.Debugln("[DNS] hijack tcp:%s", metadata.Destination.String())
+		}
 		return resolver.RelayDnsConn(ctx, conn, resolver.DefaultDnsReadTimeout)
 	}
 	return h.ListenerHandler.NewConnection(ctx, conn, metadata)
@@ -37,7 +62,9 @@ func (h *ListenerHandler) NewConnection(ctx context.Context, conn net.Conn, meta
 
 func (h *ListenerHandler) NewPacket(ctx context.Context, key netip.AddrPort, buffer *buf.Buffer, metadata M.Metadata, init func(natConn network.PacketConn) network.PacketWriter) {
 	if h.ShouldHijackDns(metadata.Destination.AddrPort()) {
-		log.Debugln("[DNS] hijack udp:%s from %s", metadata.Destination.String(), metadata.Source.String())
+		if log.Enabled(log.DEBUG) {
+			log.Debugln("[DNS] hijack udp:%s from %s", metadata.Destination.String(), metadata.Source.String())
+		}
 		writer := init(nil)
 		rwOptions := network.ReadWaitOptions{
 			FrontHeadroom: network.CalculateFrontHeadroom(writer),
@@ -52,7 +79,9 @@ func (h *ListenerHandler) NewPacket(ctx context.Context, key netip.AddrPort, buf
 
 func (h *ListenerHandler) NewPacketConnection(ctx context.Context, conn network.PacketConn, metadata M.Metadata) error {
 	if h.ShouldHijackDns(metadata.Destination.AddrPort()) {
-		log.Debugln("[DNS] hijack udp:%s from %s", metadata.Destination.String(), metadata.Source.String())
+		if log.Enabled(log.DEBUG) {
+			log.Debugln("[DNS] hijack udp:%s from %s", metadata.Destination.String(), metadata.Source.String())
+		}
 		defer func() { _ = conn.Close() }()
 		mutex := sync.Mutex{}
 		var writer network.PacketWriter = conn // a new interface to set nil in defer

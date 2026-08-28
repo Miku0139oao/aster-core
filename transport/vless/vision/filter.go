@@ -80,17 +80,23 @@ func (vc *Conn) FilterTLS(buffer []byte) (index int) {
 			if ok && cs != "TLS_AES_128_CCM_8_SHA256" {
 				vc.enableXTLS = true
 			}
-			log.Debugln("XTLS Vision found TLS 1.3, packetLength=%d， CipherSuite=%s", lenP, cs)
+			if log.Enabled(log.DEBUG) {
+				log.Debugln("XTLS Vision found TLS 1.3, packetLength=%d， CipherSuite=%s", lenP, cs)
+			}
 			vc.packetsToFilter = 0
 			return
 		} else if vc.remainingServerHello <= 0 {
-			log.Debugln("XTLS Vision found TLS 1.2, packetLength=%d", lenP)
+			if log.Enabled(log.DEBUG) {
+				log.Debugln("XTLS Vision found TLS 1.2, packetLength=%d", lenP)
+			}
 			vc.packetsToFilter = 0
 			return
 		}
-		log.Debugln("XTLS Vision found inconclusive server hello, packetLength=%d, remainingServerHelloBytes=%d", lenP, vc.remainingServerHello)
+		if log.Enabled(log.DEBUG) {
+			log.Debugln("XTLS Vision found inconclusive server hello, packetLength=%d, remainingServerHelloBytes=%d", lenP, vc.remainingServerHello)
+		}
 	}
-	if vc.packetsToFilter <= 0 {
+	if vc.packetsToFilter <= 0 && log.Enabled(log.DEBUG) {
 		log.Debugln("XTLS Vision stop filtering")
 	}
 	return

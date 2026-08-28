@@ -2,6 +2,8 @@ package packet
 
 import (
 	"net"
+	"sync"
+	"sync/atomic"
 
 	"github.com/metacubex/sing/common/buf"
 	"github.com/metacubex/sing/common/bufio"
@@ -21,12 +23,42 @@ type enhanceSingPacketConn struct {
 	packetReadWaiter N.PacketReadWaiter
 }
 
+type bufferReleaser struct {
+	buff  *buf.Buffer
+	fn    func()
+	armed atomic.Bool
+}
+
+func (r *bufferReleaser) release() {
+	if !r.armed.CompareAndSwap(true, false) {
+		return
+	}
+	if r.buff != nil {
+		r.buff.Release()
+		r.buff = nil
+	}
+	bufferReleaserPool.Put(r)
+}
+
+var bufferReleaserPool = sync.Pool{
+	New: func() any { return new(bufferReleaser) },
+}
+
+func acquireBufferRelease(buff *buf.Buffer) func() {
+	r := bufferReleaserPool.Get().(*bufferReleaser)
+	r.buff = buff
+	r.armed.Store(true)
+	if r.fn == nil {
+		r.fn = r.release
+	}
+	return r.fn
+}
+
 func (c *enhanceSingPacketConn) WaitReadFrom() (data []byte, put func(), addr net.Addr, err error) {
 	var buff *buf.Buffer
 	var dest M.Socksaddr
 	rwOptions := N.ReadWaitOptions{}
 	if c.packetReadWaiter != nil {
-		c.packetReadWaiter.InitializeReadWaiter(rwOptions)
 		buff, dest, err = c.packetReadWaiter.WaitReadPacket()
 	} else {
 		buff = rwOptions.NewPacketBuffer()
@@ -41,7 +73,9 @@ func (c *enhanceSingPacketConn) WaitReadFrom() (data []byte, put func(), addr ne
 		addr = dest.UDPAddr()
 	}
 	if err != nil {
-		buff.Release()
+		if buff != nil {
+			buff.Release()
+		}
 		return
 	}
 	if buff == nil {
@@ -52,7 +86,7 @@ func (c *enhanceSingPacketConn) WaitReadFrom() (data []byte, put func(), addr ne
 		return
 	}
 	data = buff.Bytes()
-	put = buff.Release
+	put = acquireBufferRelease(buff)
 	return
 }
 
@@ -72,6 +106,9 @@ func newEnhanceSingPacketConn(conn SingPacketConn) *enhanceSingPacketConn {
 	epc := &enhanceSingPacketConn{SingPacketConn: conn}
 	if readWaiter, isReadWaiter := bufio.CreatePacketReadWaiter(conn); isReadWaiter {
 		epc.packetReadWaiter = readWaiter
+		// Initialize once. Recreating the syscall read closure on every packet
+		// was a per-packet allocation and could reset waiter state mid-read.
+		readWaiter.InitializeReadWaiter(N.ReadWaitOptions{})
 	}
 	return epc
 }

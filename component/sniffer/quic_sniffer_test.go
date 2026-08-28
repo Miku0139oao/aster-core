@@ -17,9 +17,11 @@ func TestNewQUICInitialKeySucceedsForKnownVersions(t *testing.T) {
 	for _, s := range []*quicStructure{&quicDraft29, &quicV1, &quicV2} {
 		key, err := newQUICInitialKey([]byte{0x01, 0x02, 0x03, 0x04}, s)
 		require.NoError(t, err, "version %s", s.labelPrefix)
-		require.NotEmpty(t, key.labels.hp)
-		require.NotEmpty(t, key.labels.key)
-		require.NotEmpty(t, key.labels.iv)
+		require.NotEmpty(t, key.hp[:])
+		require.NotEmpty(t, key.key[:])
+		require.NotEmpty(t, key.iv[:])
+		require.NotNil(t, key.hpBlock)
+		require.NotNil(t, key.aead)
 		require.Equal(t, int64(-1), key.largestPacketNumber)
 	}
 }

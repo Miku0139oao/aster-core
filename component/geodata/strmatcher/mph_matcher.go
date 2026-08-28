@@ -165,6 +165,10 @@ func nextPow2(v int) int {
 	return int(n)
 }
 
+// mphHit is an immutable one-element result shared by full/domain/substr hits.
+// Callers must treat the returned slice as read-only.
+var mphHit = []uint32{1}
+
 // Lookup searches for s in t and returns its index and whether it was found.
 func (g *MphMatcherGroup) Lookup(h uint32, s string) bool {
 	i0 := int(h) & g.level0Mask
@@ -174,31 +178,32 @@ func (g *MphMatcherGroup) Lookup(h uint32, s string) bool {
 	return s == g.rules[int(n)]
 }
 
+// MatchAny reports whether any pattern matches. It does not allocate on the
+// full/domain/AC paths.
+func (g *MphMatcherGroup) MatchAny(pattern string) bool {
+	return len(g.Match(pattern)) > 0
+}
+
 // Match implements IndexMatcher.Match.
 func (g *MphMatcherGroup) Match(pattern string) []uint32 {
-	result := []uint32{}
 	hash := uint32(0)
 	for i := len(pattern) - 1; i >= 0; i-- {
 		hash = hash*PrimeRK + uint32(pattern[i])
 		if pattern[i] == '.' {
 			if g.Lookup(hash, pattern[i:]) {
-				result = append(result, 1)
-				return result
+				return mphHit
 			}
 		}
 	}
 	if g.Lookup(hash, pattern) {
-		result = append(result, 1)
-		return result
+		return mphHit
 	}
 	if g.ac != nil && g.ac.Match(pattern) {
-		result = append(result, 1)
-		return result
+		return mphHit
 	}
 	for _, e := range g.otherMatchers {
 		if e.m.Match(pattern) {
-			result = append(result, e.id)
-			return result
+			return []uint32{e.id}
 		}
 	}
 	return nil

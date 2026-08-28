@@ -27,6 +27,7 @@ func parseLiteralIP(addr string) string {
 
 type byName struct {
 	addrs         []string
+	ips           []netip.Addr
 	canonicalName string
 }
 
@@ -85,10 +86,12 @@ func readHosts() {
 			if len(f) < 2 {
 				continue
 			}
-			addr := parseLiteralIP(f[0])
-			if addr == "" {
+			ip, err := netip.ParseAddr(f[0])
+			if err != nil {
 				continue
 			}
+			addr := ip.String()
+			ip = ip.Unmap()
 
 			var canonical string
 			for i := 1; i < len(f); i++ {
@@ -106,6 +109,7 @@ func readHosts() {
 				if v, ok := hs[key]; ok {
 					hs[key] = byName{
 						addrs:         append(v.addrs, addr),
+						ips:           append(v.ips, ip),
 						canonicalName: v.canonicalName,
 					}
 					continue
@@ -113,6 +117,7 @@ func readHosts() {
 
 				hs[key] = byName{
 					addrs:         []string{addr},
+					ips:           []netip.Addr{ip},
 					canonicalName: canonical,
 				}
 			}
@@ -127,24 +132,44 @@ func readHosts() {
 	hosts.size = size
 }
 
+func lookupStaticLocked(host string) (byName, bool) {
+	readHosts()
+	if len(hosts.byName) == 0 {
+		return byName{}, false
+	}
+	if hasUpperCase(host) {
+		lowerHost := []byte(host)
+		lowerASCIIBytes(lowerHost)
+		host = string(lowerHost)
+	}
+	v, ok := hosts.byName[absDomainName(host)]
+	return v, ok
+}
+
 // LookupStaticHost looks up the addresses and the canonical name for the given host from /etc/hosts.
 func LookupStaticHost(host string) ([]string, string) {
 	hosts.Lock()
 	defer hosts.Unlock()
-	readHosts()
-	if len(hosts.byName) != 0 {
-		if hasUpperCase(host) {
-			lowerHost := []byte(host)
-			lowerASCIIBytes(lowerHost)
-			host = string(lowerHost)
-		}
-		if byName, ok := hosts.byName[absDomainName(host)]; ok {
-			ipsCp := make([]string, len(byName.addrs))
-			copy(ipsCp, byName.addrs)
-			return ipsCp, byName.canonicalName
-		}
+	byName, ok := lookupStaticLocked(host)
+	if !ok {
+		return nil, ""
 	}
-	return nil, ""
+	ipsCp := make([]string, len(byName.addrs))
+	copy(ipsCp, byName.addrs)
+	return ipsCp, byName.canonicalName
+}
+
+// LookupStaticHostIPs returns parsed addresses for host from /etc/hosts.
+func LookupStaticHostIPs(host string) []netip.Addr {
+	hosts.Lock()
+	defer hosts.Unlock()
+	byName, ok := lookupStaticLocked(host)
+	if !ok || len(byName.ips) == 0 {
+		return nil
+	}
+	out := make([]netip.Addr, len(byName.ips))
+	copy(out, byName.ips)
+	return out
 }
 
 // LookupStaticAddr looks up the hosts for the given address from /etc/hosts.

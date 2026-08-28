@@ -191,3 +191,63 @@ func TestPacketConnSerializesConcurrentReads(t *testing.T) {
 	require.False(t, enteredBeforeRelease)
 	require.ElementsMatch(t, []string{"one", "two"}, []string{first.data, second.data})
 }
+
+type discardPacketConn struct {
+	net.Conn
+}
+
+func (discardPacketConn) Write(p []byte) (int, error) { return len(p), nil }
+func (discardPacketConn) Read(p []byte) (int, error)  { return 0, io.EOF }
+func (discardPacketConn) Close() error                { return nil }
+
+type replayPacketConn struct {
+	net.Conn
+	frame  []byte
+	offset int
+}
+
+func (c *replayPacketConn) Read(p []byte) (int, error) {
+	if c.offset >= len(c.frame) {
+		c.offset = 0
+	}
+	n := copy(p, c.frame[c.offset:])
+	c.offset += n
+	return n, nil
+}
+
+func (c *replayPacketConn) Close() error { return nil }
+
+func BenchmarkPacketConnWriteTo(b *testing.B) {
+	payload := make([]byte, 512)
+	packetConn := &PacketConn{Conn: discardPacketConn{}}
+	b.ReportAllocs()
+	b.SetBytes(int64(len(payload)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := packetConn.WriteTo(payload, nil); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkPacketConnReadFrom(b *testing.B) {
+	payload := make([]byte, 512)
+	frame := make([]byte, 2+len(payload))
+	frame[0] = byte(len(payload) >> 8)
+	frame[1] = byte(len(payload))
+	copy(frame[2:], payload)
+	packetConn := &PacketConn{Conn: &replayPacketConn{frame: frame}}
+	out := make([]byte, len(payload))
+	b.ReportAllocs()
+	b.SetBytes(int64(len(payload)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		n, _, err := packetConn.ReadFrom(out)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if n != len(payload) {
+			b.Fatalf("n=%d", n)
+		}
+	}
+}

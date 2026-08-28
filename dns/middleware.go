@@ -39,7 +39,24 @@ func withKernelDirectObservation() middleware {
 }
 
 func dnsNameKey(name string) string {
-	return strings.ToLower(strings.TrimSuffix(name, "."))
+	// Match strings.TrimSuffix(name, ".") (one trailing dot), not TrimRight.
+	if n := len(name); n > 0 && name[n-1] == '.' {
+		name = name[:n-1]
+	}
+	if !hasUpperASCII(name) {
+		return name
+	}
+	return strings.ToLower(name)
+}
+
+func hasUpperASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if 'A' <= c && c <= 'Z' {
+			return true
+		}
+	}
+	return false
 }
 
 const (
@@ -261,7 +278,7 @@ func withHosts(mapping *lru.LruCache[netip.Addr, string]) middleware {
 				return next(ctx, r)
 			}
 
-			host := strings.TrimRight(q.Name, ".")
+			host := trimDots(q.Name)
 			handleCName := func(resp *D.Msg, domain string) {
 				rr := &D.CNAME{}
 				rr.Hdr = D.RR_Header{Name: q.Name, Rrtype: D.TypeCNAME, Class: D.ClassINET, Ttl: 10}
@@ -342,7 +359,7 @@ func withMapping(mapping *lru.LruCache[netip.Addr, string]) middleware {
 				return nil, err
 			}
 
-			host := strings.TrimRight(q.Name, ".")
+			host := trimDots(q.Name)
 
 			for _, ans := range msg.Answer {
 				var ip netip.Addr
@@ -383,7 +400,7 @@ func withFakeIP(skipper *fakeip.Skipper, fakePool *fakeip.Pool, fakePool6 *fakei
 		return func(ctx *icontext.DNSContext, r *D.Msg) (*D.Msg, error) {
 			q := r.Question[0]
 
-			host := strings.TrimRight(q.Name, ".")
+			host := trimDots(q.Name)
 			if skipper.ShouldSkipped(host) {
 				return next(ctx, r)
 			}
@@ -441,7 +458,9 @@ func withResolver(resolver resolver.Resolver, ipv6 bool) handler {
 
 		msg, err := resolver.ExchangeContext(ctx, r)
 		if err != nil {
-			log.Debugln("[DNS Server] Exchange %s failed: %v", q.String(), err)
+			if log.Enabled(log.DEBUG) {
+				log.Debugln("[DNS Server] Exchange %s failed: %v", q.String(), err)
+			}
 			return msg, err
 		}
 		msg.SetRcode(r, msg.Rcode)

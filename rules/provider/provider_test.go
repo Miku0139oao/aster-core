@@ -90,3 +90,30 @@ func TestRulesParseSingleLineYAML(t *testing.T) {
 		t.Fatalf("single-line YAML payload was not loaded")
 	}
 }
+
+func TestDomainDumpMrsSkipsTrieInternalExact(t *testing.T) {
+	s := NewDomainStrategy()
+	s.Reset()
+	s.Insert("+.example.com")
+	s.FinishInsert()
+	var keys []string
+	s.DumpMrs(func(key string) bool {
+		keys = append(keys, key)
+		return true
+	})
+	for _, key := range keys {
+		if key == "example.com" {
+			t.Fatalf("DumpMrs emitted trie-internal exact domain %q among %v", key, keys)
+		}
+	}
+	found := false
+	for _, key := range keys {
+		if key == "+.example.com" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("DumpMrs missing suffix rule, got %v", keys)
+	}
+}

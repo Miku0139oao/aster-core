@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/Miku0139oao/aster-core/common/utils"
 	C "github.com/Miku0139oao/aster-core/constant"
@@ -62,12 +61,7 @@ func (tls *TLSSniffer) SupportNetwork() C.NetWork {
 }
 
 func (tls *TLSSniffer) SniffData(bytes []byte) (string, error) {
-	domain, err := SniffTLS(bytes)
-	if err == nil {
-		return *domain, nil
-	} else {
-		return "", err
-	}
+	return sniffTLS(bytes)
 }
 
 func IsValidTLSVersion(major, minor byte) bool {
@@ -78,19 +72,27 @@ func IsValidTLSVersion(major, minor byte) bool {
 // available in a ClientHello prefix, including the four-byte handshake header.
 // https://github.com/golang/go/blob/master/src/crypto/tls/handshake_messages.go#L300
 func ReadClientHello(data []byte) (*string, error) {
+	s, err := readClientHello(data)
+	if err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
+func readClientHello(data []byte) (string, error) {
 	if len(data) == 0 {
-		return nil, &errNeedAtLeastData{length: 1, err: ErrNoClue}
+		return "", &errNeedAtLeastData{length: 1, err: ErrNoClue}
 	}
 	if data[0] != tlsHandshakeTypeClientHello {
-		return nil, errNotClientHello
+		return "", errNotClientHello
 	}
 	if len(data) < tlsHandshakeHeaderLen {
-		return nil, &errNeedAtLeastData{length: tlsHandshakeHeaderLen, err: ErrNoClue}
+		return "", &errNeedAtLeastData{length: tlsHandshakeHeaderLen, err: ErrNoClue}
 	}
 
 	helloSize, err := clientHelloSize(data)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	if len(data) > helloSize {
 		data = data[:helloSize]
@@ -107,106 +109,103 @@ func ReadClientHello(data []byte) (*string, error) {
 
 	offset := tlsHandshakeHeaderLen + 2 + 32 // legacy_version and random
 	if err := need(offset + 1); err != nil {
-		return nil, err
+		return "", err
 	}
 	sessionIDLen := int(data[offset])
 	if sessionIDLen > 32 {
-		return nil, errNotClientHello
+		return "", errNotClientHello
 	}
 	offset++
 	if err := need(offset + sessionIDLen); err != nil {
-		return nil, err
+		return "", err
 	}
 	offset += sessionIDLen
 
 	// cipherSuiteLen is the number of bytes of cipher suite numbers. Since
 	// they are uint16s, the number must be even.
 	if err := need(offset + 2); err != nil {
-		return nil, err
+		return "", err
 	}
 	cipherSuiteLen := int(data[offset])<<8 | int(data[offset+1])
 	if cipherSuiteLen%2 == 1 {
-		return nil, errNotClientHello
+		return "", errNotClientHello
 	}
 	offset += 2
 	if err := need(offset + cipherSuiteLen); err != nil {
-		return nil, err
+		return "", err
 	}
 	offset += cipherSuiteLen
 
 	if err := need(offset + 1); err != nil {
-		return nil, err
+		return "", err
 	}
 	compressionMethodsLen := int(data[offset])
 	offset++
 	if err := need(offset + compressionMethodsLen); err != nil {
-		return nil, err
+		return "", err
 	}
 	offset += compressionMethodsLen
 
 	if offset == helloSize {
-		return nil, errNotClientHello
+		return "", errNotClientHello
 	}
 	if err := need(offset + 2); err != nil {
-		return nil, err
+		return "", err
 	}
 
 	extensionsLength := int(data[offset])<<8 | int(data[offset+1])
 	offset += 2
 	extensionsEnd := offset + extensionsLength
 	if extensionsEnd != helloSize {
-		return nil, errNotClientHello
+		return "", errNotClientHello
 	}
 
 	for offset < extensionsEnd {
 		if err := need(offset + 4); err != nil {
-			return nil, err
+			return "", err
 		}
 		extension := uint16(data[offset])<<8 | uint16(data[offset+1])
 		length := int(data[offset+2])<<8 | int(data[offset+3])
 		offset += 4
 		extensionEnd := offset + length
 		if extensionEnd > extensionsEnd {
-			return nil, errNotClientHello
+			return "", errNotClientHello
 		}
 
 		if extension == 0x00 { /* extensionServerName */
 			if length < 2 {
-				return nil, errNotClientHello
+				return "", errNotClientHello
 			}
 			if err := need(offset + 2); err != nil {
-				return nil, err
+				return "", err
 			}
 			namesLen := int(data[offset])<<8 | int(data[offset+1])
 			offset += 2
 			namesEnd := offset + namesLen
 			if namesEnd != extensionEnd {
-				return nil, errNotClientHello
+				return "", errNotClientHello
 			}
 			for offset < namesEnd {
 				if err := need(offset + 3); err != nil {
-					return nil, err
+					return "", err
 				}
 				nameType := data[offset]
 				nameLen := int(data[offset+1])<<8 | int(data[offset+2])
 				offset += 3
 				nameEnd := offset + nameLen
 				if nameEnd > namesEnd {
-					return nil, errNotClientHello
+					return "", errNotClientHello
 				}
 				if err := need(nameEnd); err != nil {
-					return nil, err
+					return "", err
 				}
 				if nameType == 0 {
-					serverName := string(data[offset:nameEnd])
-					// An SNI value may not include a
-					// trailing dot. See
-					// https://tools.ietf.org/html/rfc6066#section-3.
-					if strings.HasSuffix(serverName, ".") {
-						return nil, errNotClientHello
+					// An SNI value may not include a trailing dot.
+					// https://tools.ietf.org/html/rfc6066#section-3
+					if nameLen > 0 && data[nameEnd-1] == '.' {
+						return "", errNotClientHello
 					}
-
-					return &serverName, nil
+					return string(data[offset:nameEnd]), nil
 				}
 				offset = nameEnd
 			}
@@ -214,16 +213,16 @@ func ReadClientHello(data []byte) (*string, error) {
 			if extensionEnd == extensionsEnd {
 				// This is the last extension, so its payload cannot contain a
 				// later server_name extension that changes the verdict.
-				return nil, errNotTLS
+				return "", errNotTLS
 			}
 			if err := need(extensionEnd); err != nil {
-				return nil, err
+				return "", err
 			}
 			offset = extensionEnd
 		}
 	}
 
-	return nil, errNotTLS
+	return "", errNotTLS
 }
 
 func clientHelloSize(data []byte) (int, error) {
@@ -239,12 +238,20 @@ func clientHelloSize(data []byte) (int, error) {
 }
 
 func SniffTLS(b []byte) (*string, error) {
+	s, err := sniffTLS(b)
+	if err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
+func sniffTLS(b []byte) (string, error) {
 	var clientHello []byte
 	wireOffset := 0
 
 	for {
 		if len(b)-wireOffset < tlsRecordHeaderLen {
-			return nil, &errNeedAtLeastData{
+			return "", &errNeedAtLeastData{
 				length: wireOffset + tlsRecordHeaderLen,
 				err:    ErrNoClue,
 			}
@@ -252,17 +259,17 @@ func SniffTLS(b []byte) (*string, error) {
 
 		header := b[wireOffset : wireOffset+tlsRecordHeaderLen]
 		if header[0] != tlsRecordTypeHandshake || !IsValidTLSVersion(header[1], header[2]) {
-			return nil, errNotTLS
+			return "", errNotTLS
 		}
 
 		recordLen := int(binary.BigEndian.Uint16(header[3:]))
 		// The initial ClientHello is plaintext, whose record payload is limited
 		// to 2^14 bytes by every TLS version supported here.
 		if recordLen > tlsMaxPlaintext {
-			return nil, errNotTLS
+			return "", errNotTLS
 		}
 		if recordLen == 0 {
-			return nil, errNotClientHello
+			return "", errNotClientHello
 		}
 
 		payloadOffset := wireOffset + tlsRecordHeaderLen
@@ -282,13 +289,13 @@ func SniffTLS(b []byte) (*string, error) {
 			clientHello = append(clientHello, payload...)
 		}
 
-		domain, err := ReadClientHello(clientHello)
+		domain, err := readClientHello(clientHello)
 		if err == nil {
 			return domain, nil
 		}
 		var need *errNeedAtLeastData
 		if !errors.As(err, &need) {
-			return nil, err
+			return "", err
 		}
 
 		if payloadEnd < recordEnd {
@@ -298,7 +305,7 @@ func SniffTLS(b []byte) (*string, error) {
 			if remaining := recordEnd - payloadEnd; missing > remaining {
 				missing = remaining
 			}
-			return nil, &errNeedAtLeastData{length: payloadEnd + missing, err: ErrNoClue}
+			return "", &errNeedAtLeastData{length: payloadEnd + missing, err: ErrNoClue}
 		}
 		wireOffset = recordEnd
 	}

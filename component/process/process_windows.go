@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"unsafe"
 
@@ -26,6 +27,8 @@ var (
 	queryProcName uintptr
 
 	once sync.Once
+
+	lastTableSize [4]uint32
 )
 
 func resolveSocketByNetlink(network string, ip netip.Addr, srcPort int) (uint32, uint32, error) {
@@ -70,17 +73,20 @@ func findProcessName(network string, ip netip.Addr, srcPort int) (uint32, string
 			return
 		}
 	})
+	isV4 := !ip.Is6()
 	family := windows.AF_INET
-	if ip.Is6() {
+	if !isV4 {
 		family = windows.AF_INET6
 	}
 
 	var class int
 	var fn uintptr
+	isTCP := false
 	switch network {
 	case TCP:
 		fn = getExTCPTable
 		class = tcpTablePidConn
+		isTCP = true
 	case UDP:
 		fn = getExUDPTable
 		class = udpTablePid
@@ -88,12 +94,11 @@ func findProcessName(network string, ip netip.Addr, srcPort int) (uint32, string
 		return 0, "", ErrInvalidNetwork
 	}
 
+	s := cachedSearcher(isV4, isTCP)
 	buf, err := getTransportTable(fn, family, class)
 	if err != nil {
 		return 0, "", err
 	}
-
-	s := newSearcher(family == windows.AF_INET, network == TCP)
 
 	pid, err := s.Search(buf, ip, uint16(srcPort))
 	if err != nil {
@@ -112,81 +117,129 @@ type searcher struct {
 	tcpState int
 }
 
-func (s *searcher) Search(b []byte, ip netip.Addr, port uint16) (uint32, error) {
-	n := int(readNativeUint32(b[:4]))
+func (s searcher) Search(b []byte, ip netip.Addr, port uint16) (uint32, error) {
+	if len(b) < 4 || s.itemSize <= 0 {
+		return 0, ErrNotFound
+	}
+	n := int(readNativeUint32(b))
+	maxN := (len(b) - 4) / s.itemSize
+	if n > maxN {
+		n = maxN
+	}
+
+	wantPort := portToNativeUint32(port)
+	checkState := s.tcpState >= 0
+	stateOff := s.tcpState
+	portOff := s.port
+	ipOff := s.ip
+	pidOff := s.pid
 	itemSize := s.itemSize
+	ipSize := s.ipSize
+
+	fast4 := ipSize == 4 && ip.Is4()
+	var want4 uint32
+	if fast4 {
+		*(*[4]byte)(unsafe.Pointer(&want4)) = ip.As4()
+	}
+
+	off := 4
 	for i := 0; i < n; i++ {
-		row := b[4+itemSize*i : 4+itemSize*(i+1)]
-
-		if s.tcpState >= 0 {
-			tcpState := readNativeUint32(row[s.tcpState : s.tcpState+4])
-			// MIB_TCP_STATE_ESTAB, only check established connections for TCP
-			if tcpState != 5 {
-				continue
+		row := b[off:]
+		off += itemSize
+		if checkState && readNativeUint32(row[stateOff:]) != 5 {
+			continue
+		}
+		if readNativeUint32(row[portOff:]) != wantPort {
+			continue
+		}
+		if fast4 {
+			got := readNativeUint32(row[ipOff:])
+			if got == want4 || (!checkState && got == 0) {
+				return readNativeUint32(row[pidOff:]), nil
 			}
-		}
-
-		// according to MSDN, only the lower 16 bits of dwLocalPort are used and the port number is in network endian.
-		// this field can be illustrated as follows depends on different machine endianess:
-		//     little endian: [ MSB LSB  0   0  ]   interpret as native uint32 is ((LSB<<8)|MSB)
-		//       big  endian: [  0   0  MSB LSB ]   interpret as native uint32 is ((MSB<<8)|LSB)
-		// so we need an syscall.Ntohs on the lower 16 bits after read the port as native uint32
-		srcPort := syscall.Ntohs(uint16(readNativeUint32(row[s.port : s.port+4])))
-		if srcPort != port {
 			continue
 		}
-
-		srcIP, _ := netip.AddrFromSlice(row[s.ip : s.ip+s.ipSize])
+		srcIP, ok := netip.AddrFromSlice(row[ipOff : ipOff+ipSize])
+		if !ok {
+			continue
+		}
 		srcIP = srcIP.Unmap()
-		// windows binds an unbound udp socket to 0.0.0.0/[::] while first sendto
-		if ip != srcIP && (!srcIP.IsUnspecified() || s.tcpState != -1) {
+		if ip != srcIP && (checkState || !srcIP.IsUnspecified()) {
 			continue
 		}
-
-		pid := readNativeUint32(row[s.pid : s.pid+4])
-		return pid, nil
+		return readNativeUint32(row[pidOff:]), nil
 	}
 	return 0, ErrNotFound
 }
 
-func newSearcher(isV4, isTCP bool) *searcher {
-	var itemSize, port, ip, ipSize, pid int
-	tcpState := -1
+func cachedSearcher(isV4, isTCP bool) searcher {
 	switch {
 	case isV4 && isTCP:
 		// struct MIB_TCPROW_OWNER_PID
-		itemSize, port, ip, ipSize, pid, tcpState = 24, 8, 4, 4, 20, 0
+		return searcher{itemSize: 24, port: 8, ip: 4, ipSize: 4, pid: 20, tcpState: 0}
 	case isV4 && !isTCP:
 		// struct MIB_UDPROW_OWNER_PID
-		itemSize, port, ip, ipSize, pid = 12, 4, 0, 4, 8
+		return searcher{itemSize: 12, port: 4, ip: 0, ipSize: 4, pid: 8, tcpState: -1}
 	case !isV4 && isTCP:
 		// struct MIB_TCP6ROW_OWNER_PID
-		itemSize, port, ip, ipSize, pid, tcpState = 56, 20, 0, 16, 52, 48
-	case !isV4 && !isTCP:
+		return searcher{itemSize: 56, port: 20, ip: 0, ipSize: 16, pid: 52, tcpState: 48}
+	default:
 		// struct MIB_UDP6ROW_OWNER_PID
-		itemSize, port, ip, ipSize, pid = 28, 20, 0, 16, 24
-	}
-
-	return &searcher{
-		itemSize: itemSize,
-		port:     port,
-		ip:       ip,
-		ipSize:   ipSize,
-		pid:      pid,
-		tcpState: tcpState,
+		return searcher{itemSize: 28, port: 20, ip: 0, ipSize: 16, pid: 24, tcpState: -1}
 	}
 }
 
+func newSearcher(isV4, isTCP bool) searcher {
+	return cachedSearcher(isV4, isTCP)
+}
+
+func tableSlot(family int, class int) int {
+	slot := 0
+	if family == windows.AF_INET6 {
+		slot = 2
+	}
+	if class == udpTablePid {
+		slot++
+	}
+	return slot
+}
+
 func getTransportTable(fn uintptr, family int, class int) ([]byte, error) {
-	for size, buf := uint32(8), make([]byte, 8); ; {
+	slot := tableSlot(family, class)
+	size := atomic.LoadUint32(&lastTableSize[slot])
+	if size < 256 {
+		size = 4096
+	}
+
+	buf := make([]byte, size)
+	for {
+		if len(buf) == 0 {
+			buf = make([]byte, 8)
+			size = 8
+		}
 		ptr := unsafe.Pointer(&buf[0])
 		err, _, _ := syscall.Syscall6(fn, 6, uintptr(ptr), uintptr(unsafe.Pointer(&size)), 0, uintptr(family), uintptr(class), 0)
 
 		switch err {
 		case 0:
+			stored := size
+			if stored < ^uint32(0)-512 {
+				stored += 512
+			}
+			atomic.StoreUint32(&lastTableSize[slot], stored)
 			return buf, nil
 		case uintptr(syscall.ERROR_INSUFFICIENT_BUFFER):
-			buf = make([]byte, size)
+			if size <= uint32(cap(buf)) {
+				// kernel asked for a size we already have; avoid a tight loop
+				if size == uint32(len(buf)) {
+					size++
+				}
+			}
+			if uint32(cap(buf)) < size {
+				buf = make([]byte, size)
+			} else {
+				buf = buf[:size]
+			}
 		default:
 			return nil, fmt.Errorf("syscall error: %d", err)
 		}
@@ -197,7 +250,27 @@ func readNativeUint32(b []byte) uint32 {
 	return *(*uint32)(unsafe.Pointer(&b[0]))
 }
 
+func portToNativeUint32(port uint16) uint32 {
+	var v uint32
+	b := (*[4]byte)(unsafe.Pointer(&v))
+	b[0] = byte(port >> 8)
+	b[1] = byte(port)
+	return v
+}
+
 func getExecPathFromPID(pid uint32) (string, error) {
+	if path, ok := lookupPidPath(pid); ok {
+		return path, nil
+	}
+	path, err := queryExecPathFromPID(pid)
+	if err != nil {
+		return "", err
+	}
+	storePidPath(pid, path)
+	return path, nil
+}
+
+func queryExecPathFromPID(pid uint32) (string, error) {
 	// kernel process starts with a colon in order to distinguish with normal processes
 	switch pid {
 	case 0:

@@ -110,6 +110,86 @@ func TestTableAdmissionIsBoundedAndRecoversAfterDelete(t *testing.T) {
 	}
 }
 
+func TestNatCacheSlotSpreadsSequentialPorts(t *testing.T) {
+	seen := make(map[uint]struct{}, natHitSlots)
+	for i := 0; i < natHitSlots; i++ {
+		key := C.UDPNatKey{AddrPort: netip.AddrPortFrom(netip.AddrFrom4([4]byte{192, 0, 2, 1}), uint16(10000+i))}
+		slot := natCacheSlot(key)
+		if _, dup := seen[slot]; dup {
+			t.Fatalf("slot %d collided for sequential client ports", slot)
+		}
+		seen[slot] = struct{}{}
+	}
+}
+
+func TestGetOrCreateCacheComparesFullKey(t *testing.T) {
+	table := New()
+	a := C.UDPNatKey{AddrPort: netip.MustParseAddrPort("192.0.2.1:12345"), IngressType: 1, IngressName: "in-a"}
+	b := C.UDPNatKey{AddrPort: netip.MustParseAddrPort("192.0.2.1:12345"), IngressType: 2, IngressName: "in-b"}
+	sa := &benchmarkPacketSender{}
+	sb := &benchmarkPacketSender{}
+	gotA, loaded, admitted := table.GetOrCreate(a, func() C.PacketSender { return sa })
+	if loaded || !admitted || gotA != sa {
+		t.Fatal("failed to create flow A")
+	}
+	gotB, loaded, admitted := table.GetOrCreate(b, func() C.PacketSender { return sb })
+	if loaded || !admitted || gotB != sb {
+		t.Fatal("failed to create flow B")
+	}
+	for i := 0; i < 8; i++ {
+		if got, loaded, admitted := table.GetOrCreate(a, func() C.PacketSender { return sa }); !loaded || !admitted || got != sa {
+			t.Fatal("flow A lookup returned the wrong sender")
+		}
+		if got, loaded, admitted := table.GetOrCreate(b, func() C.PacketSender { return sb }); !loaded || !admitted || got != sb {
+			t.Fatal("flow B lookup returned the wrong sender")
+		}
+	}
+}
+
+func TestGetOrCreateAfterDeleteDoesNotResurrectCachedFlow(t *testing.T) {
+	table := New()
+	key := C.UDPNatKey{AddrPort: netip.MustParseAddrPort("192.0.2.8:34567")}
+	first := &benchmarkPacketSender{}
+	got, loaded, admitted := table.GetOrCreate(key, func() C.PacketSender { return first })
+	if loaded || !admitted || got != first {
+		t.Fatal("failed to create first NAT entry")
+	}
+	// Prime the last-hit cache.
+	if got, loaded, admitted = table.GetOrCreate(key, func() C.PacketSender { return first }); !loaded || !admitted || got != first {
+		t.Fatal("existing NAT entry was not cached")
+	}
+	table.Delete(key)
+	second := &benchmarkPacketSender{}
+	got, loaded, admitted = table.GetOrCreate(key, func() C.PacketSender { return second })
+	if loaded || !admitted || got != second {
+		t.Fatalf("deleted NAT flow was resurrected: loaded=%t admitted=%t got=%v", loaded, admitted, got)
+	}
+	if table.Size() != 1 {
+		t.Fatalf("table size = %d", table.Size())
+	}
+}
+
+func TestGetOrCreateDeleteRecreateKeepsSizeNonNegative(t *testing.T) {
+	table := New(8)
+	key := C.UDPNatKey{AddrPort: netip.MustParseAddrPort("192.0.2.9:40000")}
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for n := 0; n < 1000; n++ {
+				sender := &benchmarkPacketSender{}
+				table.GetOrCreate(key, func() C.PacketSender { return sender })
+				table.Delete(key)
+			}
+		}()
+	}
+	wg.Wait()
+	if sz := table.Size(); sz < 0 || sz > 1 {
+		t.Fatalf("table size = %d", sz)
+	}
+}
+
 func TestGetOrCreateLocalConnRetriesAfterFailure(t *testing.T) {
 	table := New()
 	flow := C.UDPNatKey{AddrPort: netip.MustParseAddrPort("192.0.2.2:23456")}

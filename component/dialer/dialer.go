@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -37,22 +38,56 @@ func GetTcpConcurrent() bool {
 
 func DialContext(ctx context.Context, network, address string, options ...Option) (net.Conn, error) {
 	opt := applyOptions(options...)
-
-	if opt.network == 4 || opt.network == 6 {
-		if strings.Contains(network, "tcp") {
-			network = "tcp"
-		} else {
-			network = "udp"
-		}
-
-		network = fmt.Sprintf("%s%d", network, opt.network)
-	}
+	network = normalizeNetwork(network, opt.network)
 
 	ips, port, err := parseAddr(ctx, network, address, opt.resolver)
 	if err != nil {
 		return nil, err
 	}
+	return dialWithIPs(ctx, network, ips, port, opt)
+}
 
+// DialContextTo dials a pre-resolved address without SplitHostPort or DNS lookup.
+func DialContextTo(ctx context.Context, network string, destination netip.Addr, port uint16, options ...Option) (net.Conn, error) {
+	opt := applyOptions(options...)
+	network = normalizeNetwork(network, opt.network)
+	dest := destination.Unmap()
+	if !dest.IsValid() {
+		return nil, ErrorNoIpAddress
+	}
+	switch network {
+	case "tcp4", "udp4":
+		if !dest.Is4() {
+			return nil, ErrorNoIpAddress
+		}
+	case "tcp6", "udp6":
+		if !dest.Is6() {
+			return nil, ErrorNoIpAddress
+		}
+	case "tcp", "udp":
+	default:
+		return nil, ErrorInvalidedNetworkStack
+	}
+	return dialWithIPs(ctx, network, []netip.Addr{dest}, strconv.FormatUint(uint64(port), 10), opt)
+}
+
+func normalizeNetwork(network string, stack int) string {
+	if stack != 4 && stack != 6 {
+		return network
+	}
+	if strings.HasPrefix(network, "tcp") {
+		if stack == 4 {
+			return "tcp4"
+		}
+		return "tcp6"
+	}
+	if stack == 4 {
+		return "udp4"
+	}
+	return "udp6"
+}
+
+func dialWithIPs(ctx context.Context, network string, ips []netip.Addr, port string, opt option) (net.Conn, error) {
 	tcpConcurrent := GetTcpConcurrent()
 
 	switch network {
@@ -362,6 +397,28 @@ func parseAddr(ctx context.Context, network, address string, preferResolver reso
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {
 		return nil, "-1", err
+	}
+
+	if ip, perr := netip.ParseAddr(host); perr == nil {
+		ip = ip.Unmap()
+		switch network {
+		case "tcp4", "udp4":
+			if !ip.Is4() {
+				return nil, "-1", fmt.Errorf("dns resolve failed: %w", resolver.ErrIPVersion)
+			}
+		case "tcp6", "udp6":
+			if resolver.DisableIPv6 {
+				return nil, "-1", fmt.Errorf("dns resolve failed: %w", resolver.ErrIPv6Disabled)
+			}
+			if !ip.Is6() {
+				return nil, "-1", fmt.Errorf("dns resolve failed: %w", resolver.ErrIPVersion)
+			}
+		default:
+			if resolver.DisableIPv6 && !ip.Is4() {
+				return nil, "-1", fmt.Errorf("dns resolve failed: %w", resolver.ErrIPVersion)
+			}
+		}
+		return []netip.Addr{ip}, port, nil
 	}
 
 	if preferResolver == nil {

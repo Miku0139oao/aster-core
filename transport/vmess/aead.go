@@ -15,42 +15,42 @@ type aeadWriter struct {
 	cipher.AEAD
 	nonce [32]byte
 	count uint16
-	iv    []byte
 
 	writeLock sync.Mutex
 }
 
 func newAEADWriter(w io.Writer, aead cipher.AEAD, iv []byte) *aeadWriter {
-	return &aeadWriter{Writer: w, AEAD: aead, iv: iv}
+	aw := &aeadWriter{Writer: w, AEAD: aead}
+	if len(iv) >= 12 {
+		copy(aw.nonce[2:], iv[2:12])
+	}
+	return aw
 }
 
 func (w *aeadWriter) Write(b []byte) (n int, err error) {
 	w.writeLock.Lock()
-	buf := pool.Get(pool.RelayBufferSize)
-	defer func() {
-		w.writeLock.Unlock()
-		pool.Put(buf)
-	}()
+	defer w.writeLock.Unlock()
+	overhead := w.Overhead()
+	nonce := w.nonce[:w.NonceSize()]
+	maxChunk := chunkSize - overhead
+	buf := pool.Get(lenSize + chunkSize)
+	defer pool.Put(buf)
 	length := len(b)
 	for {
 		if length == 0 {
 			break
 		}
-		readLen := chunkSize - w.Overhead()
+		readLen := maxChunk
 		if length < readLen {
 			readLen = length
 		}
-		payloadBuf := buf[lenSize : lenSize+chunkSize-w.Overhead()]
-		copy(payloadBuf, b[n:n+readLen])
 
-		binary.BigEndian.PutUint16(buf[:lenSize], uint16(readLen+w.Overhead()))
+		binary.BigEndian.PutUint16(buf[:lenSize], uint16(readLen+overhead))
 		binary.BigEndian.PutUint16(w.nonce[:2], w.count)
-		copy(w.nonce[2:], w.iv[2:12])
-
-		w.Seal(payloadBuf[:0], w.nonce[:w.NonceSize()], payloadBuf[:readLen], nil)
+		w.Seal(buf[lenSize:lenSize], nonce, b[n:n+readLen], nil)
 		w.count++
 
-		_, err = w.Writer.Write(buf[:lenSize+readLen+w.Overhead()])
+		_, err = w.Writer.Write(buf[:lenSize+readLen+overhead])
 		if err != nil {
 			break
 		}
@@ -66,13 +66,16 @@ type aeadReader struct {
 	nonce   [32]byte
 	buf     []byte
 	offset  int
-	iv      []byte
-	sizeBuf []byte
+	sizeBuf [lenSize]byte
 	count   uint16
 }
 
 func newAEADReader(r io.Reader, aead cipher.AEAD, iv []byte) *aeadReader {
-	return &aeadReader{Reader: r, AEAD: aead, iv: iv, sizeBuf: make([]byte, lenSize)}
+	ar := &aeadReader{Reader: r, AEAD: aead}
+	if len(iv) >= 12 {
+		copy(ar.nonce[2:], iv[2:12])
+	}
+	return ar
 }
 
 func (r *aeadReader) Read(b []byte) (int, error) {
@@ -86,14 +89,32 @@ func (r *aeadReader) Read(b []byte) (int, error) {
 		return n, nil
 	}
 
-	_, err := io.ReadFull(r.Reader, r.sizeBuf)
+	_, err := io.ReadFull(r.Reader, r.sizeBuf[:])
 	if err != nil {
 		return 0, err
 	}
 
-	size := int(binary.BigEndian.Uint16(r.sizeBuf))
-	if size > maxSize {
+	size := int(binary.BigEndian.Uint16(r.sizeBuf[:]))
+	overhead := r.Overhead()
+	// Fast-path decrypts into b and returns size-overhead; a too-small chunk
+	// would yield a negative n with a nil error (io.Reader contract break).
+	if size > maxSize || size < overhead {
 		return 0, errors.New("buffer is larger than standard")
+	}
+
+	binary.BigEndian.PutUint16(r.nonce[:2], r.count)
+	nonce := r.nonce[:r.NonceSize()]
+
+	if len(b) >= size {
+		if _, err := io.ReadFull(r.Reader, b[:size]); err != nil {
+			return 0, err
+		}
+		if _, err := r.Open(b[:0], nonce, b[:size], nil); err != nil {
+			r.count++
+			return 0, err
+		}
+		r.count++
+		return size - overhead, nil
 	}
 
 	buf := pool.Get(size)
@@ -103,17 +124,15 @@ func (r *aeadReader) Read(b []byte) (int, error) {
 		return 0, err
 	}
 
-	binary.BigEndian.PutUint16(r.nonce[:2], r.count)
-	copy(r.nonce[2:], r.iv[2:12])
-
-	_, err = r.Open(buf[:0], r.nonce[:r.NonceSize()], buf[:size], nil)
+	_, err = r.Open(buf[:0], nonce, buf[:size], nil)
 	r.count++
 	if err != nil {
+		pool.Put(buf)
 		return 0, err
 	}
-	realLen := size - r.Overhead()
+	realLen := size - overhead
 	n := copy(b, buf[:realLen])
-	if len(b) >= realLen {
+	if n == realLen {
 		pool.Put(buf)
 		return n, nil
 	}

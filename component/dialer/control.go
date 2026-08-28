@@ -9,28 +9,36 @@ import (
 type controlFn = func(ctx context.Context, network, address string, c syscall.RawConn) error
 
 func addControlToListenConfig(lc *net.ListenConfig, fn controlFn) {
-	llc := *lc
+	if lc.Control == nil {
+		lc.Control = func(network, address string, c syscall.RawConn) error {
+			return fn(context.Background(), network, address, c)
+		}
+		return
+	}
+	prev := lc.Control
 	lc.Control = func(network, address string, c syscall.RawConn) (err error) {
-		switch {
-		case llc.Control != nil:
-			if err = llc.Control(network, address, c); err != nil {
-				return
-			}
+		if err = prev(network, address, c); err != nil {
+			return
 		}
 		return fn(context.Background(), network, address, c)
 	}
 }
 
 func addControlToDialer(d *net.Dialer, fn controlFn) {
-	ld := *d
+	if d.ControlContext == nil && d.Control == nil {
+		d.ControlContext = fn
+		return
+	}
+	prevCtx := d.ControlContext
+	prev := d.Control
 	d.ControlContext = func(ctx context.Context, network, address string, c syscall.RawConn) (err error) {
 		switch {
-		case ld.ControlContext != nil:
-			if err = ld.ControlContext(ctx, network, address, c); err != nil {
+		case prevCtx != nil:
+			if err = prevCtx(ctx, network, address, c); err != nil {
 				return
 			}
-		case ld.Control != nil:
-			if err = ld.Control(network, address, c); err != nil {
+		case prev != nil:
+			if err = prev(network, address, c); err != nil {
 				return
 			}
 		}

@@ -27,18 +27,22 @@ func benchmarkAsterStore(userCount int) (*Store, string) {
 	return store, targetID
 }
 
+func setupBenchmarkManager(userCount int) (*Manager, string) {
+	store, targetID := benchmarkAsterStore(userCount)
+	manager := NewManager()
+	manager.config = &Config{
+		Secret: "0123456789abcdef0123456789abcdef", ManagedListeners: []string{"benchmark"},
+	}
+	manager.store = store
+	manager.userIndex = buildUserIndex(store)
+	manager.runtime.Store(buildRuntimeState(manager.config, "", store, newRuntimeState()))
+	return manager, targetID
+}
+
 func BenchmarkManagerGetUser(b *testing.B) {
 	for _, userCount := range []int{100, 1_000, 10_000} {
 		b.Run("users_"+strconv.Itoa(userCount), func(b *testing.B) {
-			store, targetID := benchmarkAsterStore(userCount)
-			manager := NewManager()
-			manager.config = &Config{
-				Secret: "0123456789abcdef0123456789abcdef", ManagedListeners: []string{"benchmark"},
-			}
-			manager.store = store
-			manager.userIndex = buildUserIndex(store)
-			manager.runtime.Store(buildRuntimeState(manager.config, "", store, newRuntimeState()))
-
+			manager, targetID := setupBenchmarkManager(userCount)
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
@@ -48,6 +52,19 @@ func BenchmarkManagerGetUser(b *testing.B) {
 			}
 		})
 	}
+}
+
+func BenchmarkManagerGetUserParallel(b *testing.B) {
+	manager, targetID := setupBenchmarkManager(1_000)
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			if _, _, err := manager.GetUser(targetID); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }
 
 // The overview endpoint is polled by dashboards and only needs counts, so it must

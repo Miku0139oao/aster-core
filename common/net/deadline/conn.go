@@ -3,9 +3,11 @@ package deadline
 import (
 	"net"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/Miku0139oao/aster-core/common/atomic"
+	"github.com/Miku0139oao/aster-core/common/pool"
 
 	"github.com/metacubex/sing/common/buf"
 	"github.com/metacubex/sing/common/bufio"
@@ -15,6 +17,25 @@ import (
 type connReadResult struct {
 	buffer []byte
 	err    error
+	pooled []byte
+}
+
+var connReadResultPool = sync.Pool{
+	New: func() any { return new(connReadResult) },
+}
+
+func acquireConnReadResult() *connReadResult {
+	return connReadResultPool.Get().(*connReadResult)
+}
+
+func releaseConnReadResult(result *connReadResult) {
+	if result.pooled != nil {
+		_ = pool.Put(result.pooled)
+	}
+	result.buffer = nil
+	result.err = nil
+	result.pooled = nil
+	connReadResultPool.Put(result)
 }
 
 type Conn struct {
@@ -48,6 +69,7 @@ func (c *Conn) Read(p []byte) (n int, err error) {
 			n = copy(p, result.buffer)
 			err = result.err
 			if n >= len(result.buffer) {
+				releaseConnReadResult(result)
 				c.resultCh <- nil // finish cache read
 			} else {
 				result.buffer = result.buffer[n:]
@@ -77,13 +99,19 @@ func (c *Conn) Read(p []byte) (n int, err error) {
 }
 
 func (c *Conn) pipeRead(size int) {
-	buffer := make([]byte, size)
+	buffer := pool.Get(size)
 	n, err := c.ExtendedConn.Read(buffer)
-	buffer = buffer[:n]
-	c.resultCh <- &connReadResult{
-		buffer: buffer,
-		err:    err,
+	result := acquireConnReadResult()
+	result.err = err
+	if n > 0 {
+		result.buffer = buffer[:n]
+		result.pooled = buffer
+	} else {
+		_ = pool.Put(buffer)
+		result.buffer = nil
+		result.pooled = nil
 	}
+	c.resultCh <- result
 }
 
 func (c *Conn) ReadBuffer(buffer *buf.Buffer) (err error) {
@@ -94,6 +122,7 @@ func (c *Conn) ReadBuffer(buffer *buf.Buffer) (err error) {
 			err = result.err
 
 			if n >= len(result.buffer) {
+				releaseConnReadResult(result)
 				c.resultCh <- nil // finish cache read
 			} else {
 				result.buffer = result.buffer[n:]

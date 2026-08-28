@@ -18,7 +18,7 @@ func (dw *DomainWildcard) RuleType() C.RuleType {
 }
 
 func (dw *DomainWildcard) Match(metadata *C.Metadata, _ C.RuleMatchHelper) (bool, string) {
-	return wildcard.Match(dw.pattern, strings.ToLower(metadata.RuleHost())), dw.adapter
+	return wildcard.Match(dw.pattern, asciiLowerOnce(metadata.RuleHost())), dw.adapter
 }
 
 func (dw *DomainWildcard) Adapter() string {

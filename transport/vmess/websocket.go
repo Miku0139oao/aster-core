@@ -18,6 +18,7 @@ import (
 
 	"github.com/Miku0139oao/aster-core/common/buf"
 	N "github.com/Miku0139oao/aster-core/common/net"
+	"github.com/Miku0139oao/aster-core/common/pool"
 	"github.com/Miku0139oao/aster-core/component/ech"
 	tlsC "github.com/Miku0139oao/aster-core/component/tls"
 	"github.com/Miku0139oao/aster-core/log"
@@ -104,12 +105,51 @@ func (wsc *websocketConn) Read(b []byte) (n int, err error) {
 
 // Write implements io.Writer.
 func (wsc *websocketConn) Write(b []byte) (n int, err error) {
-	err = wsutil.WriteMessage(wsc.Conn, wsc.state, ws.OpBinary, b)
-	if err != nil {
-		return
+	dataLen := len(b)
+	var payloadBitLength int
+	switch {
+	case dataLen < 126:
+		payloadBitLength = 1
+	case dataLen < 65536:
+		payloadBitLength = 3
+	default:
+		payloadBitLength = 9
 	}
-	n = len(b)
-	return
+	headerLen := 1 + payloadBitLength
+	if wsc.state.ClientSide() {
+		headerLen += 4
+	}
+	frame := pool.Get(headerLen + dataLen)
+	defer pool.Put(frame)
+	header := frame[:headerLen]
+	payload := frame[headerLen : headerLen+dataLen]
+	copy(payload, b)
+
+	header[0] = byte(ws.OpBinary) | 0x80
+	if wsc.state.ClientSide() {
+		header[1] = 1 << 7
+	} else {
+		header[1] = 0
+	}
+	switch {
+	case dataLen < 126:
+		header[1] |= byte(dataLen)
+	case dataLen < 65536:
+		header[1] |= 126
+		binary.BigEndian.PutUint16(header[2:], uint16(dataLen))
+	default:
+		header[1] |= 127
+		binary.BigEndian.PutUint64(header[2:], uint64(dataLen))
+	}
+	if wsc.state.ClientSide() {
+		maskKey := randv2.Uint32()
+		binary.LittleEndian.PutUint32(header[1+payloadBitLength:], maskKey)
+		N.MaskWebSocket(maskKey, payload)
+	}
+	if _, err = wsc.Conn.Write(frame[:headerLen+dataLen]); err != nil {
+		return 0, err
+	}
+	return dataLen, nil
 }
 
 func (wsc *websocketConn) WriteBuffer(buffer *buf.Buffer) error {

@@ -183,6 +183,32 @@ func TestManagerReconcileMutateAndTraffic(t *testing.T) {
 	}}, managed.users())
 }
 
+func TestGetUserOverlaysLiveCountersWithoutStoreSync(t *testing.T) {
+	managed := newManagedVLESSTestListener()
+	registerManagedTestListener(t, managed)
+	manager := NewManager()
+	require.NoError(t, manager.Configure(managerTestConfig(filepath.Join(t.TempDir(), "aster-state.json"), managed.name)))
+	t.Cleanup(func() { _ = manager.Configure(nil) })
+
+	records, err := manager.ListUserRecords(managed.name)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+
+	manager.RecordTraffic(managed.name, records[0].User.ID, 100, 40)
+
+	manager.mu.Lock()
+	storeUser := manager.store.Listeners[managed.name].Users[0]
+	require.Equal(t, records[0].User.ID, storeUser.ID)
+	require.Zero(t, storeUser.UploadBytes)
+	require.Zero(t, storeUser.DownloadBytes)
+	manager.mu.Unlock()
+
+	user, _, err := manager.GetUser(records[0].User.ID)
+	require.NoError(t, err)
+	require.EqualValues(t, 100, user.UploadBytes)
+	require.EqualValues(t, 40, user.DownloadBytes)
+}
+
 func TestManagerRejectsNonPositiveMutationRevision(t *testing.T) {
 	managed := newManagedVLESSTestListener()
 	registerManagedTestListener(t, managed)
@@ -451,11 +477,14 @@ func TestManagerDisableClearsRuntimeStateAndFlusher(t *testing.T) {
 	require.Empty(t, runtime.storePath)
 	require.Empty(t, runtime.managed)
 	require.Empty(t, runtime.traffic)
+	require.Empty(t, runtime.users)
 	require.Empty(t, runtime.subscriptions)
 	require.Empty(t, manager.storePath)
 	require.Empty(t, manager.store.Listeners)
 	require.Nil(t, manager.flushCancel)
 
+	_, _, err = manager.GetUser(records[0].User.ID)
+	require.ErrorIs(t, err, ErrDisabled)
 	manager.RecordTraffic(managed.name, records[0].User.ID, 1, 1)
 	require.False(t, manager.dirty.Load())
 }

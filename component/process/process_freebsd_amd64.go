@@ -60,6 +60,9 @@ func findProcessName(network string, ip netip.Addr, srcPort int) (uint32, string
 }
 
 func getExecPathFromPID(pid uint32) (string, error) {
+	if path, ok := lookupPidPath(pid); ok {
+		return path, nil
+	}
 	buf := make([]byte, 2048)
 	size := uint64(len(buf))
 	// CTL_KERN, KERN_PROC, KERN_PROC_PATHNAME, pid
@@ -77,7 +80,9 @@ func getExecPathFromPID(pid uint32) (string, error) {
 		return "", errno
 	}
 
-	return string(buf[:size-1]), nil
+	path := string(buf[:size-1])
+	storePidPath(pid, path)
+	return path, nil
 }
 
 func readNativeUint32(b []byte) uint32 {

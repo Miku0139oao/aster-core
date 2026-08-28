@@ -17,41 +17,20 @@ func (ss *DomainSet) WriteBin(w io.Writer) (err error) {
 		return err
 	}
 
-	// leaves
-	err = binary.Write(w, binary.BigEndian, int64(len(ss.leaves)))
-	if err != nil {
+	if err = writeUint64Slice(w, ss.leaves); err != nil {
 		return err
 	}
-	for _, d := range ss.leaves {
-		err = binary.Write(w, binary.BigEndian, d)
-		if err != nil {
-			return err
-		}
-	}
-
-	// labelBitmap
-	err = binary.Write(w, binary.BigEndian, int64(len(ss.labelBitmap)))
-	if err != nil {
+	if err = writeUint64Slice(w, ss.labelBitmap); err != nil {
 		return err
 	}
-	for _, d := range ss.labelBitmap {
-		err = binary.Write(w, binary.BigEndian, d)
-		if err != nil {
-			return err
-		}
-	}
 
-	// labels
-	err = binary.Write(w, binary.BigEndian, int64(len(ss.labels)))
-	if err != nil {
+	var hdr [8]byte
+	binary.BigEndian.PutUint64(hdr[:], uint64(len(ss.labels)))
+	if _, err = w.Write(hdr[:]); err != nil {
 		return err
 	}
 	_, err = w.Write(ss.labels)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return err
 }
 
 func ReadDomainSetBin(r io.Reader) (ds *DomainSet, err error) {
@@ -66,45 +45,21 @@ func ReadDomainSetBin(r io.Reader) (ds *DomainSet, err error) {
 	}
 
 	ds = &DomainSet{}
-	var length int64
 
-	// leaves
-	err = binary.Read(r, binary.BigEndian, &length)
+	ds.leaves, err = readUint64Slice(r, 1, (maxBinaryDomainLabels+64)/64, "leaf bitmap")
 	if err != nil {
 		return nil, err
 	}
-	if length < 1 || length > (maxBinaryDomainLabels+64)/64 {
-		return nil, fmt.Errorf("leaf bitmap length %d is invalid", length)
-	}
-	ds.leaves = make([]uint64, int(length))
-	for i := int64(0); i < length; i++ {
-		err = binary.Read(r, binary.BigEndian, &ds.leaves[i])
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// labelBitmap
-	err = binary.Read(r, binary.BigEndian, &length)
+	ds.labelBitmap, err = readUint64Slice(r, 1, (2*maxBinaryDomainLabels+64)/64, "label bitmap")
 	if err != nil {
 		return nil, err
 	}
-	if length < 1 || length > (2*maxBinaryDomainLabels+64)/64 {
-		return nil, fmt.Errorf("label bitmap length %d is invalid", length)
-	}
-	ds.labelBitmap = make([]uint64, int(length))
-	for i := int64(0); i < length; i++ {
-		err = binary.Read(r, binary.BigEndian, &ds.labelBitmap[i])
-		if err != nil {
-			return nil, err
-		}
-	}
 
-	// labels
-	err = binary.Read(r, binary.BigEndian, &length)
-	if err != nil {
+	var hdr [8]byte
+	if _, err = io.ReadFull(r, hdr[:]); err != nil {
 		return nil, err
 	}
+	length := int64(binary.BigEndian.Uint64(hdr[:]))
 	if length < 1 || length > maxBinaryDomainLabels {
 		return nil, fmt.Errorf("label length %d is invalid", length)
 	}
@@ -169,4 +124,42 @@ func (ss *DomainSet) validateBinary() error {
 		return errors.New("domain set tree bitmap is not balanced")
 	}
 	return nil
+}
+
+func writeUint64Slice(w io.Writer, values []uint64) error {
+	var hdr [8]byte
+	binary.BigEndian.PutUint64(hdr[:], uint64(len(values)))
+	if _, err := w.Write(hdr[:]); err != nil {
+		return err
+	}
+	if len(values) == 0 {
+		return nil
+	}
+	buf := make([]byte, len(values)*8)
+	for i, v := range values {
+		binary.BigEndian.PutUint64(buf[i*8:], v)
+	}
+	_, err := w.Write(buf)
+	return err
+}
+
+func readUint64Slice(r io.Reader, minLen, maxLen int64, what string) ([]uint64, error) {
+	var hdr [8]byte
+	if _, err := io.ReadFull(r, hdr[:]); err != nil {
+		return nil, err
+	}
+	length := int64(binary.BigEndian.Uint64(hdr[:]))
+	if length < minLen || length > maxLen {
+		return nil, fmt.Errorf("%s length %d is invalid", what, length)
+	}
+	n := int(length)
+	buf := make([]byte, n*8)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return nil, err
+	}
+	out := make([]uint64, n)
+	for i := 0; i < n; i++ {
+		out[i] = binary.BigEndian.Uint64(buf[i*8:])
+	}
+	return out, nil
 }

@@ -89,6 +89,29 @@ type routingSnapshot struct {
 	mode          TunnelMode
 }
 
+// ruleMatchContext holds per-match mutable state for RuleMatchHelper
+// callbacks. The helper func values are bound once in the pool New func so
+// resolveMetadata does not allocate closures on every TCP/UDP flow.
+type ruleMatchContext struct {
+	metadata             *C.Metadata
+	state                *routingSnapshot
+	resolved             bool
+	attemptProcessLookup bool
+	helper               C.RuleMatchHelper
+}
+
+var ruleMatchContextPool = sync.Pool{
+	New: func() any {
+		ctx := new(ruleMatchContext)
+		ctx.helper = C.RuleMatchHelper{
+			ResolveIP:     ctx.resolveIP,
+			FindProcess:   ctx.findProcess,
+			CheckPassRule: ctx.checkPassRule,
+		}
+		return ctx
+	},
+}
+
 func init() {
 	publishRoutingState()
 	snifferState.Store(&snifferSnapshot{})
@@ -365,11 +388,43 @@ func isHandle(t C.Type) bool {
 func fixMetadata(metadata *C.Metadata) {
 	// first unmap dstIP
 	metadata.DstIP = metadata.DstIP.Unmap()
-	// handle IP string on host
+	// handle IP string on host. ParseAddr allocates on failure, so skip hosts
+	// that cannot be an address (empty, domains) on the per-packet path.
+	if !hostLooksLikeIP(metadata.Host) {
+		return
+	}
 	if ip, err := netip.ParseAddr(metadata.Host); err == nil {
 		metadata.DstIP = ip.Unmap()
 		metadata.Host = ""
 	}
+}
+
+// hostLooksLikeIP reports whether host might be an IP literal. False negatives
+// only skip ParseAddr for values that would fail anyway.
+func hostLooksLikeIP(host string) bool {
+	n := len(host)
+	if n == 0 {
+		return false
+	}
+	sawColon := false
+	sawDot := false
+	for i := 0; i < n; i++ {
+		c := host[i]
+		switch {
+		case c == ':':
+			sawColon = true
+		case c == '.':
+			sawDot = true
+		case c == '%':
+			// IPv6 zone id; the remainder is an interface name, not hex.
+			return sawColon
+		case c >= '0' && c <= '9':
+		case c >= 'a' && c <= 'f', c >= 'A' && c <= 'F':
+		default:
+			return false
+		}
+	}
+	return sawColon || sawDot
 }
 
 func needLookupIP(metadata *C.Metadata) bool {
@@ -396,9 +451,11 @@ func preHandleMetadata(metadata *C.Metadata) error {
 		} else if resolver.IsFakeIP(metadata.DstIP) {
 			return fmt.Errorf("fake DNS record %s missing", metadata.DstIP)
 		}
-	} else if node, ok := resolver.DefaultHosts.Search(metadata.Host, true); ok {
-		// try use domain mapping
-		metadata.Host = node.Domain
+	} else if metadata.Host != "" {
+		// try use domain mapping; empty Host cannot match a domain mapping
+		if node, ok := resolver.DefaultHosts.Search(metadata.Host, true); ok {
+			metadata.Host = node.Domain
+		}
 	}
 
 	return nil
@@ -426,91 +483,123 @@ func resolveMetadata(metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, err erro
 		}
 		return
 	}
-	var (
-		resolved             bool
-		attemptProcessLookup = metadata.Type != C.INNER
-	)
 
-	if node, ok := resolver.DefaultHosts.Search(metadata.Host, false); ok {
-		metadata.DstIP, _ = node.RandIP()
-		resolved = true
+	resolved := false
+	if metadata.Host != "" {
+		if node, ok := resolver.DefaultHosts.Search(metadata.Host, false); ok {
+			metadata.DstIP, _ = node.RandIP()
+			resolved = true
+		}
 	}
 
-	helper := C.RuleMatchHelper{
-		ResolveIP: func() {
-			if !resolved && metadata.Host != "" && !metadata.Resolved() {
-				ctx, cancel := context.WithTimeout(context.Background(), resolver.DefaultDNSTimeout)
-				defer cancel()
-				ip, err := resolver.ResolveIP(ctx, metadata.Host)
-				if err != nil {
-					log.Debugln("[DNS] resolve %s error: %s", metadata.Host, err.Error())
-				} else {
-					log.Debugln("[DNS] %s --> %s", metadata.Host, ip.String())
-					metadata.DstIP = ip
-				}
-				resolved = true
+	findMode := FindProcessMode()
+	switch state.mode {
+	case Direct, Global:
+		// Original resolveMetadata ran FindProcessAlways before the mode
+		// switch, so Direct/Global still populated process metadata.
+		if findMode != process.FindProcessAlways {
+			if state.mode == Direct {
+				proxy = state.proxies["DIRECT"]
+			} else {
+				proxy = state.proxies["GLOBAL"]
 			}
-		},
-		FindProcess: func() {
-			if attemptProcessLookup {
-				attemptProcessLookup = false
-				if !features.CMFA {
-					// normal check for process
-					uid, path, err := process.FindProcessName(metadata.NetWork.String(), metadata.SrcIP, int(metadata.SrcPort))
-					if err != nil {
-						log.Debugln("[Process] find process error for %s: %v", metadata.String(), err)
-					} else {
-						metadata.Process = filepath.Base(path)
-						metadata.ProcessPath = path
-						metadata.Uid = uid
-
-						if pkg, err := process.FindPackageName(metadata); err == nil { // for android (not CMFA) package names
-							metadata.Process = pkg
-						}
-					}
-				} else {
-					// check package names
-					pkg, err := process.FindPackageName(metadata)
-					if err != nil {
-						log.Debugln("[Process] find process error for %s: %v", metadata.String(), err)
-					} else {
-						metadata.Process = pkg
-					}
-				}
-			}
-		},
-		CheckPassRule: func(adapterName string) bool {
-			adapter, ok := state.proxies[adapterName]
-			if !ok {
-				return false
-			}
-			for a := adapter; a != nil; a = a.Unwrap(metadata, false) {
-				if a.Type() == C.PassRule {
-					return true
-				}
-			}
-			return false
-		},
+			return
+		}
 	}
 
-	switch FindProcessMode() {
+	ctx := ruleMatchContextPool.Get().(*ruleMatchContext)
+	ctx.metadata = metadata
+	ctx.state = state
+	ctx.resolved = resolved
+	ctx.attemptProcessLookup = metadata.Type != C.INNER
+	defer func() {
+		ctx.metadata = nil
+		ctx.state = nil
+		ruleMatchContextPool.Put(ctx)
+	}()
+	helper := ctx.helper
+	switch findMode {
 	case process.FindProcessAlways:
-		helper.FindProcess()
+		ctx.findProcess()
 		helper.FindProcess = nil
 	case process.FindProcessOff:
 		helper.FindProcess = nil
 	}
-
 	switch state.mode {
 	case Direct:
 		proxy = state.proxies["DIRECT"]
 	case Global:
 		proxy = state.proxies["GLOBAL"]
-	// Rule
 	default:
 		proxy, rule, err = matchWithState(metadata, helper, state)
 	}
 	return
+}
+
+func (c *ruleMatchContext) resolveIP() {
+	metadata := c.metadata
+	if metadata == nil || c.resolved || metadata.Host == "" || metadata.Resolved() {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), resolver.DefaultDNSTimeout)
+	defer cancel()
+	ip, err := resolver.ResolveIP(ctx, metadata.Host)
+	if err != nil {
+		log.Debugln("[DNS] resolve %s error: %s", metadata.Host, err.Error())
+	} else {
+		log.Debugln("[DNS] %s --> %s", metadata.Host, ip.String())
+		metadata.DstIP = ip
+	}
+	c.resolved = true
+}
+
+func (c *ruleMatchContext) findProcess() {
+	metadata := c.metadata
+	if metadata == nil || !c.attemptProcessLookup {
+		return
+	}
+	c.attemptProcessLookup = false
+	if !features.CMFA {
+		// normal check for process
+		uid, path, err := process.FindProcessName(metadata.NetWork.String(), metadata.SrcIP, int(metadata.SrcPort))
+		if err != nil {
+			log.Debugln("[Process] find process error for %s: %v", metadata.String(), err)
+		} else {
+			metadata.Process = filepath.Base(path)
+			metadata.ProcessPath = path
+			metadata.Uid = uid
+
+			if pkg, err := process.FindPackageName(metadata); err == nil { // for android (not CMFA) package names
+				metadata.Process = pkg
+			}
+		}
+		return
+	}
+	// check package names
+	pkg, err := process.FindPackageName(metadata)
+	if err != nil {
+		log.Debugln("[Process] find process error for %s: %v", metadata.String(), err)
+	} else {
+		metadata.Process = pkg
+	}
+}
+
+func (c *ruleMatchContext) checkPassRule(adapterName string) bool {
+	state := c.state
+	metadata := c.metadata
+	if state == nil || metadata == nil {
+		return false
+	}
+	adapter, ok := state.proxies[adapterName]
+	if !ok {
+		return false
+	}
+	for a := adapter; a != nil; a = a.Unwrap(metadata, false) {
+		if a.Type() == C.PassRule {
+			return true
+		}
+	}
+	return false
 }
 
 // processUDP starts a loop to handle udp packet
@@ -850,12 +939,9 @@ func matchWithState(metadata *C.Metadata, helper C.RuleMatchHelper, state *routi
 
 func getRules(metadata *C.Metadata, state *routingSnapshot) []C.Rule {
 	if sr, ok := state.subRules[metadata.SpecialRules]; ok {
-		log.Debugln("[Rule] use %s rules", metadata.SpecialRules)
 		return sr
-	} else {
-		log.Debugln("[Rule] use default rules")
-		return state.rules
 	}
+	return state.rules
 }
 
 func observeKernelDirectFlow(metadata *C.Metadata, proxy C.ProxyAdapter) {

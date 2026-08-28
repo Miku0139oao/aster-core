@@ -3,6 +3,7 @@ package dns
 import (
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -11,8 +12,10 @@ import (
 	"runtime"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/Miku0139oao/aster-core/common/pool"
 	"github.com/Miku0139oao/aster-core/component/ca"
 	"github.com/Miku0139oao/aster-core/component/resolver"
 	C "github.com/Miku0139oao/aster-core/constant"
@@ -56,7 +59,7 @@ type dnsOverHTTPS struct {
 	// The Client's Transport typically has internal state (cached TCP
 	// connections), so Clients should be reused instead of created as
 	// needed. Clients are safe for concurrent use by multiple goroutines.
-	client   *http.Client
+	client   atomic.Pointer[http.Client]
 	clientMu sync.Mutex
 
 	// quicConfig is the QUIC configuration that is used if HTTP/3 is enabled
@@ -68,6 +71,7 @@ type dnsOverHTTPS struct {
 	httpVersions   []C.HTTPVersion
 	dialer         *dnsDialer
 	addr           string
+	urlPrefix      string // addr without query/fragment, plus "?dns="
 	skipCertVerify bool
 	nameCertVerify string
 }
@@ -88,9 +92,10 @@ func newDoHClient(urlString string, r resolver.Resolver, preferH3 bool, params m
 	}
 
 	doh := &dnsOverHTTPS{
-		url:    u,
-		addr:   u.String(),
-		dialer: newDNSDialer(r, proxyAdapter, proxyName),
+		url:       u,
+		addr:      u.String(),
+		urlPrefix: dohRequestURLPrefix(u),
+		dialer:    newDNSDialer(r, proxyAdapter, proxyName),
 		quicConfig: &quic.Config{
 			KeepAlivePeriod: QUICKeepAlivePeriod,
 			TokenStore:      newQUICTokenStore(),
@@ -118,17 +123,8 @@ func (doh *dnsOverHTTPS) ExchangeContext(ctx context.Context, m *D.Msg) (msg *D.
 	// In order to maximize HTTP cache friendliness, DoH clients using media
 	// formats that include the ID field from the DNS message header, such
 	// as "application/dns-message", SHOULD use a DNS ID of 0 in every DNS
-	// request.
-	m = m.Copy()
-	id := m.Id
-	m.Id = 0
-	defer func() {
-		// Restore the original ID to not break compatibility with proxies.
-		m.Id = id
-		if msg != nil {
-			msg.Id = id
-		}
-	}()
+	// request. ID is zeroed in the packed wire buffer so the caller's Msg is
+	// not copied or mutated (batchExchange shares the same Msg across clients).
 
 	// Check if there was already an active client before sending the request.
 	// We'll only attempt to re-connect if there was one.
@@ -171,23 +167,24 @@ func (doh *dnsOverHTTPS) Close() (err error) {
 
 	runtime.SetFinalizer(doh, nil)
 
-	if doh.client == nil {
+	client := doh.client.Swap(nil)
+	if client == nil {
 		return nil
 	}
 
-	return doh.closeClient(doh.client)
+	return doh.closeClient(client)
 }
 
 func (doh *dnsOverHTTPS) ResetConnection() {
 	doh.clientMu.Lock()
 	defer doh.clientMu.Unlock()
 
-	if doh.client == nil {
+	client := doh.client.Swap(nil)
+	if client == nil {
 		return
 	}
 
-	_ = doh.closeClient(doh.client)
-	doh.client = nil
+	_ = doh.closeClient(client)
 }
 
 // closeClient cleans up resources used by client if necessary.
@@ -208,22 +205,25 @@ func (doh *dnsOverHTTPS) closeClient(client *http.Client) (err error) {
 // exchangeHTTPS sends the DNS query to a DoH resolver using the specified
 // http.Client instance.
 func (doh *dnsOverHTTPS) exchangeHTTPS(ctx context.Context, client *http.Client, req *D.Msg) (resp *D.Msg, err error) {
-	buf, err := req.Pack()
+	packBuf := pool.Get(512)
+	packed, origID, err := packDNSQueryID0(req, packBuf)
 	if err != nil {
+		_ = pool.Put(packBuf)
 		return nil, fmt.Errorf("packing message: %w", err)
 	}
 
-	// It appears, that GET requests are more memory-efficient with Golang
-	// implementation of HTTP/2.
+	// GET is more memory-efficient with Go's HTTP/2 implementation. HTTP/3
+	// uses GET 0-RTT; both share the same query encoding, so we keep GET
+	// rather than switching H3 to POST (which would drop 0-RTT).
 	method := http.MethodGet
 	if isHTTP3(client) {
-		// If we're using HTTP/3, use http3.MethodGet0RTT to force using 0-RTT.
 		method = http3.MethodGet0RTT
 	}
 
-	requestUrl := *doh.url // don't modify origin url
-	requestUrl.RawQuery = fmt.Sprintf("dns=%s", base64.RawURLEncoding.EncodeToString(buf))
-	httpReq, err := http.NewRequestWithContext(ctx, method, requestUrl.String(), nil)
+	requestURL := doh.buildDoHGETURL(packed)
+	_ = pool.Put(packBuf)
+
+	httpReq, err := http.NewRequestWithContext(ctx, method, requestURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating http request to %s: %w", doh.url, err)
 	}
@@ -236,7 +236,9 @@ func (doh *dnsOverHTTPS) exchangeHTTPS(ctx context.Context, client *http.Client,
 	}
 	defer httpResp.Body.Close()
 
-	body, err := io.ReadAll(httpResp.Body)
+	bodyBuf := pool.Get(MaxMsgSize)
+	defer pool.Put(bodyBuf)
+	body, err := readDNSBody(httpResp.Body, bodyBuf)
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", doh.url, err)
 	}
@@ -251,7 +253,7 @@ func (doh *dnsOverHTTPS) exchangeHTTPS(ctx context.Context, client *http.Client,
 			)
 	}
 
-	resp = &D.Msg{}
+	resp = new(D.Msg)
 	err = resp.Unpack(body)
 	if err != nil {
 		return nil, fmt.Errorf(
@@ -262,11 +264,95 @@ func (doh *dnsOverHTTPS) exchangeHTTPS(ctx context.Context, client *http.Client,
 		)
 	}
 
-	if resp.Id != req.Id {
+	// Wire ID must be 0 (we zeroed it on the request). Restore the caller's ID
+	// so proxies that correlate by message ID keep working.
+	if resp.Id != 0 {
 		err = D.ErrId
 	}
+	resp.Id = origID
 
 	return resp, err
+}
+
+// packDNSQueryID0 packs m into buf (or a newly allocated buffer if buf is too
+// small) with the DNS header ID set to 0 on the wire. The caller's Msg is not
+// mutated.
+func packDNSQueryID0(m *D.Msg, buf []byte) (packed []byte, origID uint16, err error) {
+	origID = m.Id
+	packed, err = m.PackBuffer(buf)
+	if err != nil {
+		return nil, origID, err
+	}
+	if len(packed) < 2 {
+		return nil, origID, fmt.Errorf("packed DNS message too short")
+	}
+	binary.BigEndian.PutUint16(packed[:2], 0)
+	return packed, origID, nil
+}
+
+func putLengthPrefixed(dst []byte, packed []byte) error {
+	n := 2 + len(packed)
+	if len(dst) < 2 || n > len(dst) {
+		return fmt.Errorf("DNS message is too large: %d > %d", len(packed), len(dst)-2)
+	}
+	if len(packed) == 0 || &packed[0] != &dst[2] {
+		copy(dst[2:], packed)
+	}
+	binary.BigEndian.PutUint16(dst, uint16(len(packed)))
+	return nil
+}
+
+func dohRequestURLPrefix(u *url.URL) string {
+	if u == nil {
+		return "?dns="
+	}
+	cp := *u
+	cp.RawQuery = ""
+	cp.Fragment = ""
+	return cp.String() + "?dns="
+}
+
+func (doh *dnsOverHTTPS) buildDoHGETURL(packed []byte) string {
+	encodedLen := base64.RawURLEncoding.EncodedLen(len(packed))
+	prefixLen := len(doh.urlPrefix)
+	n := prefixLen + encodedLen
+	urlBuf := pool.Get(n)
+	copy(urlBuf[:prefixLen], doh.urlPrefix)
+	base64.RawURLEncoding.Encode(urlBuf[prefixLen:n], packed)
+	s := string(urlBuf[:n])
+	_ = pool.Put(urlBuf)
+	return s
+}
+
+func readDNSBody(r io.Reader, buf []byte) ([]byte, error) {
+	n := 0
+	for {
+		if n >= len(buf) {
+			var extra [1]byte
+			nn, err := r.Read(extra[:])
+			if err == io.EOF {
+				return buf[:n], nil
+			}
+			if err != nil {
+				return nil, err
+			}
+			if nn == 0 {
+				return nil, io.ErrNoProgress
+			}
+			return nil, fmt.Errorf("DNS response too large")
+		}
+		nn, err := r.Read(buf[n:])
+		n += nn
+		if err == io.EOF {
+			return buf[:n], nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if nn == 0 {
+			return nil, io.ErrNoProgress
+		}
+	}
 }
 
 // shouldRetry checks what error we have received and returns true if we should
@@ -305,7 +391,7 @@ func (doh *dnsOverHTTPS) resetClient(ctx context.Context, resetErr error) (clien
 		doh.resetQUICConfig()
 	}
 
-	oldClient := doh.client
+	oldClient := doh.client.Swap(nil)
 	if oldClient != nil {
 		closeErr := doh.closeClient(oldClient)
 		if closeErr != nil {
@@ -314,9 +400,9 @@ func (doh *dnsOverHTTPS) resetClient(ctx context.Context, resetErr error) (clien
 	}
 
 	log.Debugln("re-creating the http client due to %v", resetErr)
-	doh.client, err = doh.createClient(ctx)
+	client, err = doh.createClient(ctx)
 
-	return doh.client, err
+	return client, err
 }
 
 // getQUICConfig returns the QUIC config in a thread-safe manner.  Note, that
@@ -341,12 +427,16 @@ func (doh *dnsOverHTTPS) resetQUICConfig() {
 // getClient gets or lazily initializes an HTTP client (and transport) that will
 // be used for this DoH resolver.
 func (doh *dnsOverHTTPS) getClient(ctx context.Context) (c *http.Client, isCached bool, err error) {
+	if c = doh.client.Load(); c != nil {
+		return c, true, nil
+	}
+
 	startTime := time.Now()
 
 	doh.clientMu.Lock()
 	defer doh.clientMu.Unlock()
-	if doh.client != nil {
-		return doh.client, true, nil
+	if c = doh.client.Load(); c != nil {
+		return c, true, nil
 	}
 
 	// Timeout can be exceeded while waiting for the lock. This happens quite
@@ -357,9 +447,9 @@ func (doh *dnsOverHTTPS) getClient(ctx context.Context) (c *http.Client, isCache
 	}
 
 	log.Debugln("creating a new http client")
-	doh.client, err = doh.createClient(ctx)
+	c, err = doh.createClient(ctx)
 
-	return doh.client, false, err
+	return c, false, err
 }
 
 // createClient creates a new *http.Client instance.  The HTTP protocol version
@@ -378,9 +468,9 @@ func (doh *dnsOverHTTPS) createClient(ctx context.Context) (*http.Client, error)
 		Jar:       nil,
 	}
 
-	doh.client = client
+	doh.client.Store(client)
 
-	return doh.client, nil
+	return client, nil
 }
 
 // createTransport initializes an HTTP transport that will be used specifically

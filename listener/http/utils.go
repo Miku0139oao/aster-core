@@ -61,6 +61,10 @@ func removeExtraHTTPHostPort(req *http.Request) {
 	req.URL.Host = host
 }
 
+func isProxyKeepAlive(value string) bool {
+	return strings.EqualFold(strings.TrimSpace(value), "keep-alive")
+}
+
 // parseBasicProxyAuthorization parse header Proxy-Authorization and return base64-encoded credential
 func parseBasicProxyAuthorization(request *http.Request) string {
 	value := request.Header.Get("Proxy-Authorization")

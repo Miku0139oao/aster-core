@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net/netip"
 	"path/filepath"
 	"sort"
@@ -75,6 +76,9 @@ type policyState struct {
 	Generation  uint64
 	Counters    Counters
 	Buckets     map[int64]Counters
+	rolling     Counters
+	bucketStart int64
+	nextCutoff  int64
 	OverQuota   atomic.Bool
 	Active      atomic.Int64
 	LastUpdated int64
@@ -89,6 +93,7 @@ type runtimePolicy struct {
 	download        *rate.Limiter
 	overageUpload   *rate.Limiter
 	overageDownload *rate.Limiter
+	bucketWidthSecs int64
 }
 
 type runtimeState struct {
@@ -388,11 +393,29 @@ func (m *Manager) configure(config *Config) error {
 }
 
 func newRuntimePolicy(spec Policy, state *policyState) *runtimePolicy {
-	return &runtimePolicy{
+	policy := &runtimePolicy{
 		spec: spec, state: state,
 		upload: newLimiter(spec.UploadBPS), download: newLimiter(spec.DownloadBPS),
 		overageUpload: newLimiter(spec.Quota.OverageUploadBPS), overageDownload: newLimiter(spec.Quota.OverageDownloadBPS),
 	}
+	if spec.Quota.Window > 0 {
+		policy.bucketWidthSecs = quotaBucketWidthSecs(spec.Quota.Window)
+		state.mu.Lock()
+		if state.Buckets == nil {
+			state.Buckets = make(map[int64]Counters)
+		}
+		state.rolling = sumBuckets(state.Buckets)
+		state.mu.Unlock()
+	}
+	return policy
+}
+
+func quotaBucketWidthSecs(window time.Duration) int64 {
+	secs := int64(quotaBucketWidth(window) / time.Second)
+	if secs < 1 {
+		secs = 1
+	}
+	return secs
 }
 
 func newLimiter(bitsPerSecond int64) *rate.Limiter {
@@ -653,10 +676,16 @@ func (s *Session) Record(direction Direction, bytes int64) {
 				crossed = true
 			}
 		}
-		s.manager.recordReports(binding.reportKeys, direction, bytes, now)
-		s.manager.dirty.Store(true)
+		if len(binding.reportKeys) > 0 {
+			s.manager.recordReports(binding.reportKeys, direction, bytes, now)
+		}
+		if !s.manager.dirty.Load() {
+			s.manager.dirty.Store(true)
+		}
 		if crossed {
-			s.manager.recordReportExceeded(binding.reportKeys, now)
+			if len(binding.reportKeys) > 0 {
+				s.manager.recordReportExceeded(binding.reportKeys, now)
+			}
 			s.manager.requestFlush()
 		}
 		binding.runtime.recordGate.RUnlock()
@@ -665,21 +694,15 @@ func (s *Session) Record(direction Direction, bytes int64) {
 }
 
 func (p *runtimePolicy) refreshQuota(now time.Time) {
-	if p.spec.Quota.Window <= 0 {
+	if p.bucketWidthSecs <= 0 {
 		p.state.OverQuota.Store(false)
 		return
 	}
 	state := p.state
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	width := quotaBucketWidth(p.spec.Quota.Window)
-	cutoff := now.Add(-p.spec.Quota.Window).Unix()
-	for key := range state.Buckets {
-		if key+int64(width.Seconds()) <= cutoff {
-			delete(state.Buckets, key)
-		}
-	}
-	state.OverQuota.Store(quotaExceeded(p.spec.Quota, sumBuckets(state.Buckets)))
+	p.pruneBucketsLocked(state, now.Add(-p.spec.Quota.Window).Unix())
+	state.OverQuota.Store(quotaExceeded(p.spec.Quota, state.rolling))
 }
 
 func (p *runtimePolicy) record(direction Direction, bytes int64, now time.Time) bool {
@@ -687,28 +710,52 @@ func (p *runtimePolicy) record(direction Direction, bytes int64, now time.Time) 
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	state.Counters.add(direction, bytes)
-	state.LastUpdated = now.Unix()
-	state.LastSeen = now.Unix()
-	if p.spec.Quota.Window > 0 {
-		width := quotaBucketWidth(p.spec.Quota.Window)
-		start := now.Unix() / int64(width.Seconds()) * int64(width.Seconds())
-		bucket := state.Buckets[start]
-		bucket.add(direction, bytes)
-		state.Buckets[start] = bucket
+	unix := now.Unix()
+	state.LastUpdated = unix
+	state.LastSeen = unix
+	rolling := state.Counters
+	if p.bucketWidthSecs > 0 {
+		start := unix / p.bucketWidthSecs * p.bucketWidthSecs
 		cutoff := now.Add(-p.spec.Quota.Window).Unix()
-		for key := range state.Buckets {
-			if key+int64(width.Seconds()) <= cutoff {
-				delete(state.Buckets, key)
+		if start != state.bucketStart || cutoff >= state.nextCutoff {
+			p.pruneBucketsLocked(state, cutoff)
+			state.bucketStart = start
+		}
+		bucket, exists := state.Buckets[start]
+		if !exists {
+			if expireAt := start + p.bucketWidthSecs; expireAt < state.nextCutoff {
+				state.nextCutoff = expireAt
 			}
 		}
+		bucket.add(direction, bytes)
+		state.Buckets[start] = bucket
+		state.rolling.add(direction, bytes)
+		rolling = state.rolling
 	}
-	rolling := sumBuckets(state.Buckets)
 	over := quotaExceeded(p.spec.Quota, rolling)
 	previous := state.OverQuota.Swap(over)
 	if over && !previous {
 		state.Counters.ExceededEvents++
 	}
 	return over && !previous
+}
+
+func (p *runtimePolicy) pruneBucketsLocked(state *policyState, cutoff int64) {
+	width := p.bucketWidthSecs
+	next := int64(math.MaxInt64)
+	for key, counters := range state.Buckets {
+		expireAt := key + width
+		if expireAt <= cutoff {
+			state.rolling.UploadBytes -= counters.UploadBytes
+			state.rolling.DownloadBytes -= counters.DownloadBytes
+			delete(state.Buckets, key)
+			continue
+		}
+		if expireAt < next {
+			next = expireAt
+		}
+	}
+	state.nextCutoff = next
 }
 
 func quotaBucketWidth(window time.Duration) time.Duration {
@@ -747,7 +794,7 @@ func (m *Manager) Status() Status {
 		runtimePolicy.refreshQuota(m.now())
 		state := runtimePolicy.state
 		state.mu.Lock()
-		item := PolicyStatus{Policy: runtimePolicy.spec, Counters: state.Counters, Rolling: sumBuckets(state.Buckets), Active: state.Active.Load(), OverQuota: state.OverQuota.Load(), LastUpdated: state.LastUpdated, LastReset: state.LastReset, Generation: state.Generation}
+		item := PolicyStatus{Policy: runtimePolicy.spec, Counters: state.Counters, Rolling: state.rolling, Active: state.Active.Load(), OverQuota: state.OverQuota.Load(), LastUpdated: state.LastUpdated, LastReset: state.LastReset, Generation: state.Generation}
 		item.Policy.SourceCIDRs = append([]netip.Prefix(nil), item.Policy.SourceCIDRs...)
 		state.mu.Unlock()
 		status.Policies = append(status.Policies, item)
@@ -769,6 +816,9 @@ func (m *Manager) Reset(policyID string) error {
 		state.Generation++
 		state.Counters = Counters{}
 		state.Buckets = make(map[int64]Counters)
+		state.rolling = Counters{}
+		state.bucketStart = 0
+		state.nextCutoff = 0
 		state.LastReset = m.now().Unix()
 		state.OverQuota.Store(false)
 		state.mu.Unlock()
@@ -1023,7 +1073,7 @@ func (m *Manager) recordReports(keys []string, direction Direction, bytes int64,
 	if runtime.config == nil || !runtime.config.Reports.Enabled {
 		return
 	}
-	hour := now.UTC().Truncate(time.Hour).Unix()
+	hour := now.Unix() / 3600 * 3600
 	for _, key := range keys {
 		series := m.reportSeries(key)
 		if series == nil {
@@ -1044,7 +1094,7 @@ func (m *Manager) recordReportConnections(keys []string, count int64) {
 		return
 	}
 	now := m.now()
-	hour := now.UTC().Truncate(time.Hour).Unix()
+	hour := now.Unix() / 3600 * 3600
 	for _, key := range keys {
 		series := m.reportSeries(key)
 		if series == nil {
@@ -1064,7 +1114,7 @@ func (m *Manager) recordReportExceeded(keys []string, now time.Time) {
 	if runtime.config == nil || !runtime.config.Reports.Enabled {
 		return
 	}
-	hour := now.UTC().Truncate(time.Hour).Unix()
+	hour := now.Unix() / 3600 * 3600
 	for _, key := range keys {
 		series := m.reportSeries(key)
 		if series == nil {

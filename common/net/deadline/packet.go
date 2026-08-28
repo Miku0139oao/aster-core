@@ -4,16 +4,38 @@ import (
 	"net"
 	"os"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/Miku0139oao/aster-core/common/atomic"
 	"github.com/Miku0139oao/aster-core/common/net/packet"
+	"github.com/Miku0139oao/aster-core/common/pool"
 )
 
 type readResult struct {
-	data []byte
-	addr net.Addr
-	err  error
+	data   []byte
+	addr   net.Addr
+	err    error
+	pooled []byte
+}
+
+var readResultPool = sync.Pool{
+	New: func() any { return new(readResult) },
+}
+
+func acquireReadResult() *readResult {
+	return readResultPool.Get().(*readResult)
+}
+
+func releaseReadResult(result *readResult) {
+	if result.pooled != nil {
+		_ = pool.Put(result.pooled)
+	}
+	result.data = nil
+	result.addr = nil
+	result.err = nil
+	result.pooled = nil
+	readResultPool.Put(result)
 }
 
 type NetPacketConn struct {
@@ -73,6 +95,7 @@ FOR:
 					n = copy(p, result.data)
 					addr = result.addr
 					err = result.err
+					releaseReadResult(result)
 					c.resultCh <- nil // finish cache read
 					return
 				}
@@ -104,13 +127,19 @@ FOR:
 }
 
 func (c *NetPacketConn) pipeReadFrom(size int) {
-	buffer := make([]byte, size)
+	buffer := pool.Get(size)
 	n, addr, err := c.PacketConn.ReadFrom(buffer)
-	buffer = buffer[:n]
-	result := &readResult{}
-	result.data = buffer
+	result := acquireReadResult()
 	result.addr = addr
 	result.err = err
+	if n > 0 {
+		result.data = buffer[:n]
+		result.pooled = buffer
+	} else {
+		_ = pool.Put(buffer)
+		result.data = nil
+		result.pooled = nil
+	}
 	c.resultCh <- result
 }
 

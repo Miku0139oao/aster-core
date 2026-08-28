@@ -36,10 +36,20 @@ func bind6(handle syscall.Handle, ifaceIdx int) error {
 	return err
 }
 
-func bindControl(ifaceIdx int, rAddrPort netip.AddrPort) controlFn {
+func bindControl(ifaceIdx int, rAddrPort netip.AddrPort, knownRemote netip.Addr) controlFn {
 	return func(ctx context.Context, network, address string, c syscall.RawConn) (err error) {
-		addrPort, err := netip.ParseAddrPort(address)
-		if err == nil && !addrPort.Addr().IsGlobalUnicast() {
+		addr := knownRemote
+		var addrPort netip.AddrPort
+		if addr.IsValid() {
+			addrPort = netip.AddrPortFrom(addr, 0)
+		} else {
+			parsed, perr := netip.ParseAddrPort(address)
+			if perr == nil {
+				addrPort = parsed
+				addr = parsed.Addr()
+			}
+		}
+		if addr.IsValid() && !addr.Unmap().IsGlobalUnicast() {
 			return
 		}
 
@@ -77,12 +87,16 @@ func bindControl(ifaceIdx int, rAddrPort netip.AddrPort) controlFn {
 }
 
 func bindIfaceToDialer(ifaceName string, dialer *net.Dialer, _ string, destination netip.Addr) error {
+	if destination.IsValid() && !destination.Unmap().IsGlobalUnicast() {
+		return nil
+	}
+
 	ifaceObj, err := iface.ResolveInterface(ifaceName)
 	if err != nil {
 		return err
 	}
 
-	addControlToDialer(dialer, bindControl(ifaceObj.Index, netip.AddrPortFrom(destination, 0)))
+	addControlToDialer(dialer, bindControl(ifaceObj.Index, netip.AddrPortFrom(destination, 0), destination))
 	return nil
 }
 
@@ -92,7 +106,7 @@ func bindIfaceToListenConfig(ifaceName string, lc *net.ListenConfig, _, address 
 		return "", err
 	}
 
-	addControlToListenConfig(lc, bindControl(ifaceObj.Index, rAddrPort))
+	addControlToListenConfig(lc, bindControl(ifaceObj.Index, rAddrPort, netip.Addr{}))
 	return address, nil
 }
 

@@ -12,9 +12,12 @@ import (
 
 type PacketConn struct {
 	net.Conn
-	rAddr   net.Addr
-	readMu  sync.Mutex
-	writeMu sync.Mutex
+	rAddr        net.Addr
+	readMu       sync.Mutex
+	writeMu      sync.Mutex
+	writeHeader  [2]byte
+	writeBuffers [2][]byte
+	writeBufs    net.Buffers
 }
 
 func (c *PacketConn) WriteTo(b []byte, addr net.Addr) (int, error) {
@@ -24,17 +27,23 @@ func (c *PacketConn) WriteTo(b []byte, addr net.Addr) (int, error) {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 
-	var header [2]byte
-	binary.BigEndian.PutUint16(header[:], uint16(len(b)))
-	buffers := net.Buffers{header[:], b}
-	written, err := buffers.WriteTo(c.Conn)
-	payloadWritten := written - int64(len(header))
+	binary.BigEndian.PutUint16(c.writeHeader[:], uint16(len(b)))
+	c.writeBuffers[0] = c.writeHeader[:]
+	c.writeBuffers[1] = b
+	c.writeBufs = c.writeBuffers[:]
+	defer func() {
+		c.writeBuffers[0] = nil
+		c.writeBuffers[1] = nil
+		c.writeBufs = nil
+	}()
+	written, err := c.writeBufs.WriteTo(c.Conn)
+	payloadWritten := written - int64(len(c.writeHeader))
 	if payloadWritten < 0 {
 		payloadWritten = 0
 	} else if payloadWritten > int64(len(b)) {
 		payloadWritten = int64(len(b))
 	}
-	if err == nil && written != int64(len(header)+len(b)) {
+	if err == nil && written != int64(len(c.writeHeader)+len(b)) {
 		err = io.ErrShortWrite
 	}
 	if err != nil {

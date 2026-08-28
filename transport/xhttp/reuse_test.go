@@ -197,3 +197,56 @@ func TestManagerRotateOnConnReuseLimit(t *testing.T) {
 	transport3.Close()
 	manager.Close()
 }
+
+func TestStaleReuseCloseDoesNotCloseLiveCheckout(t *testing.T) {
+	var created atomic.Int64
+	manager, err := NewReuseManager(&ReuseConfig{
+		MaxConcurrency:   "1",
+		MaxConnections:   "1",
+		CMaxReuseTimes:   "1",
+		HMaxRequestTimes: "100",
+	}, makeTestTransportFactory(&created))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	transport1 := manager.GetTransport().(*ReuseTransport)
+	if err := transport1.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	transport2 := manager.GetTransport().(*ReuseTransport)
+	if err := transport1.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if transport2.entry.isClosed() {
+		t.Fatal("stale Close on a previous checkout closed the live wrapper")
+	}
+
+	if err := transport2.Close(); err != nil {
+		t.Fatal(err)
+	}
+	manager.Close()
+}
+
+func BenchmarkReuseGetTransport(b *testing.B) {
+	var created atomic.Int64
+	manager, err := NewReuseManager(&ReuseConfig{
+		MaxConcurrency:   "1",
+		MaxConnections:   "1",
+		HMaxRequestTimes: "100000000",
+	}, makeTestTransportFactory(&created))
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { _ = manager.Close() })
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		rt := manager.GetTransport().(*ReuseTransport)
+		if err := rt.Close(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

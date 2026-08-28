@@ -3,6 +3,7 @@ package deadline
 import (
 	"os"
 	"runtime"
+	"sync"
 
 	"github.com/Miku0139oao/aster-core/common/net/packet"
 
@@ -40,6 +41,21 @@ type singReadResult struct {
 	err         error
 }
 
+var singReadResultPool = sync.Pool{
+	New: func() any { return new(singReadResult) },
+}
+
+func acquireSingReadResult() *singReadResult {
+	return singReadResultPool.Get().(*singReadResult)
+}
+
+func releaseSingReadResult(result *singReadResult) {
+	result.buffer = nil
+	result.destination = M.Socksaddr{}
+	result.err = nil
+	singReadResultPool.Put(result)
+}
+
 type singPacketConn struct {
 	netPacketConn  *NetPacketConn
 	singPacketConn packet.SingPacketConn
@@ -59,6 +75,7 @@ FOR:
 					if result.buffer.IsEmpty() {
 						result.buffer.Release()
 					}
+					releaseSingReadResult(result)
 					c.netPacketConn.resultCh <- nil // finish cache read
 					return
 				}
@@ -92,7 +109,7 @@ FOR:
 func (c *singPacketConn) pipeReadPacket(pLen int) {
 	buffer := buf.NewSize(pLen)
 	destination, err := c.singPacketConn.ReadPacket(buffer)
-	result := &singReadResult{}
+	result := acquireSingReadResult()
 	result.buffer = buffer
 	result.destination = destination
 	result.err = err
@@ -123,6 +140,21 @@ type singPacketReadWaiter struct {
 
 type singWaitReadResult singReadResult
 
+var singWaitReadResultPool = sync.Pool{
+	New: func() any { return new(singWaitReadResult) },
+}
+
+func acquireSingWaitReadResult() *singWaitReadResult {
+	return singWaitReadResultPool.Get().(*singWaitReadResult)
+}
+
+func releaseSingWaitReadResult(result *singWaitReadResult) {
+	result.buffer = nil
+	result.destination = M.Socksaddr{}
+	result.err = nil
+	singWaitReadResultPool.Put(result)
+}
+
 func (c *singPacketReadWaiter) InitializeReadWaiter(options N.ReadWaitOptions) (needCopy bool) {
 	return c.packetReadWaiter.InitializeReadWaiter(options)
 }
@@ -137,6 +169,7 @@ FOR:
 					buffer = result.buffer
 					destination = result.destination
 					err = result.err
+					releaseSingWaitReadResult(result)
 					c.netPacketConn.resultCh <- nil // finish cache read
 					return
 				}
@@ -168,7 +201,7 @@ FOR:
 
 func (c *singPacketReadWaiter) pipeWaitReadPacket() {
 	buffer, destination, err := c.packetReadWaiter.WaitReadPacket()
-	result := &singWaitReadResult{}
+	result := acquireSingWaitReadResult()
 	result.buffer = buffer
 	result.destination = destination
 	result.err = err

@@ -35,35 +35,47 @@ const hostAliasHopLimit = 16
 func (h *Hosts) Search(domain string, isDomain bool) (*HostValue, bool) {
 	if value := h.DomainTrie.Search(domain); value != nil {
 		hostValue := value.Data()
-		seen := map[string]struct{}{domain: {}}
+		if !hostValue.IsDomain {
+			return &hostValue, !isDomain
+		}
+		if isDomain {
+			return &hostValue, true
+		}
+		var seen [hostAliasHopLimit]string
+		seen[0] = domain
+		seenN := 1
 		for hops := 0; hops < hostAliasHopLimit; hops++ {
-			if isDomain && hostValue.IsDomain {
-				return &hostValue, true
-			}
 			if !hostValue.IsDomain || hostValue.Domain == "" {
 				break
 			}
-			if _, dup := seen[hostValue.Domain]; dup {
+			dup := false
+			for i := 0; i < seenN; i++ {
+				if seen[i] == hostValue.Domain {
+					dup = true
+					break
+				}
+			}
+			if dup {
 				break
 			}
-			seen[hostValue.Domain] = struct{}{}
+			if seenN < len(seen) {
+				seen[seenN] = hostValue.Domain
+				seenN++
+			}
 			node := h.DomainTrie.Search(hostValue.Domain)
 			if node == nil {
 				break
 			}
 			hostValue = node.Data()
 		}
-		if isDomain == hostValue.IsDomain {
-			return &hostValue, true
-		}
-
-		return &hostValue, false
+		return &hostValue, isDomain == hostValue.IsDomain
 	}
 
 	if !isDomain && !DisableSystemHosts && UseSystemHosts {
-		addr, _ := hosts.LookupStaticHost(domain)
-		if hostValue, err := NewHostValue(addr); err == nil {
-			return &hostValue, true
+		if ips := hosts.LookupStaticHostIPs(domain); len(ips) > 0 {
+			if hostValue, err := NewHostValueByIPs(ips); err == nil {
+				return &hostValue, true
+			}
 		}
 	}
 	return nil, false

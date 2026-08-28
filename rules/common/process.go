@@ -5,16 +5,15 @@ import (
 
 	"github.com/Miku0139oao/aster-core/component/wildcard"
 	C "github.com/Miku0139oao/aster-core/constant"
-
-	"github.com/dlclark/regexp2"
 )
 
 type Process struct {
 	Base
-	pattern  string
-	adapter  string
-	ruleType C.RuleType
-	regexp   *regexp2.Regexp
+	pattern      string
+	lowerPattern string
+	adapter      string
+	ruleType     C.RuleType
+	regexp       *compiledRegex
 }
 
 func (ps *Process) Payload() string {
@@ -43,12 +42,11 @@ func (ps *Process) Match(metadata *C.Metadata, helper C.RuleMatchHelper) (bool, 
 
 	switch ps.ruleType {
 	case C.ProcessNameRegex, C.ProcessPathRegex:
-		match, _ := ps.regexp.MatchString(target)
-		return match, ps.adapter
+		return ps.regexp.Match(target), ps.adapter
 	case C.ProcessNameWildcard, C.ProcessPathWildcard:
-		return wildcard.Match(strings.ToLower(ps.pattern), strings.ToLower(target)), ps.adapter
+		return wildcard.Match(ps.lowerPattern, asciiLowerOnce(target)), ps.adapter
 	default:
-		return strings.EqualFold(target, ps.pattern), ps.adapter
+		return target == ps.pattern || strings.EqualFold(target, ps.pattern), ps.adapter
 	}
 }
 
@@ -61,11 +59,13 @@ func NewProcess(pattern string, adapter string, ruleType C.RuleType) (*Process, 
 	}
 	switch ps.ruleType {
 	case C.ProcessNameRegex, C.ProcessPathRegex:
-		r, err := regexp2.Compile(pattern, regexp2.IgnoreCase)
+		r, err := compileIgnoreCaseRegex(pattern)
 		if err != nil {
 			return nil, err
 		}
 		ps.regexp = r
+	case C.ProcessNameWildcard, C.ProcessPathWildcard:
+		ps.lowerPattern = strings.ToLower(pattern)
 	default:
 	}
 	return ps, nil

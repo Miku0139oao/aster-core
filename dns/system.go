@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Miku0139oao/aster-core/component/resolver"
@@ -27,6 +28,8 @@ type systemClient struct {
 	dnsClients map[string]*systemDnsClient
 	lastFlush  time.Time
 	defaultNS  []dnsClient
+	live       atomic.Pointer[[]dnsClient]
+	flushAt    atomic.Value // time.Time with monotonic reading from lastFlush
 }
 
 func (c *systemClient) ExchangeContext(ctx context.Context, m *D.Msg) (msg *D.Msg, err error) {

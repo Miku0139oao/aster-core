@@ -4,6 +4,7 @@ import (
 	"io"
 	"net"
 	"testing"
+	"time"
 
 	N "github.com/Miku0139oao/aster-core/common/net"
 	C "github.com/Miku0139oao/aster-core/constant"
@@ -99,4 +100,142 @@ func TestTCPTrackerSkipsObserverWithoutPrincipal(t *testing.T) {
 	observer.mu.Unlock()
 	upload, _ := manager.Total()
 	require.EqualValues(t, principalReportThreshold*2, upload)
+}
+
+// discardNetConn is a non-blocking Conn so tracker Read/Write benches measure
+// statistic overhead rather than pipe or kernel I/O.
+type discardNetConn struct{}
+
+func (discardNetConn) Read([]byte) (int, error)         { return 0, io.EOF }
+func (discardNetConn) Write(p []byte) (int, error)      { return len(p), nil }
+func (discardNetConn) Close() error                     { return nil }
+func (discardNetConn) LocalAddr() net.Addr              { return nil }
+func (discardNetConn) RemoteAddr() net.Addr             { return nil }
+func (discardNetConn) SetDeadline(time.Time) error      { return nil }
+func (discardNetConn) SetReadDeadline(time.Time) error  { return nil }
+func (discardNetConn) SetWriteDeadline(time.Time) error { return nil }
+
+func newDiscardTrackerConn() C.Conn {
+	return &trackerTestConn{ExtendedConn: N.NewExtendedConn(discardNetConn{})}
+}
+
+func TestTCPTrackerUnwrapWriterCountsAndReuses(t *testing.T) {
+	manager := &Manager{}
+	tracker := NewTCPTracker(newDiscardTrackerConn(), manager, &C.Metadata{NetWork: C.TCP, Type: C.TUN}, nil, 0, 0, true)
+	t.Cleanup(func() { _ = tracker.Close() })
+
+	writer, counts := tracker.UnwrapWriter()
+	require.NotNil(t, writer)
+	require.Len(t, counts, 1)
+
+	n, err := writer.Write([]byte("hello"))
+	require.NoError(t, err)
+	require.Equal(t, 5, n)
+	counts[0](int64(n))
+
+	require.EqualValues(t, 5, tracker.UploadTotal.Load())
+	upload, _ := manager.Total()
+	require.EqualValues(t, 5, upload)
+
+	writer2, counts2 := tracker.UnwrapWriter()
+	require.Equal(t, writer, writer2)
+	require.Len(t, counts2, 1)
+	require.Equal(t, len(counts), len(counts2))
+
+	allocs := testing.AllocsPerRun(1000, func() {
+		_, _ = tracker.UnwrapWriter()
+		_, _ = tracker.UnwrapReader()
+	})
+	require.Zero(t, allocs)
+}
+
+func TestTCPTrackerSkipsZeroBytePush(t *testing.T) {
+	manager := &Manager{}
+	tracker := NewTCPTracker(newDiscardTrackerConn(), manager, &C.Metadata{NetWork: C.TCP, Type: C.TUN}, nil, 0, 0, true)
+	t.Cleanup(func() { _ = tracker.Close() })
+
+	n, err := tracker.Read(make([]byte, 16))
+	require.Equal(t, 0, n)
+	require.ErrorIs(t, err, io.EOF)
+	require.Zero(t, tracker.DownloadTotal.Load())
+	_, download := manager.Total()
+	require.Zero(t, download)
+}
+
+type staticChainConn struct {
+	C.Conn
+	chain C.Chain
+}
+
+func (c *staticChainConn) Chains() C.Chain { return c.chain }
+
+func BenchmarkTCPTrackerLifecycle(b *testing.B) {
+	manager := &Manager{}
+	conn := &staticChainConn{Conn: newDiscardTrackerConn(), chain: C.Chain{"DIRECT"}}
+	metadata := &C.Metadata{NetWork: C.TCP, Type: C.TUN, Host: "example.com", DstPort: 443}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		tracker := NewTCPTracker(conn, manager, metadata, nil, 0, 0, true)
+		if err := tracker.Close(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkTCPTrackerWrite(b *testing.B) {
+	manager := &Manager{}
+	tracker := NewTCPTracker(newDiscardTrackerConn(), manager, &C.Metadata{NetWork: C.TCP, Type: C.TUN}, nil, 0, 0, true)
+	b.Cleanup(func() { _ = tracker.Close() })
+	payload := make([]byte, 1500)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := tracker.Write(payload); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkTCPTrackerWriteAuthenticated(b *testing.B) {
+	manager := &Manager{}
+	manager.SetTrafficObserver(&trafficObserverTest{})
+	tracker := NewTCPTracker(newDiscardTrackerConn(), manager, &C.Metadata{InName: "vless-in", InUser: "user-id"}, nil, 0, 0, true)
+	b.Cleanup(func() { _ = tracker.Close() })
+	payload := make([]byte, 1500)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := tracker.Write(payload); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+var (
+	sinkReader io.Reader
+	sinkWriter io.Writer
+	sinkCounts []N.CountFunc
+)
+
+func BenchmarkTCPTrackerUnwrapWriter(b *testing.B) {
+	manager := &Manager{}
+	tracker := NewTCPTracker(newDiscardTrackerConn(), manager, &C.Metadata{NetWork: C.TCP, Type: C.TUN}, nil, 0, 0, true)
+	b.Cleanup(func() { _ = tracker.Close() })
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		sinkWriter, sinkCounts = tracker.UnwrapWriter()
+	}
+}
+
+func BenchmarkTCPTrackerUnwrapReader(b *testing.B) {
+	manager := &Manager{}
+	tracker := NewTCPTracker(newDiscardTrackerConn(), manager, &C.Metadata{NetWork: C.TCP, Type: C.TUN}, nil, 0, 0, true)
+	b.Cleanup(func() { _ = tracker.Close() })
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		sinkReader, sinkCounts = tracker.UnwrapReader()
+	}
 }

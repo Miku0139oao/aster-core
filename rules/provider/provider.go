@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"runtime"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -197,30 +196,80 @@ var (
 
 func rulesParse(buf []byte, strategy ruleStrategy, format P.RuleFormat) (ruleStrategy, error) {
 	strategy.Reset()
-	if format == P.MrsRule {
+	switch format {
+	case P.MrsRule:
 		return rulesMrsParse(buf, strategy)
+	case P.YamlRule:
+		return rulesParseYAML(buf, strategy)
+	case P.TextRule:
+		return rulesParseText(buf, strategy)
+	default:
+		return nil, ErrInvalidFormat
 	}
+}
 
-	schema := &RulePayload{}
-	if format == P.YamlRule && !bytes.ContainsRune(buf, '\n') {
-		if err := yaml.Unmarshal(bytes.TrimSpace(buf), schema); err == nil {
-			rules := schema.Rules
-			if len(schema.Payload) > 0 {
-				rules = schema.Payload
-			}
-			if len(rules) > 0 {
-				for _, rule := range rules {
-					if rule != "" {
-						strategy.Insert(rule)
-					}
-				}
-				strategy.FinishInsert()
-				return strategy, nil
-			}
+func insertParsedRules(strategy ruleStrategy, rules []string) {
+	for _, rule := range rules {
+		if rule != "" {
+			strategy.Insert(rule)
 		}
+	}
+	strategy.FinishInsert()
+}
+
+func rulesParseYAML(buf []byte, strategy ruleStrategy) (ruleStrategy, error) {
+	schema := &RulePayload{}
+	if err := yaml.Unmarshal(bytes.TrimSpace(buf), schema); err == nil {
+		// Files with both payload and rules used to be scraped line-by-line
+		// and could ingest both sections. Keep that fallback path.
+		if len(schema.Payload) > 0 && len(schema.Rules) > 0 {
+			return rulesParseYAMLLines(buf, strategy)
+		}
+		rules := schema.Payload
+		if len(rules) == 0 {
+			rules = schema.Rules
+		}
+		if len(rules) == 0 {
+			if bytes.IndexByte(buf, '\n') < 0 {
+				return nil, ErrNoPayload
+			}
+			// Empty lists used to succeed for a payload: head with no body.
+			return rulesParseYAMLLines(buf, strategy)
+		}
+		insertParsedRules(strategy, rules)
+		return strategy, nil
+	}
+	if bytes.IndexByte(buf, '\n') < 0 {
 		return nil, ErrNoPayload
 	}
+	return rulesParseYAMLLines(buf, strategy)
+}
 
+func rulesParseText(buf []byte, strategy ruleStrategy) (ruleStrategy, error) {
+	s := 0
+	for s < len(buf) {
+		line := buf[s:]
+		if i := bytes.IndexByte(line, '\n'); i >= 0 {
+			line = line[:i]
+			s += i + 1
+		} else {
+			s = len(buf)
+		}
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 || line[0] == '#' {
+			continue
+		}
+		if len(line) >= 2 && line[0] == '/' && line[1] == '/' {
+			continue
+		}
+		strategy.Insert(string(line))
+	}
+	strategy.FinishInsert()
+	return strategy, nil
+}
+
+func rulesParseYAMLLines(buf []byte, strategy ruleStrategy) (ruleStrategy, error) {
+	schema := &RulePayload{}
 	firstLineBuffer := pool.GetBuffer()
 	defer pool.PutBuffer(firstLineBuffer)
 	firstLineLength := 0
@@ -234,76 +283,56 @@ func rulesParse(buf []byte, strategy ruleStrategy, format P.RuleFormat) (ruleStr
 			line = buf[s : i+1]
 			s = i + 1
 		} else {
-			s = len(buf)                                      // stop loop in next step
-			if firstLineLength == 0 && format == P.YamlRule { // no head or only one line body
+			s = len(buf)              // stop loop in next step
+			if firstLineLength == 0 { // no head or only one line body
 				return nil, ErrNoPayload
 			}
 		}
-		var str string
-		switch format {
-		case P.TextRule:
-			str = string(line)
-			str = strings.TrimSpace(str)
-			if len(str) == 0 {
-				continue
-			}
-			if str[0] == '#' { // comment
-				continue
-			}
-			if strings.HasPrefix(str, "//") { // comment in Premium core
-				continue
-			}
-		case P.YamlRule:
-			trimLine := bytes.TrimSpace(line)
-			if len(trimLine) == 0 {
-				continue
-			}
-			if trimLine[0] == '#' { // comment
-				continue
-			}
-			firstLineBuffer.Write(line)
-			if firstLineLength == 0 { // find payload head
-				firstLineLength = firstLineBuffer.Len()
-				firstLineBuffer.WriteString("  - ''") // a test line
+		trimLine := bytes.TrimSpace(line)
+		if len(trimLine) == 0 {
+			continue
+		}
+		if trimLine[0] == '#' { // comment
+			continue
+		}
+		firstLineBuffer.Write(line)
+		if firstLineLength == 0 { // find payload head
+			firstLineLength = firstLineBuffer.Len()
+			firstLineBuffer.WriteString("  - ''") // a test line
 
-				err := yaml.Unmarshal(firstLineBuffer.Bytes(), schema)
-				firstLineBuffer.Truncate(firstLineLength)
-				if err == nil && (len(schema.Rules) > 0 || len(schema.Payload) > 0) { // found
-					continue
-				}
-
-				// not found or err!=nil
-				firstLineBuffer.Truncate(0)
-				firstLineLength = 0
-				continue
-			}
-
-			// parse payload body
 			err := yaml.Unmarshal(firstLineBuffer.Bytes(), schema)
 			firstLineBuffer.Truncate(firstLineLength)
-			if err != nil {
+			if err == nil && (len(schema.Rules) > 0 || len(schema.Payload) > 0) { // found
 				continue
 			}
 
-			if len(schema.Rules) > 0 {
-				str = schema.Rules[0]
-			}
-			if len(schema.Payload) > 0 {
-				str = schema.Payload[0]
-			}
-		default:
-			return nil, ErrInvalidFormat
-		}
-
-		if str == "" {
+			// not found or err!=nil
+			firstLineBuffer.Truncate(0)
+			firstLineLength = 0
 			continue
 		}
 
+		// parse payload body
+		err := yaml.Unmarshal(firstLineBuffer.Bytes(), schema)
+		firstLineBuffer.Truncate(firstLineLength)
+		if err != nil {
+			continue
+		}
+
+		var str string
+		if len(schema.Rules) > 0 {
+			str = schema.Rules[0]
+		}
+		if len(schema.Payload) > 0 {
+			str = schema.Payload[0]
+		}
+		if str == "" {
+			continue
+		}
 		strategy.Insert(str)
 	}
 
 	strategy.FinishInsert()
-
 	return strategy, nil
 }
 

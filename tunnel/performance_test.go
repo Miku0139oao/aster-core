@@ -376,6 +376,42 @@ func BenchmarkUDPFlowSteadyState(b *testing.B) {
 	}
 }
 
+type udpToLocalWriteBack struct{}
+
+func (udpToLocalWriteBack) WriteBack(b []byte, addr net.Addr) (int, error) {
+	if addr == nil {
+		return 0, io.ErrClosedPipe
+	}
+	return len(b), nil
+}
+
+type udpToLocalPacketConn struct {
+	stubUDPPacketConn
+	payload []byte
+	from    net.Addr
+	remain  int64
+}
+
+func (c *udpToLocalPacketConn) WaitReadFrom() ([]byte, func(), net.Addr, error) {
+	if c.remain <= 0 {
+		return nil, nil, nil, net.ErrClosed
+	}
+	c.remain--
+	return c.payload, nil, c.from, nil
+}
+
+func BenchmarkUDPToLocalWriteBack(b *testing.B) {
+	sender := newPacketSender().(*packetSender)
+	from := net.UDPAddrFromAddrPort(netip.MustParseAddrPort("198.51.100.1:443"))
+	payload := make([]byte, 1200)
+	conn := &udpToLocalPacketConn{payload: payload, from: from, remain: int64(b.N)}
+
+	b.ReportAllocs()
+	b.SetBytes(int64(len(payload)))
+	b.ResetTimer()
+	handleUDPToLocal(udpToLocalWriteBack{}, conn, sender, C.UDPNatKey{}, from.AddrPort())
+}
+
 func BenchmarkTCPRelayThroughput(b *testing.B) {
 	sourceWriter, sourceRelay := net.Pipe()
 	destinationRelay, destinationReader := net.Pipe()
