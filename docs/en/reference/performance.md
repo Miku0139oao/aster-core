@@ -15,6 +15,9 @@ Aster does not magically make your network faster. It removes a lot of repeated 
 > [!IMPORTANT]
 > **The closest “actually moving data” number is the TCP improvement of about 2%.** 5.4× and 101× are tiny core steps that run many times. They do not mean download speed becomes 5.4× or 101×.
 
+> [!NOTE]
+> The latest 2026-08-28 results compare **Aster before and after this optimization wave**. They are not Aster-versus-Mihomo numbers. They prove that core CPU and allocation costs fell, but they do not turn the OpenWrt TCP result below into a larger network-speed claim.
+
 ## What actually changed?
 
 ### 1. Stop allocating new memory for every packet
@@ -42,6 +45,34 @@ If debug logging is off and no dashboard is listening, Aster returns before form
 Upload, download, and connection counts use cheap incremental stats. Each traffic update only changes the numbers. It no longer rescans every active connection to get a total.
 
 ## Full test data
+
+## 2026-08-28 core hot-path optimization A/B
+
+This run compares Aster `90f0e4ee` (before this wave) with `72048c8a` (performance commit `9824ccdb` plus its lint fix). Each revision was built as separate Windows amd64 test binaries. Every sample used a fresh process, `GOMAXPROCS=1`, `-test.cpu=1`, `GOAMD64=v1`, Go 1.26.3, and a two-second run. Before and after were interleaved for seven rounds, alternating which revision ran first.
+
+The main matrix covered 11 packages and 24 identically named cases per revision, for 168 samples per revision. The table reports the seven-round median and full range. Every improvement listed below had `p=0.001` in benchstat's Mann–Whitney U test. The machine was Windows 11, a Ryzen 9 5900X (12C/24T), and 64 GB DDR4. Total CPU samples were 9.85–17.22% before the run and 7.19–15.71% after it. This is still a development-machine microbenchmark, not WAN throughput.
+
+| Aster core work | Before median (range) | After median (range) | Result | Allocations |
+| --- | ---: | ---: | ---: | ---: |
+| Existing Kernel DIRECT flow refresh | 221.0 ns (208.2–243.9) | 182.0 ns (179.8–185.9) | **1.21×**; time down 17.6% | 0 B／0 → 0 B／0 |
+| Existing NAT flow lookup | 64.26 ns (63.99–65.38) | 11.67 ns (11.58–12.09) | **5.51×**; time down 81.8% | 0 B／0 → 0 B／0 |
+| UDP WriteBack target update | 7.515 ns (7.491–7.802) | 3.918 ns (3.908–4.084) | **1.92×**; time down 47.9% | 0 B／0 → 0 B／0 |
+| `DomainSet.Has` (short) | 166.7 ns (165.0–170.5) | 56.32 ns (54.96–56.96) | **2.96×**; time down 66.2% | 0 B／0 → 0 B／0 |
+| Miss in 100k merged CIDRs | 84.63 ns (83.60–90.87) | 12.93 ns (12.57–15.84) | **6.55×**; time down 84.7% | 0 B／0 → 0 B／0 |
+| `GetUser` (10,000 users) | 56.67 ns (55.23–61.04) | 40.26 ns (37.26–47.98) | **1.41×**; time down 29.0% | 0 B／0 → 0 B／0 |
+| Upload traffic increment | 3.561 ns (3.533–3.652) | 1.742 ns (1.717–1.852) | **2.04×**; time down 51.1% | 0 B／0 → 0 B／0 |
+| TCP tracker lifecycle | 574.7 ns (561.3–592.6) | 257.6 ns (253.5–314.1) | **2.23×**; time down 55.2% | 528 B／8 → 352 B／3 |
+| Default-rule match | 22.97 ns (22.78–23.30) | 20.13 ns (20.03–20.53) | **1.14×**; time down 12.4% | 0 B／0 → 0 B／0 |
+| UDP `handlePacket` (same benchmark-only harness) | 299.8 ns (259.1–353.4) | 187.4 ns (170.5–230.0) | **1.60×**; time down 37.5% | 280 B／8 → 208 B／2 |
+
+### Controls and results that are not advertised as wins
+
+- The production UDP metadata-pool code is identical in both revisions. The ordinary test binaries initially showed 11.50 → 13.18 ns. With one minimal, identical harness on both revisions it measured 12.84 → 12.73 ns (`p=0.874`), confirming a test-layout artifact rather than a pool regression. The complete `handlePacket` path did remove 37.5% of the time and 75% of allocation count.
+- Inserting 100 or 1,000 UDP mappings did not change significantly (1,000: 348.2 → 331.1 µs, `p=0.097`); allocation stayed at 615,856 B／2,049 allocs.
+- The 1 KiB, 16 KiB, and 64 KiB AnyTLS `WriteDataFrame` cases all stayed zero-allocation. The 1 KiB and 16 KiB medians were flat; the 64 KiB change was not significant (`p=0.073`).
+- The shared 32 KiB relay median moved from 3.766 to 3.959 µs (+5.1%), and the tunnel TCP relay from 3.899 to 4.023 µs (+3.2%). Both before/after ranges overlap. This run does not claim a desktop TCP speedup and does not overwrite the OpenWrt result below. Determining whether 3–5% is a real regression requires a fixed-frequency CPU or another OpenWrt hardware rerun.
+
+This A/B validates Aster's internal hot paths in `9824ccdb`. It did not run a Mihomo binary or use an external endpoint, so it answers “did this Aster commit lower core overhead,” not “how much faster will a download be.”
 
 ## 2026-08-24 review-wave validation
 
@@ -235,7 +266,23 @@ Three-round ranges: UDP Mihomo 145.8–155.1 ns, Aster pool 11.69–12.21 ns; lo
 
 ## How to rerun
 
-From the repository root:
+Run the current Aster hot-path suite from the repository root:
+
+```sh
+GOAMD64=v1 GOMAXPROCS=1 go test \
+  ./component/kerneldirect ./component/nat ./component/trie ./component/cidr \
+  ./component/aster ./listener/sing ./tunnel ./tunnel/statistic \
+  -run '^$' \
+  -bench 'Benchmark(ObserveFlowRefresh|WriteBackProxyUpdate|TableExistingFlow|DomainSetHas|IpCidrSetMergedMiss|ManagerGetUser|ManagerPushUploaded|TCPTrackerLifecycle|MatchDefaultRule|PacketMetadata)$' \
+  -benchmem \
+  -benchtime=2s \
+  -count=7 \
+  -cpu=1
+```
+
+For a commit-to-commit A/B, build each revision with `go test -c`, launch a fresh test process for every sample, and alternate whether before or after runs first. Do not mix compilation into a still-rebuilding `go test` timing, and do not compare one-off samples from different machines.
+
+The older Aster-versus-Mihomo suite is:
 
 ```sh
 go test \

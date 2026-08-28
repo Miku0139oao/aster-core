@@ -15,6 +15,9 @@ Aster 沒有用魔法把你的網路變快，而是把代理核心內大量重�
 > [!IMPORTANT]
 > **最接近「實際搬資料」的是 TCP 的約 2% 改善。** 5.4 倍和 101 倍只代表核心裡某個很小、但會執行非常多次的步驟，不代表下載速度會直接變成 5.4 倍或 101 倍。
 
+> [!NOTE]
+> 2026-08-28 的最新結果是 **Aster 優化前後**比較，不是 Aster 對 Mihomo。它證明本輪核心 CPU／配置成本下降，但不會把下方 OpenWrt 的約 2% TCP 結果改寫成更大的網速宣稱。
+
 ## 到底改了什麼？
 
 ### 1. 不再每個封包都申請新記憶體
@@ -42,6 +45,34 @@ Padding 規則在載入設定時就先解析好。真正傳資料時，Aster 只
 上傳、下載與連線數改用便宜的增量統計。每次有流量時只更新數字，不再為了得到總數反覆掃描所有活動連線。
 
 ## 以下是完整測試數據
+
+## 2026-08-28 核心 hot-path 優化 A/B
+
+這輪比較 Aster `90f0e4ee`（本輪優化前）與 `72048c8a`（效能 commit `9824ccdb` 加 lint 修正）。兩版各自建立獨立 Windows amd64 test binary；每個樣本都是新程序，固定 `GOMAXPROCS=1`、`-test.cpu=1`、`GOAMD64=v1`、Go 1.26.3、每項 2 秒。Aster 前／後交錯並輪替先後順序，共 7 輪。
+
+主矩陣涵蓋 11 個 package、每版 24 個同名 case、每版共 168 筆樣本。表格採 7 輪中位數，括號內是完整範圍。下列改善的 `benchstat` Mann–Whitney U 檢定皆為 `p=0.001`。測試機是 Windows 11、Ryzen 9 5900X（12C／24T）、64 GB DDR4；測前總 CPU 取樣為 9.85–17.22%，測後為 7.19–15.71%。這仍是開發機 microbenchmark，不是 WAN 吞吐量。
+
+| Aster 核心工作 | 優化前中位數（範圍） | 優化後中位數（範圍） | 結果 | 配置量 |
+| --- | ---: | ---: | ---: | ---: |
+| Kernel DIRECT 既有 flow refresh | 221.0 ns（208.2–243.9） | 182.0 ns（179.8–185.9） | **1.21×**；時間少 17.6% | 0 B／0 → 0 B／0 |
+| NAT 既有 flow lookup | 64.26 ns（63.99–65.38） | 11.67 ns（11.58–12.09） | **5.51×**；時間少 81.8% | 0 B／0 → 0 B／0 |
+| UDP WriteBack target 更新 | 7.515 ns（7.491–7.802） | 3.918 ns（3.908–4.084） | **1.92×**；時間少 47.9% | 0 B／0 → 0 B／0 |
+| `DomainSet.Has`（short） | 166.7 ns（165.0–170.5） | 56.32 ns（54.96–56.96） | **2.96×**；時間少 66.2% | 0 B／0 → 0 B／0 |
+| 合併後 100k CIDR miss | 84.63 ns（83.60–90.87） | 12.93 ns（12.57–15.84） | **6.55×**；時間少 84.7% | 0 B／0 → 0 B／0 |
+| `GetUser`（10,000 users） | 56.67 ns（55.23–61.04） | 40.26 ns（37.26–47.98） | **1.41×**；時間少 29.0% | 0 B／0 → 0 B／0 |
+| 上傳流量累加 | 3.561 ns（3.533–3.652） | 1.742 ns（1.717–1.852） | **2.04×**；時間少 51.1% | 0 B／0 → 0 B／0 |
+| TCP tracker lifecycle | 574.7 ns（561.3–592.6） | 257.6 ns（253.5–314.1） | **2.23×**；時間少 55.2% | 528 B／8 → 352 B／3 |
+| 預設規則 match | 22.97 ns（22.78–23.30） | 20.13 ns（20.03–20.53） | **1.14×**；時間少 12.4% | 0 B／0 → 0 B／0 |
+| UDP `handlePacket`（同一 benchmark-only harness） | 299.8 ns（259.1–353.4） | 187.4 ns（170.5–230.0） | **1.60×**；時間少 37.5% | 280 B／8 → 208 B／2 |
+
+### 控制組與沒有宣稱的結果
+
+- UDP metadata pool 的生產程式在兩版完全相同。一般 test binary 一度顯示 11.50 → 13.18 ns；換成兩版完全相同的最小 harness 後是 12.84 → 12.73 ns（`p=0.874`），確認是 test layout 差異，不是 pool 回退。完整 `handlePacket` 則確實減少 37.5% 時間與 75% 配置次數。
+- 100／1,000 個 UDP mapping insert 沒有顯著改變（1,000 個：348.2 → 331.1 µs，`p=0.097`）；配置量維持 615,856 B／2,049 allocs。
+- AnyTLS `WriteDataFrame` 的 1 KiB／16 KiB／64 KiB case 都維持 0 配置；1 KiB 與 16 KiB 中位數持平，64 KiB 的變化未達顯著（`p=0.073`）。
+- 共用 32 KiB relay 中位數 3.766 → 3.959 µs（+5.1%），tunnel TCP relay 3.899 → 4.023 µs（+3.2%）；兩組前後範圍都重疊。這輪不宣稱桌面 TCP 加速，也不拿這組數字改寫下方 OpenWrt 實機結果。若要判定 3–5% 是否為真實回退，必須在固定 CPU／OpenWrt 實機再跑。
+
+這組 A/B 的用途是驗證 `9824ccdb` 的 Aster 內部 hot path。它沒有使用 Mihomo binary，也沒有測外部節點；因此只能回答「這個 Aster commit 是否降低核心成本」，不能回答「下載速度會增加多少」。
 
 ## 2026-08-24 review wave 本機驗證
 
@@ -235,7 +266,23 @@ Windows 完整核心、相同最小設定、啟動後 15 秒的五輪中位數�
 
 ## 如何重跑
 
-從 repository 根目錄執行：
+本輪 Aster hot-path suite 可從 repository 根目錄執行：
+
+```sh
+GOAMD64=v1 GOMAXPROCS=1 go test \
+  ./component/kerneldirect ./component/nat ./component/trie ./component/cidr \
+  ./component/aster ./listener/sing ./tunnel ./tunnel/statistic \
+  -run '^$' \
+  -bench 'Benchmark(ObserveFlowRefresh|WriteBackProxyUpdate|TableExistingFlow|DomainSetHas|IpCidrSetMergedMiss|ManagerGetUser|ManagerPushUploaded|TCPTrackerLifecycle|MatchDefaultRule|PacketMetadata)$' \
+  -benchmem \
+  -benchtime=2s \
+  -count=7 \
+  -cpu=1
+```
+
+要做 commit 前後 A/B，請從兩個 commit 分別用 `go test -c` 建立 test binary，每個樣本以新程序啟動，並輪替 before／after 的先後順序。不要在同一個仍會重新編譯的 `go test` 程序中混入編譯時間，也不要只比較不同機器的單次結果。
+
+舊有 Aster／Mihomo suite：
 
 ```sh
 go test \
