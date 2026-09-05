@@ -18,6 +18,7 @@ const (
 	maxMRSReservedBytes = int64(1 << 20)
 	maxMRSRuleCount     = int64(1 << 24)
 	mrsHeaderSize       = 4 + 1 + 8 + 8
+	mrsDecodedClassCap  = 64 << 10
 )
 
 var errMRSDecodedTooLarge = errors.New("decoded MRS exceeds size limit")
@@ -48,8 +49,9 @@ var (
 	mrsDecoderOnce sync.Once
 	mrsDecoder     *zstd.Decoder
 	mrsDecoderErr  error
+	mrsParseMu     sync.Mutex // scratch Get/DecodeAll/FromMrs/recycle only; never Match/publish
 	mrsDecodedPool = sync.Pool{New: func() any {
-		b := make([]byte, 0, 64<<10)
+		b := make([]byte, 0, mrsDecodedClassCap)
 		return &b
 	}}
 )
@@ -70,14 +72,17 @@ func recycleMRSDecoded(slot *[]byte, decoded []byte) {
 	if slot == nil {
 		return
 	}
-	buf := decoded
-	if cap(buf) == 0 || cap(buf) > int(maxMRSDecodedBytes) {
-		buf = *slot
+	// decoded is DecodeAll's result and must not be pooled (it may have grown).
+	_ = decoded
+	// Reuse *slot when it is already the 64 KiB class; otherwise replace.
+	// sync.Pool is GC-evictable — this bounds peak overlap, not lifetime retain.
+	keep := *slot
+	if cap(keep) == 0 || cap(keep) > mrsDecodedClassCap {
+		keep = make([]byte, 0, mrsDecodedClassCap)
+	} else {
+		keep = keep[:0]
 	}
-	if cap(buf) == 0 || cap(buf) > int(maxMRSDecodedBytes) {
-		buf = make([]byte, 0, 64<<10)
-	}
-	*slot = buf[:0]
+	*slot = keep
 	mrsDecodedPool.Put(slot)
 }
 
@@ -90,6 +95,8 @@ func rulesMrsParse(buf []byte, strategy ruleStrategy) (ruleStrategy, error) {
 	if err != nil {
 		return nil, err
 	}
+	mrsParseMu.Lock()
+	defer mrsParseMu.Unlock()
 	slot := mrsDecodedPool.Get().(*[]byte)
 	decoded, err := decoder.DecodeAll(buf, (*slot)[:0])
 	if err != nil {

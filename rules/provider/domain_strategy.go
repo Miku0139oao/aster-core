@@ -62,6 +62,7 @@ func (d *domainStrategy) FromMrs(r io.Reader, count int) error {
 	}
 	d.count = count
 	d.domainSet = domainSet
+	d.domainTrie = nil
 	return nil
 }
 
