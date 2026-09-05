@@ -2,7 +2,6 @@ package kerneldirect
 
 import (
 	"io"
-	"math"
 	"math/rand"
 	"net/netip"
 	"runtime"
@@ -274,14 +273,16 @@ func TestControllerExpiresBeforeEvictingLiveAddress(t *testing.T) {
 	expired := netip.MustParseAddr("203.0.113.10")
 	live := netip.MustParseAddr("203.0.113.11")
 	c.mu.Lock()
-	c.records[expired] = &addressRecords{
+	expiredNode := &addressRecords{
 		hasPrimary: true,
 		host:       "expired.example",
 		rec:        record{direct: true, expires: time.Now().Add(-time.Second)},
-		lastSeen:   1,
+		addr:       expired,
 	}
+	c.records[expired] = expiredNode
+	c.lruHot = expiredNode
+	c.lruCold = expiredNode
 	c.recordsLen = 1
-	c.sequence = 1
 	c.mu.Unlock()
 
 	ObserveDNS("live.example", []DNSAnswer{{Addr: live, TTL: time.Minute}})
@@ -390,14 +391,15 @@ func TestControllerExpiresDomainRecordsBeforeRejectingNewHost(t *testing.T) {
 
 	addr := netip.MustParseAddr("203.0.113.31")
 	c.mu.Lock()
-	seeded := &addressRecords{lastSeen: 4}
+	seeded := &addressRecords{addr: addr}
 	seeded.upsert("one.example", record{direct: true, expires: time.Now().Add(-time.Second)})
 	seeded.upsert("two.example", record{direct: true, expires: time.Now().Add(time.Minute)})
 	seeded.upsert("three.example", record{direct: true, expires: time.Now().Add(time.Minute)})
 	seeded.upsert("four.example", record{direct: true, expires: time.Now().Add(time.Minute)})
 	c.records[addr] = seeded
+	c.lruHot = seeded
+	c.lruCold = seeded
 	c.recordsLen = 4
-	c.sequence = 4
 	c.mu.Unlock()
 
 	ObserveDNS("five.example", []DNSAnswer{{Addr: addr, TTL: time.Minute}})
@@ -444,7 +446,7 @@ func TestControllerEvictsOldestMultiHostAddress(t *testing.T) {
 	}
 }
 
-func TestControllerSequenceWrapKeepsOldestEviction(t *testing.T) {
+func TestControllerLRUEndLinkAndRemoval(t *testing.T) {
 	var current DecisionSets
 	c := Register(func(string, netip.Addr) bool { return true }, func(sets DecisionSets) {
 		current = sets
@@ -454,19 +456,45 @@ func TestControllerSequenceWrapKeepsOldestEviction(t *testing.T) {
 	older := netip.MustParseAddr("203.0.113.50")
 	newer := netip.MustParseAddr("203.0.113.51")
 	incoming := netip.MustParseAddr("203.0.113.52")
+	expires := time.Now().Add(time.Minute)
 	c.mu.Lock()
-	c.records[older] = &addressRecords{hasPrimary: true, host: "older.example", rec: record{direct: true, expires: time.Now().Add(time.Minute)}, lastSeen: 1}
-	c.records[newer] = &addressRecords{hasPrimary: true, host: "newer.example", rec: record{direct: true, expires: time.Now().Add(time.Minute)}, lastSeen: math.MaxUint64}
+	cold := &addressRecords{hasPrimary: true, host: "older.example", rec: record{direct: true, expires: expires}, addr: older}
+	hot := &addressRecords{hasPrimary: true, host: "newer.example", rec: record{direct: true, expires: expires}, addr: newer}
+	cold.newer = hot
+	hot.older = cold
+	c.records[older] = cold
+	c.records[newer] = hot
+	c.lruCold = cold
+	c.lruHot = hot
 	c.recordsLen = 2
-	c.sequence = math.MaxUint64
 	c.mu.Unlock()
 
 	ObserveDNS("incoming.example", []DNSAnswer{{Addr: incoming, TTL: time.Minute}})
 	if current.Direct.Contains(older) {
-		t.Fatal("sequence wrap must not evict the newer address before the older one")
+		t.Fatal("cold LRU address must be evicted")
 	}
 	if !current.Direct.Contains(newer) || !current.Direct.Contains(incoming) {
-		t.Fatal("after wrap, the newest and previously-newest addresses must remain")
+		t.Fatal("hot address and incoming address must remain")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.lruCold == nil || c.lruHot == nil {
+		t.Fatal("LRU ends must stay linked after eviction")
+	}
+	if c.lruCold.addr != newer {
+		t.Fatalf("lruCold = %s, want previously-hot %s", c.lruCold.addr, newer)
+	}
+	if c.lruHot.addr != incoming {
+		t.Fatalf("lruHot = %s, want incoming %s", c.lruHot.addr, incoming)
+	}
+	if c.lruHot.newer != nil || c.lruCold.older != nil {
+		t.Fatal("LRU ends must have nil outward links")
+	}
+	if c.lruCold.newer != c.lruHot || c.lruHot.older != c.lruCold {
+		t.Fatal("remaining nodes must be linked cold <-> hot")
+	}
+	if _, still := c.records[older]; still {
+		t.Fatal("evicted address remained in the map")
 	}
 }
 
@@ -1224,8 +1252,7 @@ func TestControllerRefreshDoesNotReclassifyUnexpired(t *testing.T) {
 
 	c.mu.Lock()
 	rec, ok := c.records[addr].lookup("refresh.example")
-	lastSeen := c.records[addr].lastSeen
-	seq := c.sequence
+	hot := c.lruHot
 	c.mu.Unlock()
 	if !ok {
 		t.Fatal("refresh dropped the cached host")
@@ -1236,8 +1263,8 @@ func TestControllerRefreshDoesNotReclassifyUnexpired(t *testing.T) {
 	if !rec.expires.After(time.Now()) {
 		t.Fatal("refresh did not keep a live expiry")
 	}
-	if lastSeen != seq {
-		t.Fatalf("refresh did not touch LRU: lastSeen=%d sequence=%d", lastSeen, seq)
+	if hot == nil || hot.addr != addr {
+		t.Fatal("refresh did not move the address to the LRU hot end")
 	}
 }
 
@@ -1473,6 +1500,133 @@ func assertHostInvariants(t *testing.T, c *controller) {
 	}
 	if uint64(hosts) != c.recordsLen {
 		t.Fatalf("recordsLen=%d actual hosts=%d", c.recordsLen, hosts)
+	}
+	assertLRULocked(t, c)
+}
+
+func assertLRULocked(t *testing.T, c *controller) {
+	t.Helper()
+	n := len(c.records)
+	if n == 0 {
+		if c.lruHot != nil || c.lruCold != nil {
+			t.Fatalf("empty cache has LRU ends hot=%v cold=%v", c.lruHot, c.lruCold)
+		}
+		return
+	}
+	if c.lruHot == nil || c.lruCold == nil {
+		t.Fatal("non-empty cache missing LRU ends")
+	}
+	if c.lruHot.newer != nil || c.lruCold.older != nil {
+		t.Fatal("LRU ends must have nil outward links")
+	}
+	if n == 1 && c.lruHot != c.lruCold {
+		t.Fatal("single-address LRU must share hot and cold")
+	}
+	seen := make(map[netip.Addr]int, n)
+	for node := c.lruCold; node != nil; node = node.newer {
+		seen[node.addr]++
+		if seen[node.addr] > 1 {
+			t.Fatalf("LRU cycle or duplicate at %s", node.addr)
+		}
+		if c.records[node.addr] != node {
+			t.Fatalf("LRU node %s missing from map", node.addr)
+		}
+		if node.newer != nil && node.newer.older != node {
+			t.Fatalf("broken newer/older link at %s", node.addr)
+		}
+		if len(seen) > n {
+			t.Fatal("LRU walk exceeded map cardinality")
+		}
+	}
+	if len(seen) != n {
+		t.Fatalf("LRU len=%d map len=%d", len(seen), n)
+	}
+	reverse := 0
+	for node := c.lruHot; node != nil; node = node.older {
+		reverse++
+		if reverse > n {
+			t.Fatal("reverse LRU walk exceeded map cardinality")
+		}
+	}
+	if reverse != n {
+		t.Fatalf("reverse LRU len=%d map len=%d", reverse, n)
+	}
+	for addr, address := range c.records {
+		if address.addr != addr {
+			t.Fatalf("node.addr=%s map key=%s", address.addr, addr)
+		}
+		if _, ok := seen[addr]; !ok {
+			t.Fatalf("map address %s missing from LRU", addr)
+		}
+	}
+}
+
+func TestControllerExpireUnlinksEmptyAddress(t *testing.T) {
+	c := Register(func(string, netip.Addr) bool { return true }, func(DecisionSets) {}, ControllerOptions{MaxEntries: 4}).(*controller)
+	defer c.Close()
+
+	a := netip.MustParseAddr("203.0.113.10")
+	b := netip.MustParseAddr("203.0.113.11")
+	ObserveDNS("a.example", []DNSAnswer{{Addr: a, TTL: time.Minute}})
+	ObserveDNS("b.example", []DNSAnswer{{Addr: b, TTL: time.Minute}})
+
+	c.mu.Lock()
+	if rec := c.records[a]; rec != nil && rec.hasPrimary {
+		rec.rec.expires = time.Now().Add(-time.Second)
+	}
+	c.nextExpiry = time.Time{}
+	c.mu.Unlock()
+
+	ObserveDNS("b.example", []DNSAnswer{{Addr: b, TTL: time.Minute}})
+	status := c.status()
+	if status.LearnedAddresses != 1 || status.Evictions != 0 {
+		t.Fatalf("expired address should unlink without eviction: %+v", status)
+	}
+	assertHostInvariants(t, c)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, still := c.records[a]; still {
+		t.Fatal("expired address remained in the map")
+	}
+	if c.lruHot == nil || c.lruHot.addr != b || c.lruHot != c.lruCold {
+		t.Fatal("remaining address must be both LRU ends")
+	}
+}
+
+func TestControllerDirectCollapseUnlinksEmptyAddress(t *testing.T) {
+	var current DecisionSets
+	c := Register(func(host string, _ netip.Addr) bool {
+		return host != "proxy.example"
+	}, func(sets DecisionSets) { current = sets }, ControllerOptions{MaxEntries: 1}).(*controller)
+	defer c.Close()
+
+	addr := netip.MustParseAddr("203.0.113.30")
+	for _, host := range []string{"one.example", "two.example", "three.example", "four.example"} {
+		ObserveDNS(host, []DNSAnswer{{Addr: addr, TTL: time.Minute}})
+	}
+	ObserveDNS("proxy.example", []DNSAnswer{{Addr: addr, TTL: time.Minute}})
+	if current.Direct.Contains(addr) || !current.Proxy.Contains(addr) {
+		t.Fatal("collapse must publish PROXY")
+	}
+	status := c.status()
+	if status.Evictions != 0 {
+		t.Fatalf("DIRECT collapse must not count as LRU eviction: %+v", status)
+	}
+	assertHostInvariants(t, c)
+}
+
+func TestControllerFlushNilsLRUEnds(t *testing.T) {
+	c := Register(func(string, netip.Addr) bool { return true }, func(DecisionSets) {}, ControllerOptions{MaxEntries: 8}).(*controller)
+	defer c.Close()
+
+	ObserveDNS("a.example", []DNSAnswer{{Addr: netip.MustParseAddr("203.0.113.1"), TTL: time.Minute}})
+	ObserveDNS("b.example", []DNSAnswer{{Addr: netip.MustParseAddr("203.0.113.2"), TTL: time.Minute}})
+	Flush()
+	assertHostInvariants(t, c)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.records) != 0 || c.recordsLen != 0 || c.lruHot != nil || c.lruCold != nil {
+		t.Fatalf("Flush left cache state map=%d recordsLen=%d hot=%v cold=%v", len(c.records), c.recordsLen, c.lruHot != nil, c.lruCold != nil)
 	}
 }
 

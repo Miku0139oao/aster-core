@@ -3,7 +3,6 @@ package kerneldirect
 import (
 	"io"
 	"net/netip"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -51,7 +50,9 @@ type addressRecords struct {
 	host       string
 	rec        record
 	extra      map[string]record // nil unless a second host is stored
-	lastSeen   uint64
+	addr       netip.Addr
+	older      *addressRecords // toward lruCold
+	newer      *addressRecords // toward lruHot
 }
 
 func (a *addressRecords) lookup(host string) (record, bool) {
@@ -199,7 +200,8 @@ type controller struct {
 	maxEntries   uint32
 	maxRecords   uint64
 	recordsLen   uint64
-	sequence     uint64
+	lruHot       *addressRecords
+	lruCold      *addressRecords
 	evictions    uint64
 	lastDirect   []netip.Prefix
 	lastProxy    []netip.Prefix
@@ -404,6 +406,7 @@ func (c *controller) observe(host string, answers []DNSAnswer) {
 				before := c.recordsLen
 				c.dropDirectHostsLocked(address)
 				if address.empty() {
+					c.unlinkLRULocked(address)
 					delete(c.records, item.addr)
 					address = nil
 				}
@@ -438,7 +441,7 @@ func (c *controller) observe(host string, answers []DNSAnswer) {
 			if uint32(len(c.records)) >= c.maxEntries {
 				continue
 			}
-			address = &addressRecords{}
+			address = &addressRecords{addr: item.addr}
 			c.records[item.addr] = address
 		}
 		c.touchLocked(address)
@@ -624,6 +627,7 @@ func (c *controller) removeExpiredLocked(now time.Time) bool {
 			nextExpiry = address.rec.expires
 		}
 		if address.empty() {
+			c.unlinkLRULocked(address)
 			delete(c.records, addr)
 		}
 	}
@@ -632,21 +636,33 @@ func (c *controller) removeExpiredLocked(now time.Time) bool {
 }
 
 func (c *controller) touchLocked(address *addressRecords) {
-	if c.sequence == ^uint64(0) {
-		ranked := make([]netip.Addr, 0, len(c.records))
-		for addr := range c.records {
-			ranked = append(ranked, addr)
-		}
-		sort.Slice(ranked, func(i, j int) bool {
-			return c.records[ranked[i]].lastSeen < c.records[ranked[j]].lastSeen
-		})
-		for index, addr := range ranked {
-			c.records[addr].lastSeen = uint64(index + 1)
-		}
-		c.sequence = uint64(len(ranked))
+	if address == c.lruHot {
+		return
 	}
-	c.sequence++
-	address.lastSeen = c.sequence
+	c.unlinkLRULocked(address)
+	address.older = c.lruHot
+	address.newer = nil
+	if c.lruHot != nil {
+		c.lruHot.newer = address
+	} else {
+		c.lruCold = address
+	}
+	c.lruHot = address
+}
+
+func (c *controller) unlinkLRULocked(address *addressRecords) {
+	if address.older != nil {
+		address.older.newer = address.newer
+	} else if c.lruCold == address {
+		c.lruCold = address.newer
+	}
+	if address.newer != nil {
+		address.newer.older = address.older
+	} else if c.lruHot == address {
+		c.lruHot = address.older
+	}
+	address.older = nil
+	address.newer = nil
 }
 
 func (c *controller) dropDirectHostsLocked(address *addressRecords) {
@@ -696,20 +712,14 @@ func (c *controller) dropOldestHostLocked(address *addressRecords, incomingExpir
 }
 
 func (c *controller) evictOldestLocked() bool {
-	var oldestAddr netip.Addr
-	var oldestSequence uint64
-	for addr, address := range c.records {
-		if !oldestAddr.IsValid() || address.lastSeen < oldestSequence {
-			oldestAddr = addr
-			oldestSequence = address.lastSeen
-		}
-	}
-	if !oldestAddr.IsValid() {
+	address := c.lruCold
+	if address == nil {
 		c.healRecordsLenLocked()
 		return false
 	}
-	c.decRecordsLenLocked(uint64(c.records[oldestAddr].lenHosts()))
-	delete(c.records, oldestAddr)
+	c.decRecordsLenLocked(uint64(address.lenHosts()))
+	delete(c.records, address.addr)
+	c.unlinkLRULocked(address)
 	c.evictions++
 	return true
 }
@@ -906,6 +916,8 @@ func (c *controller) flush() {
 	}
 	c.records = make(map[netip.Addr]*addressRecords)
 	c.recordsLen = 0
+	c.lruHot = nil
+	c.lruCold = nil
 	c.nextExpiry = time.Time{}
 	changed := len(c.lastDirect) != 0 || len(c.lastProxy) != 0
 	c.lastDirect = nil
