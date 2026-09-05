@@ -91,6 +91,86 @@ func TestUploadQueueReplacesInOrderPacket(t *testing.T) {
 	require.NoError(t, q.Close())
 }
 
+func TestUploadQueueSequentialLeavesPacketsNil(t *testing.T) {
+	q := NewUploadQueue(8, 1<<20)
+	require.Nil(t, q.packets)
+
+	payload := make([]byte, 1024, 1<<20)
+	require.NoError(t, q.Push(Packet{Seq: 0, Payload: payload}))
+	require.Nil(t, q.packets)
+
+	out := make([]byte, 1024)
+	n, err := q.Read(out)
+	require.NoError(t, err)
+	require.Equal(t, 1024, n)
+	require.Nil(t, q.buf)
+	require.Nil(t, q.packets)
+	require.Equal(t, uint64(1), q.nextSeq)
+	require.False(t, q.hasReady)
+	require.NoError(t, q.Close())
+}
+
+func TestUploadQueueDropsEmptyLargeCapPayload(t *testing.T) {
+	q := NewUploadQueue(4, 1<<20)
+	empty := make([]byte, 0, 1<<20)
+	require.NoError(t, q.Push(Packet{Seq: 0, Payload: empty}))
+	require.Nil(t, q.packets)
+	require.NoError(t, q.Push(Packet{Seq: 1, Payload: []byte("x")}))
+
+	buf := make([]byte, 8)
+	n, err := q.Read(buf)
+	require.NoError(t, err)
+	require.Equal(t, "x", string(buf[:n]))
+	require.Nil(t, q.buf)
+	require.Nil(t, q.ready)
+	require.False(t, q.hasReady)
+	require.Equal(t, uint64(2), q.nextSeq)
+	require.NoError(t, q.Close())
+}
+
+func TestUploadQueuePartialReadKeepsRemainderThenDrops(t *testing.T) {
+	q := NewUploadQueue(2, 64)
+	require.NoError(t, q.Push(Packet{Seq: 0, Payload: []byte("abcd")}))
+
+	buf := make([]byte, 2)
+	n, err := q.Read(buf)
+	require.NoError(t, err)
+	require.Equal(t, "ab", string(buf[:n]))
+	require.Equal(t, []byte("cd"), q.buf)
+
+	n, err = q.Read(buf)
+	require.NoError(t, err)
+	require.Equal(t, "cd", string(buf[:n]))
+	require.Nil(t, q.buf)
+	require.Equal(t, uint64(1), q.nextSeq)
+	require.NoError(t, q.Close())
+}
+
+func TestUploadQueueRetainsPacketsMapAfterOOODrain(t *testing.T) {
+	q := NewUploadQueue(8, 64)
+	require.Nil(t, q.packets)
+	require.NoError(t, q.Push(Packet{Seq: 2, Payload: []byte("c")}))
+	require.NotNil(t, q.packets)
+
+	empty := make([]byte, 0, 1024)
+	require.NoError(t, q.Push(Packet{Seq: 0, Payload: []byte("a")}))
+	require.NoError(t, q.Push(Packet{Seq: 1, Payload: empty}))
+
+	buf := make([]byte, 8)
+	n, err := q.Read(buf)
+	require.NoError(t, err)
+	require.Equal(t, "a", string(buf[:n]))
+
+	n, err = q.Read(buf)
+	require.NoError(t, err)
+	require.Equal(t, "c", string(buf[:n]))
+	require.Nil(t, q.buf)
+	require.NotNil(t, q.packets)
+	require.Empty(t, q.packets)
+	require.Equal(t, uint64(3), q.nextSeq)
+	require.NoError(t, q.Close())
+}
+
 func BenchmarkUploadQueueSequential(b *testing.B) {
 	for _, size := range []int{1024, 16 * 1024} {
 		b.Run(strconv.Itoa(size), func(b *testing.B) {

@@ -39,7 +39,6 @@ func NewUploadQueue(maxPackets int, maxBytes ...int) *UploadQueue {
 		byteLimit = maxBytes[0]
 	}
 	q := &UploadQueue{
-		packets:    make(map[uint64][]byte, maxPackets),
 		maxPackets: maxPackets,
 		maxBytes:   byteLimit,
 	}
@@ -126,11 +125,22 @@ func (q *UploadQueue) Push(p Packet) error {
 		q.ready = p.Payload
 		q.hasReady = true
 	} else {
+		if q.packets == nil {
+			q.packets = make(map[uint64][]byte)
+		}
 		q.packets[p.Seq] = p.Payload
 	}
 	q.queuedBytes = nextBytes
 	q.condPushed.Broadcast()
 	return nil
+}
+
+func (q *UploadQueue) takeBuf(payload []byte) {
+	if len(payload) == 0 {
+		q.buf = nil
+		return
+	}
+	q.buf = payload
 }
 
 func (q *UploadQueue) Read(b []byte) (int, error) {
@@ -140,6 +150,9 @@ func (q *UploadQueue) Read(b []byte) (int, error) {
 		if len(q.buf) > 0 {
 			n := copy(b, q.buf)
 			q.buf = q.buf[n:]
+			if len(q.buf) == 0 {
+				q.buf = nil
+			}
 			q.queuedBytes -= n
 			if q.releaseBytes != nil {
 				q.releaseBytes(n)
@@ -149,7 +162,7 @@ func (q *UploadQueue) Read(b []byte) (int, error) {
 		}
 
 		if q.hasReady {
-			q.buf = q.ready
+			q.takeBuf(q.ready)
 			q.ready = nil
 			q.hasReady = false
 			q.nextSeq++
@@ -159,7 +172,7 @@ func (q *UploadQueue) Read(b []byte) (int, error) {
 		if payload, ok := q.packets[q.nextSeq]; ok {
 			delete(q.packets, q.nextSeq)
 			q.nextSeq++
-			q.buf = payload
+			q.takeBuf(payload)
 			continue
 		}
 
