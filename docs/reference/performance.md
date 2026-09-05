@@ -16,7 +16,7 @@ Aster 沒有用魔法把你的網路變快，而是把代理核心內大量重�
 > **最接近「實際搬資料」的是 TCP 的約 2% 改善。** 5.4 倍和 101 倍只代表核心裡某個很小、但會執行非常多次的步驟，不代表下載速度會直接變成 5.4 倍或 101 倍。
 
 > [!NOTE]
-> 2026-08-28 的最新結果是 **Aster 優化前後**比較，不是 Aster 對 Mihomo。它證明本輪核心 CPU／配置成本下降，但不會把下方 OpenWrt 的約 2% TCP 結果改寫成更大的網速宣稱。
+> 2026-09-05 的最新結果是 **Aster 優化前後**比較，不是 Aster 對 Mihomo：10 萬條 GeoSite 情境的程序 working set 中位數降低 23.9%，但空載與 TCP 連線情境沒有穩定省 RAM。CPU／配置改善也不能改寫成 WAN 或下載速度倍數。
 
 ## 到底改了什麼？
 
@@ -45,6 +45,69 @@ Padding 規則在載入設定時就先解析好。真正傳資料時，Aster 只
 上傳、下載與連線數改用便宜的增量統計。每次有流量時只更新數字，不再為了得到總數反覆掃描所有活動連線。
 
 ## 以下是完整測試數據
+
+## 2026-09-05 程序記憶體與核心成本 A/B
+
+本輪基線固定為 `4a59a634`，**不重算上一輪已落地的改善**。24 條 Paseo-managed Pi Grok 4.6 XHigh 診斷中，21 條經 Astra 審查後整合；沒有安全收益的 routing、缺乏證據的全域 pool classes、winner／TFO 生命週期尚未確認的 dial cancellation 不採用。Fast 指令交付已確認，但沒有獨立的服務端 priority 證據。
+
+### 完整程序：不是 B/op，也不是 Linux RSS
+
+最終比較 `4a59a634` → `399e7f83`。Windows 11、Ryzen 9 5900X、64 GB DDR4、Go 1.26.3、`GOAMD64=v1`、`CGO_ENABLED=0`、`-trimpath -ldflags='-s -w'`。執行時 `GOMAXPROCS=2`，不設定 GOGC／GOMEMLIMIT，**不強制 GC**。代理工作與編譯結束後串行執行；六個情境各七輪、輪替前後先後，共 **84 個新程序**。同情境所有輪次的 YAML SHA256 相同。
+
+最小設定為 Rule 模式加 `MATCH,DIRECT`，DNS／TUN 關閉，loopback controller 僅供 readiness／規則數／釋放檢查；TCP 情境另開 loopback SOCKS。每個情境先等待 15 秒，再取約 250 ms 間隔的三秒樣本；表格是「每程序階段中位數」的七輪中位數，不把每個取樣點冒充獨立實驗。
+
+下表單位均為 **MiB**；working set 括號內是七個程序的完整範圍。Private bytes 是 Windows private committed memory，與 working set 不同。
+
+| 情境 | Before working set（範圍） | After working set（範圍） | Private bytes：前 → 後 |
+| --- | ---: | ---: | ---: |
+| 空載 | 19.19（18.97–19.29） | 19.17（19.07–19.27） | 50.32 → 50.43 |
+| 100k 不連續 CIDR `/32` | 26.26（26.04–29.70） | 25.77（25.47–29.66） | 56.31 → 55.71 |
+| 100k synthetic MRS domains | 30.63（30.48–30.74） | 30.65（30.55–30.83） | 60.94 → 60.96 |
+| 100k synthetic GeoSite domains | 92.38（57.52–93.68） | **70.30（45.58–76.59）** | **122.50 → 100.18** |
+| 持有 100 條 TCP | 29.71（29.50–29.86） | 29.73（29.01–29.89） | 60.11 → 60.18 |
+| 100 條 TCP 釋放後 60 秒 | 30.55（30.46–30.63） | 30.58（30.25–30.71） | 61.00 → 61.17 |
+| 持有 1,000 條 TCP | 113.43（110.61–115.91） | 115.48（113.11–116.14） | 144.85 → 147.43 |
+| 1,000 條 TCP 釋放後 60 秒 | 122.22（121.41–122.99） | 122.69（121.96–122.95） | 157.06 → 157.17 |
+
+- **GeoSite working set 中位數 −23.9%，private bytes −18.2%**。兩版範圍仍重疊，這不是每次啟動都保證少固定 RAM。
+- TCP workload 為獨立 loopback echo 程序，每條連線驗證 SOCKS 握手與 echo，再上／下傳各 `128 × 4096` bytes，最多 16 個 worker。1,000 條連線每方向共 500 MiB。全部確認關閉，controller 連線數歸零。1,000 條連線流量期間 working set 為 117.02 → 117.34 MiB，流量完成仍持有時為 122.25 → 122.71 MiB；釋放後 15 秒為 122.22 → 122.69 MiB。
+- **沒有證明 TCP 程序 RAM 降低或在 60 秒內回到空載**；持有 1,000 條連線的中位數反而 +1.8%。回收物件、歸還 pool、降低 B/op，都不等於立即歸還 OS 記憶體。
+- CIDR 短期 working set 不穩定：先前候選 `4a5d6937` 的獨立七輪是 26.27 → 29.44 MiB（+12.1%），最終候選是 −1.9%。後續程式只修正未在此情境執行的 binary export 與 ShadowQUIC lint，**不能把差異歸因為修好了程序 RAM**。另行、明確強制 GC 的 heap 診斷確認約 4.58 MiB 重複 IPRange 儲存不再存活；它只驗證引用解除，不取代自然程序結果。
+
+### 相同來源的 CPU／alloc A/B
+
+主矩陣比較 `4a59a634` → `4a5d6937`：14 個 package、38 個 case、七輪，共 532 筆。每個 case／樣本使用新程序、完全相同的 benchmark-only source、`GOMAXPROCS=1`、`-test.cpu=1`、每項目標至少兩秒。CIDR export 回退經 `ca548d9f` 修正後，另以最終 `399e7f83` 重跑四個 CIDR case、56 筆；**其他 34 個 case 未重測成最終 hash**，原結果仍標記 `4a5d6937`。
+
+| 工作 | Before → After | 配置 bytes／allocs：前 → 後 |
+| --- | ---: | ---: |
+| DNS IPv4 cache hit | 675.8 → 178.7 ns（−73.6%） | 512／11 → 88／3 |
+| Deadline refresh | 171.70 → 61.61 ns（−64.1%） | 128／2 → 0／0 |
+| TCP tracker：流控啟用 | 2468.0 → 850.5 ns（−65.5%） | 7680／18 → 688／9 |
+| Traffic-control session：global | 1372.0 → 122.5 ns（−91.1%） | 7200／11 → 208／2 |
+| UDP 單一 destination 建立 | 931.7 → 547.6 ns（−41.2%） | 3796／11 → 2788／7 |
+| UDP destination lookup | 24.89 → 16.99 ns（−31.7%） | 0／0 → 0／0 |
+| SOCKS UDP `handleSocksUDP` | 286.6 → 221.5 ns（−22.7%） | 596／6 → 208／3 |
+| Domain suffix constructor | 64.25 → 32.40 ns（−49.6%） | 64／2 → 32／1 |
+| Kernel-direct address eviction | 76.81 → 60.93 µs（−20.7%） | 47526／27 → 47156／25 |
+| CIDR export 10k（最終候選重跑） | 230.28 → 53.92 µs（−76.6%） | 655488／6 → 655488／6 |
+
+上述時間改善的 Mann–Whitney U `p=0.001`，SOCKS UDP 為 `p=0.011`；未作多重比較校正。完整範圍與每筆 raw sample 在證據包中。這是開發機，不是固定頻率、隔離負載的伺服器。
+
+### 保留的代價與沒有宣稱的改善
+
+- 預設 TCP tracker：352 → 256 B/op、仍 3 allocs；時間 308.5 → 295.5 ns（`p=0.620`）。`UnwrapReader` 則 3.337 → 4.701 ns，**+40.9%**（`p=0.001`），仍零配置。
+- UDP 第二個 destination 中位數 +20.2%（`p=0.259`，未達顯著）；第二個及以上映射多 144 B。100／1,000 mapping timing 持平，不能只展示單一 destination 的收益。
+- VLESS 0-RTT：17616 → 16434 B/op，但 **27 → 29 allocs**；89.59 → 89.85 µs（`p=1.000`）。不宣稱握手加速。
+- NAT hit +2.4%（`p=0.026`）；DoT 中位數 +5.0%（`p=0.383`）；`ReadCached` 中位數 +2.1%（`p=1.000`），只少一次配置。TCP relay、sing `handlePacket`、xHTTP sequential 未有顯著加速。
+- 原 CIDR export 是 226.6 → 387.0 µs（+70.8%）；原始回退保留，修正後直接編碼 compact 表，獨立 wire reference／mixed／mapped／邊界測試通過。
+- GeoSite 同清單不同新 attribute variants 會重新解碼 raw list；同 matcher cache 仍保留。確定性 fake-loader 測試中，一對順序 variants 由一次變成兩次載入；本輪未量完整大清單的順序變體 CPU A/B，這是載入 CPU 與留存記憶體的取捨。
+- 不降低 queue／cache 上限、TTL 或功能；不使用 GC 調參。Kernel-DIRECT TC eBPF 仍停用，真實 TUN／OpenWrt RAM 與 WAN 未重測。`sync.Pool` 也不是永久 leak 修復或由 GOMAXPROCS 保證的容量上限。
+
+### 證據與驗證
+
+[下載本輪原始資料、相同來源 harness 與重跑說明](/benchmarks/2026-09-05-memory2/evidence.zip)。包含兩個程序 cohort、兩個 microbench revision、修正前回退結果、fixtures 產生器、binary／config／harness hashes；**不含 executable 或私人代理對話**。
+
+最終候選的全模組 `go test -p=1 -count=1 ./...` 通過；變更範圍 race、vet、VMess `with_low_memory`、gofmt 通過；golangci-lint 2.12.2 在 CGO 開／關皆為 **0 issues**。實際驗證工具鏈是 Go 1.26.3，不冒稱在 Go 1.20 執行測試；遠端 CI 與部署不在這些本地結果的證明範圍內。
 
 ## 2026-08-28 核心 hot-path 優化 A/B
 

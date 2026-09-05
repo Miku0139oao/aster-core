@@ -16,7 +16,7 @@ Aster does not magically make your network faster. It removes a lot of repeated 
 > **The closest “actually moving data” number is the TCP improvement of about 2%.** 5.4× and 101× are tiny core steps that run many times. They do not mean download speed becomes 5.4× or 101×.
 
 > [!NOTE]
-> The latest 2026-08-28 results compare **Aster before and after this optimization wave**. They are not Aster-versus-Mihomo numbers. They prove that core CPU and allocation costs fell, but they do not turn the OpenWrt TCP result below into a larger network-speed claim.
+> The latest 2026-09-05 results compare **Aster before and after optimization**, not Aster against Mihomo. Median process working set fell 23.9% with 100k GeoSite domains, but idle and TCP workloads did not show consistent RAM savings. CPU/allocation gains are not WAN or download-speed multipliers.
 
 ## What actually changed?
 
@@ -45,6 +45,69 @@ If debug logging is off and no dashboard is listening, Aster returns before form
 Upload, download, and connection counts use cheap incremental stats. Each traffic update only changes the numbers. It no longer rescans every active connection to get a total.
 
 ## Full test data
+
+## 2026-09-05 process memory and core-cost A/B
+
+The baseline is fixed at `4a59a634`: **previously shipped gains are not counted again**. Of 24 Paseo-managed Pi Grok 4.6 XHigh investigations, 21 approved implementations were integrated after Astra review. Routing without a safe win, unsupported global pool-class changes, and dial cancellation with unresolved winner/TFO lifetime risks were deferred. Fast command delivery was verified, but server-side priority was not independently observed.
+
+### Whole processes: not B/op, and not Linux RSS
+
+The final comparison is `4a59a634` → `399e7f83`. Windows 11, Ryzen 9 5900X, 64 GB DDR4, Go 1.26.3, `GOAMD64=v1`, `CGO_ENABLED=0`, and `-trimpath -ldflags='-s -w'`. Runtime `GOMAXPROCS=2`; GOGC/GOMEMLIMIT unset; **no forced GC**. Builds and agent work stopped before serial measurements. Six scenarios × seven alternating before/after rounds produced **84 fresh processes**. All YAML hashes within each scenario match.
+
+The minimal configuration uses Rule mode with `MATCH,DIRECT`, DNS/TUN disabled, and a loopback controller only for readiness, rule-count and drain verification. TCP scenarios also enable loopback SOCKS. A 15-second warmup precedes a three-second sample window at approximately 250 ms intervals. Each observation is a per-process phase median; the table takes the median of seven processes, not hundreds of falsely independent polling samples.
+
+All values below are **MiB**. Working-set parentheses show the full range across seven processes. Private bytes are Windows private committed memory, a different metric from working set.
+
+| Scenario | Before working set (range) | After working set (range) | Private bytes: before → after |
+| --- | ---: | ---: | ---: |
+| Idle | 19.19 (18.97–19.29) | 19.17 (19.07–19.27) | 50.32 → 50.43 |
+| 100k noncoalescing CIDR `/32` rules | 26.26 (26.04–29.70) | 25.77 (25.47–29.66) | 56.31 → 55.71 |
+| 100k synthetic MRS domains | 30.63 (30.48–30.74) | 30.65 (30.55–30.83) | 60.94 → 60.96 |
+| 100k synthetic GeoSite domains | 92.38 (57.52–93.68) | **70.30 (45.58–76.59)** | **122.50 → 100.18** |
+| 100 held TCP connections | 29.71 (29.50–29.86) | 29.73 (29.01–29.89) | 60.11 → 60.18 |
+| 100 TCP connections, 60 seconds after close | 30.55 (30.46–30.63) | 30.58 (30.25–30.71) | 61.00 → 61.17 |
+| 1,000 held TCP connections | 113.43 (110.61–115.91) | 115.48 (113.11–116.14) | 144.85 → 147.43 |
+| 1,000 TCP connections, 60 seconds after close | 122.22 (121.41–122.99) | 122.69 (121.96–122.95) | 157.06 → 157.17 |
+
+- **GeoSite median working set fell 23.9%, private bytes 18.2%**. Ranges still overlap; this does not guarantee a fixed saving on every startup.
+- The independent loopback echo workload verifies every SOCKS handshake and echo, then transfers `128 × 4096` bytes in each direction per connection, with at most 16 workers. At 1,000 connections that is 500 MiB each way. Every connection closes and the controller reports zero live connections. Working set during traffic was 117.02 → 117.34 MiB; after traffic while still held, 122.25 → 122.71 MiB; 15 seconds after close, 122.22 → 122.69 MiB.
+- **TCP process RAM was not shown to improve or return to idle within 60 seconds**. The 1,000-held-connection median was actually +1.8%. Releasing objects or returning buffers to pools, and lower B/op, do not mean immediate return of memory to the OS.
+- Short-term CIDR working set was unstable: an earlier independent seven-round cohort at `4a5d6937` was 26.27 → 29.44 MiB (+12.1%); the final cohort was −1.9%. The intervening code changes only touched binary export, which this scenario does not execute, and ShadowQUIC lint. **Do not attribute that change to a process-RAM fix.** Separate, explicitly forced-GC heap diagnostics confirmed that approximately 4.58 MiB of duplicate IPRange storage was no longer live. This verifies unreachability, not natural process-memory savings.
+
+### Identical-source CPU/allocation A/B
+
+The main matrix compares `4a59a634` → `4a5d6937`: 14 packages, 38 cases, seven rounds, 532 samples. Each concrete case/sample runs in a fresh process with identical benchmark-only source, `GOMAXPROCS=1`, `-test.cpu=1`, and a target of at least two seconds. After `ca548d9f` fixed CIDR export, four CIDR cases were rerun against final `399e7f83`, adding 56 samples. **The other 34 cases were not rerun against the final hash**; their results remain explicitly attributed to `4a5d6937`.
+
+| Work | Before → after | Allocated bytes / allocations: before → after |
+| --- | ---: | ---: |
+| DNS IPv4 cache hit | 675.8 → 178.7 ns (−73.6%) | 512 / 11 → 88 / 3 |
+| Deadline refresh | 171.70 → 61.61 ns (−64.1%) | 128 / 2 → 0 / 0 |
+| TCP tracker with traffic control | 2468.0 → 850.5 ns (−65.5%) | 7680 / 18 → 688 / 9 |
+| Traffic-control session: global | 1372.0 → 122.5 ns (−91.1%) | 7200 / 11 → 208 / 2 |
+| Single-destination UDP mapping creation | 931.7 → 547.6 ns (−41.2%) | 3796 / 11 → 2788 / 7 |
+| UDP destination lookup | 24.89 → 16.99 ns (−31.7%) | 0 / 0 → 0 / 0 |
+| SOCKS UDP `handleSocksUDP` | 286.6 → 221.5 ns (−22.7%) | 596 / 6 → 208 / 3 |
+| Domain-suffix constructor | 64.25 → 32.40 ns (−49.6%) | 64 / 2 → 32 / 1 |
+| Kernel-direct address eviction | 76.81 → 60.93 µs (−20.7%) | 47526 / 27 → 47156 / 25 |
+| CIDR export, 10k (final-candidate rerun) | 230.28 → 53.92 µs (−76.6%) | 655488 / 6 → 655488 / 6 |
+
+These timing improvements have Mann–Whitney U `p=0.001`, except SOCKS UDP at `p=0.011`; no multiple-comparison correction was applied. Full ranges and every raw sample are in the evidence archive. This is a development desktop, not an isolated, fixed-frequency server.
+
+### Costs retained and improvements not claimed
+
+- Default TCP tracker: 352 → 256 B/op, still 3 allocations; 308.5 → 295.5 ns (`p=0.620`). `UnwrapReader` instead rose 3.337 → 4.701 ns, **+40.9%** (`p=0.001`), still allocation-free.
+- A second UDP destination had a +20.2% timing median (`p=0.259`, not significant); two or more destinations cost another 144 B. Timing at 100/1,000 mappings was unchanged. The single-destination win is not the whole story.
+- VLESS 0-RTT: 17616 → 16434 B/op, but **27 → 29 allocations**; 89.59 → 89.85 µs (`p=1.000`). No handshake-speed claim.
+- NAT hit +2.4% (`p=0.026`); DoT median +5.0% (`p=0.383`); `ReadCached` median +2.1% (`p=1.000`), saving one allocation only. TCP relay, sing `handlePacket`, and sequential xHTTP showed no significant speedup.
+- Original CIDR export was 226.6 → 387.0 µs (+70.8%). That regression remains recorded. The correction encodes compact tables directly and passes independent wire-reference, mixed-family, mapped-address and boundary tests.
+- Different new sequential GeoSite attribute variants re-decode the raw list; the same-matcher cache remains. Deterministic fake-loader tests show two loads for a pair instead of one. Full-size sequential-variant CPU A/B was not measured: this trades load-time CPU for lower retained storage.
+- Queue/cache limits, TTLs and features are not reduced; no GC tuning. Kernel-DIRECT TC eBPF remains disabled. Real-device TUN/OpenWrt RAM and WAN were not retested. `sync.Pool` is not a permanent-leak fix or a capacity bound guaranteed by GOMAXPROCS.
+
+### Evidence and validation
+
+[Download raw results, identical-source harnesses and reproduction notes](/benchmarks/2026-09-05-memory2/evidence.zip). Includes both process cohorts, both microbenchmark revisions, pre-fix regressions, fixture generators and binary/config/harness hashes; **no executables or private agent conversations**.
+
+Final-candidate `go test -p=1 -count=1 ./...` passed. Scoped race tests, vet, VMess `with_low_memory` and gofmt passed; golangci-lint 2.12.2 reported **0 issues** with CGO both disabled and enabled. The actual validation toolchain was Go 1.26.3, not a claimed Go 1.20 test run. These local checks do not prove remote CI or deployment status.
 
 ## 2026-08-28 core hot-path optimization A/B
 
