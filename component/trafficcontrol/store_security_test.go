@@ -4,6 +4,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -15,8 +17,10 @@ func TestOpenStoreRejectsAncestorSymlink(t *testing.T) {
 		t.Skipf("symlink unavailable: %v", err)
 	}
 	path := filepath.Join(link, "sub", "traffic.db")
-	if _, err := OpenStore(path, DefaultStoreLimit); err == nil {
-		t.Fatal("ancestor symlink was accepted")
+	if _, err := OpenStore(path, DefaultStoreLimit); err == nil ||
+		!strings.Contains(err.Error(), strconv.Quote(link)) ||
+		!strings.Contains(err.Error(), "is a symlink") {
+		t.Fatalf("error = %v, want rejection of the explicit link %q", err, link)
 	}
 	if _, err := os.Stat(filepath.Join(outside, "sub", "traffic.db")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("outside store was created: %v", err)
