@@ -103,6 +103,122 @@ func TestPipeDeadlineConcurrentWaitSet(t *testing.T) {
 	wg.Wait()
 }
 
+func TestPipeDeadlineRefreshKeepsWaitChannel(t *testing.T) {
+	d := MakePipeDeadline()
+	d.Set(time.Now().Add(time.Hour))
+	ch := d.Wait()
+	if ch == nil {
+		t.Fatal("nil wait channel")
+	}
+	for i := 0; i < 10; i++ {
+		d.Set(time.Now().Add(time.Hour))
+		if d.Wait() != ch {
+			t.Fatalf("refresh %d changed Wait channel", i)
+		}
+		select {
+		case <-ch:
+			t.Fatal("unfired refresh woke Wait")
+		default:
+		}
+	}
+	if d.timer == nil {
+		t.Fatal("live refresh dropped timer")
+	}
+	d.Set(time.Time{})
+	if d.timer != nil {
+		t.Fatal("Set(zero) after refresh left a timer")
+	}
+}
+
+func TestPipeDeadlineFutureZeroFutureDoesNotHang(t *testing.T) {
+	d := MakePipeDeadline()
+	done := make(chan struct{})
+	go func() {
+		d.Set(time.Now().Add(time.Hour))
+		d.Set(time.Time{})
+		d.Set(time.Now().Add(time.Hour))
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("future->zero->future hung")
+	}
+	select {
+	case <-d.Wait():
+		t.Fatal("future after zero already closed")
+	default:
+	}
+	d.Set(time.Time{})
+}
+
+func TestPipeDeadlineFuturePastFuture(t *testing.T) {
+	d := MakePipeDeadline()
+	d.Set(time.Now().Add(time.Hour))
+	old := d.Wait()
+	d.Set(time.Now().Add(-time.Millisecond))
+	if d.timer != nil {
+		t.Fatal("Set(past) left a timer")
+	}
+	select {
+	case <-old:
+	default:
+		t.Fatal("past did not close Wait channel")
+	}
+	d.Set(time.Now().Add(time.Hour))
+	next := d.Wait()
+	if next == old {
+		t.Fatal("future after past reused closed channel")
+	}
+	select {
+	case <-next:
+		t.Fatal("future after past already closed")
+	default:
+	}
+	d.Set(time.Time{})
+}
+
+func TestPipeDeadlineFiredThenFutureNewChannel(t *testing.T) {
+	d := MakePipeDeadline()
+	d.Set(time.Now().Add(15 * time.Millisecond))
+	old := d.Wait()
+	select {
+	case <-old:
+	case <-time.After(time.Second):
+		t.Fatal("timer did not fire")
+	}
+	d.Set(time.Now().Add(time.Hour))
+	next := d.Wait()
+	if next == old {
+		t.Fatal("future after fire reused closed channel")
+	}
+	select {
+	case <-next:
+		t.Fatal("future after fire already closed")
+	default:
+	}
+	d.Set(time.Time{})
+}
+
+func TestPipeDeadlineRepeatedPastAndZero(t *testing.T) {
+	d := MakePipeDeadline()
+	for i := 0; i < 100; i++ {
+		d.Set(time.Time{})
+		if d.timer != nil {
+			t.Fatalf("zero iteration %d left a timer", i)
+		}
+		d.Set(time.Now().Add(-time.Nanosecond))
+		if d.timer != nil {
+			t.Fatalf("past iteration %d left a timer", i)
+		}
+		select {
+		case <-d.Wait():
+		default:
+			t.Fatalf("past iteration %d did not fire", i)
+		}
+	}
+}
+
 func TestNetPacketConnReadFromZeroDeadline(t *testing.T) {
 	addr := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 9}
 	pc := NewNetPacketConn(&stubPacketConn{
@@ -216,6 +332,17 @@ func BenchmarkPipeDeadlineWait(b *testing.B) {
 		if d.Wait() == nil {
 			b.Fatal("nil wait channel")
 		}
+	}
+}
+
+func BenchmarkPipeDeadlineSetRefresh(b *testing.B) {
+	d := MakePipeDeadline()
+	d.Set(time.Now().Add(time.Hour))
+	b.Cleanup(func() { d.Set(time.Time{}) })
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		d.Set(time.Now().Add(time.Hour))
 	}
 }
 

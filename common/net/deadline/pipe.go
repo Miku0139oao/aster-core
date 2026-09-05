@@ -33,9 +33,17 @@ func (d *PipeDeadline) Set(t time.Time) {
 	defer d.mu.Unlock()
 
 	ch := d.cancel
-	if d.timer != nil && !d.timer.Stop() {
-		<-ch // Wait for the timer callback to finish and close cancel
+	oldTimer := d.timer
+	stopped := true
+	if oldTimer != nil {
+		stopped = oldTimer.Stop()
+		if !stopped {
+			<-ch // Wait for the timer callback to finish and close cancel
+		}
 	}
+	// Never retain a stopped, unfired timer across Set(zero)/Set(past).
+	// A later Stop on that timer returns false while ch is still open, so
+	// waiting on <-ch would deadlock.
 	d.timer = nil
 
 	// Time is zero, then there is no deadline.
@@ -56,6 +64,11 @@ func (d *PipeDeadline) Set(t time.Time) {
 			d.cancel = ch
 		}
 		d.cached.Store(ch)
+		if oldTimer != nil && stopped && !closed {
+			oldTimer.Reset(dur)
+			d.timer = oldTimer
+			return
+		}
 		d.timer = time.AfterFunc(dur, func() {
 			close(ch)
 		})
