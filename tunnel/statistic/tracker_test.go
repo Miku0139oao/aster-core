@@ -200,7 +200,12 @@ func TestTCPTrackerDefaultPathLifecycleAllocs(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	require.Equal(t, 3.0, allocs, "default path must stay tcpTracker + TrackerInfo + map entry")
+	// Older toolchains use the escaping comparable-hash fallback and have
+	// different escape analysis. Keep an exact budget for each supported
+	// toolchain family; neither skip this test nor relax modern Go's budget.
+	require.Zero(t, manager.ConnectionCount())
+	require.Equal(t, defaultTrackerLifecycleAllocs, allocs,
+		"default path lifecycle allocation budget changed")
 }
 
 type staticChainConn struct {
