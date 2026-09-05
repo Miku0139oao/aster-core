@@ -58,6 +58,7 @@ type dnsOverQUIC struct {
 	// re-opened when needed.
 	conn   *quic.Conn
 	connMu sync.RWMutex
+	closed bool
 
 	addr           string
 	dialer         *dnsDialer
@@ -137,9 +138,11 @@ func (doq *dnsOverQUIC) Close() (err error) {
 	defer doq.connMu.Unlock()
 
 	runtime.SetFinalizer(doq, nil)
+	doq.closed = true
 
 	if doq.conn != nil {
 		err = doq.conn.CloseWithError(QUICCodeNoError, "")
+		doq.conn = nil
 	}
 
 	return err
@@ -235,30 +238,52 @@ func (doq *dnsOverQUIC) shouldRetry(err error) (ok bool) {
 // connection.  If it is false, we will forcibly create a new connection and
 // close the existing one if needed.
 func (doq *dnsOverQUIC) getConnection(ctx context.Context, useCached bool) (*quic.Conn, error) {
-	var conn *quic.Conn
-	doq.connMu.RLock()
-	conn = doq.conn
-	if conn != nil && useCached {
-		doq.connMu.RUnlock()
+	return doq.getConnectionObserved(ctx, useCached, nil)
+}
 
-		return conn, nil
+func (doq *dnsOverQUIC) getConnectionObserved(ctx context.Context, useCached bool, observed *quic.Conn) (*quic.Conn, error) {
+	if observed == nil {
+		doq.connMu.RLock()
+		if doq.closed {
+			doq.connMu.RUnlock()
+			return nil, net.ErrClosed
+		}
+		observed = doq.conn
+		if useCached && observed != nil {
+			doq.connMu.RUnlock()
+			return observed, nil
+		}
+		doq.connMu.RUnlock()
+	} else {
+		doq.connMu.RLock()
+		closed := doq.closed
+		doq.connMu.RUnlock()
+		if closed {
+			return nil, net.ErrClosed
+		}
 	}
-	if conn != nil {
-		// we're recreating the connection, let's create a new one.
-		_ = conn.CloseWithError(QUICCodeNoError, "")
-	}
-	doq.connMu.RUnlock()
 
 	doq.connMu.Lock()
 	defer doq.connMu.Unlock()
 
-	var err error
-	conn, err = doq.openConnection(ctx)
+	if doq.closed {
+		return nil, net.ErrClosed
+	}
+	if doq.conn != nil {
+		// Another caller published a NEW conn while we waited for the write
+		// lock: reuse that winner even for concurrent useCached=false recreation.
+		if useCached || doq.conn != observed {
+			return doq.conn, nil
+		}
+		_ = doq.conn.CloseWithError(QUICCodeNoError, "")
+		doq.conn = nil
+	}
+
+	conn, err := doq.openConnection(ctx)
 	if err != nil {
 		return nil, err
 	}
 	doq.conn = conn
-
 	return conn, nil
 }
 
@@ -297,8 +322,10 @@ func (doq *dnsOverQUIC) openStream(ctx context.Context, conn *quic.Conn) (*quic.
 	}
 
 	// We can get here if the old QUIC connection is not valid anymore.  We
-	// should try to re-create the connection again in this case.
-	newConn, err := doq.getConnection(ctx, false)
+	// should try to re-create the connection again in this case. Pass the
+	// failed conn as the observed pointer so concurrent recreators reuse a
+	// winner instead of closing it.
+	newConn, err := doq.getConnectionObserved(ctx, false, conn)
 	if err != nil {
 		return nil, err
 	}
@@ -333,6 +360,11 @@ func (doq *dnsOverQUIC) openConnection(ctx context.Context) (quicConn *quic.Conn
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if quicConn == nil {
+			_ = packetConn.Close()
+		}
+	}()
 
 	host, _, err := net.SplitHostPort(doq.addr)
 	if err != nil {
@@ -359,7 +391,6 @@ func (doq *dnsOverQUIC) openConnection(ctx context.Context) (quicConn *quic.Conn
 	transport.SetSingleUse(true)   // auto close transport
 	quicConn, err = transport.Dial(ctx, &udpAddr, tlsConfig, doq.getQUICConfig())
 	if err != nil {
-		_ = packetConn.Close()
 		return nil, fmt.Errorf("opening quic connection to %s: %w", doq.addr, err)
 	}
 
