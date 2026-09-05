@@ -88,14 +88,33 @@ func (t *Table) remember(slot uint, key C.UDPNatKey, item *entry) {
 		// flows cannot allocate a lastHit on every packet.
 		return
 	}
-	t.hits[slot].Store(&lastHit{key: key, entry: item})
+	// CAS from the observed empty/dead pointer so a concurrently published
+	// live occupant is not overwritten. Store would win that race and pin a
+	// dead entry if Delete already ran forget.
+	newHit := &lastHit{key: key, entry: item}
+	if !t.hits[slot].CompareAndSwap(hit, newHit) {
+		return
+	}
+	if item.dead.Load() {
+		t.hits[slot].CompareAndSwap(newHit, nil)
+	}
 }
 
 func (t *Table) Delete(key C.UDPNatKey) {
 	if item, loaded := t.mapping.LoadAndDelete(key); loaded {
 		item.dead.Store(true)
 		t.size.Add(-1)
+		t.forget(key, item)
 	}
+}
+
+func (t *Table) forget(key C.UDPNatKey, item *entry) {
+	slot := natCacheSlot(key)
+	hit := t.hits[slot].Load()
+	if hit == nil || hit.entry != item {
+		return
+	}
+	t.hits[slot].CompareAndSwap(hit, nil)
 }
 
 func (t *Table) Size() int64       { return t.size.Load() }

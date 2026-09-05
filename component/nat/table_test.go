@@ -190,6 +190,123 @@ func TestGetOrCreateDeleteRecreateKeepsSizeNonNegative(t *testing.T) {
 	}
 }
 
+func assertLiveHitsMatchMapping(t *testing.T, table *Table) {
+	t.Helper()
+	for i := range table.hits {
+		hit := table.hits[i].Load()
+		if hit == nil {
+			continue
+		}
+		if hit.entry == nil || hit.entry.dead.Load() {
+			t.Fatalf("slot %d retains a dead last-hit", i)
+		}
+		got, ok := table.mapping.Load(hit.key)
+		if !ok || got != hit.entry {
+			t.Fatalf("slot %d last-hit is not the live mapping entry", i)
+		}
+	}
+}
+
+func TestDeleteReleasesLastHitOfExactEntry(t *testing.T) {
+	table := New()
+	key := C.UDPNatKey{AddrPort: netip.MustParseAddrPort("192.0.2.8:34567")}
+	first := &benchmarkPacketSender{}
+	if got, loaded, admitted := table.GetOrCreate(key, func() C.PacketSender { return first }); loaded || !admitted || got != first {
+		t.Fatal("failed to create NAT entry")
+	}
+	if got, loaded, admitted := table.GetOrCreate(key, func() C.PacketSender { return first }); !loaded || !admitted || got != first {
+		t.Fatal("failed to prime last-hit")
+	}
+	slot := natCacheSlot(key)
+	hit := table.hits[slot].Load()
+	if hit == nil || hit.entry == nil || hit.entry.dead.Load() || hit.key != key {
+		t.Fatal("expected live last-hit before delete")
+	}
+	deleted := hit.entry
+	table.Delete(key)
+	after := table.hits[slot].Load()
+	if after != nil && after.entry == deleted {
+		t.Fatal("deleted entry still reachable from last-hit")
+	}
+	if after != nil && after.entry.dead.Load() {
+		t.Fatal("slot retained a dead last-hit")
+	}
+	assertLiveHitsMatchMapping(t, table)
+}
+
+func TestDeleteDoesNotClearLiveOccupantOnSameSlot(t *testing.T) {
+	table := New()
+	a := C.UDPNatKey{AddrPort: netip.MustParseAddrPort("192.0.2.1:12345"), IngressType: 1, IngressName: "in-a"}
+	b := C.UDPNatKey{AddrPort: netip.MustParseAddrPort("192.0.2.1:12345"), IngressType: 2, IngressName: "in-b"}
+	if natCacheSlot(a) != natCacheSlot(b) {
+		t.Fatal("expected A and B to share a last-hit slot")
+	}
+	sa := &benchmarkPacketSender{}
+	sb := &benchmarkPacketSender{}
+	if got, loaded, admitted := table.GetOrCreate(b, func() C.PacketSender { return sb }); loaded || !admitted || got != sb {
+		t.Fatal("failed to create flow B")
+	}
+	if got, loaded, admitted := table.GetOrCreate(a, func() C.PacketSender { return sa }); loaded || !admitted || got != sa {
+		t.Fatal("failed to create flow A")
+	}
+	if got, loaded, admitted := table.GetOrCreate(b, func() C.PacketSender { return sb }); !loaded || !admitted || got != sb {
+		t.Fatal("failed to prime B last-hit")
+	}
+	slot := natCacheSlot(b)
+	liveHit := table.hits[slot].Load()
+	if liveHit == nil || liveHit.key != b || liveHit.entry == nil || liveHit.entry.PacketSender != sb {
+		t.Fatal("expected B to own the last-hit slot")
+	}
+	if got, loaded, admitted := table.GetOrCreate(a, func() C.PacketSender { return sa }); !loaded || !admitted || got != sa {
+		t.Fatal("flow A lookup failed")
+	}
+	if hit := table.hits[slot].Load(); hit != liveHit {
+		t.Fatal("flow A displaced live B last-hit")
+	}
+	table.Delete(a)
+	after := table.hits[slot].Load()
+	if after != liveHit || after.entry != liveHit.entry || after.key != b || after.entry.dead.Load() {
+		t.Fatal("delete of A removed live B last-hit")
+	}
+	if got, loaded, admitted := table.GetOrCreate(b, func() C.PacketSender { return sb }); !loaded || !admitted || got != sb {
+		t.Fatal("flow B lookup failed after deleting A")
+	}
+	assertLiveHitsMatchMapping(t, table)
+}
+
+func TestConcurrentRememberDeleteLeavesNoDeadHits(t *testing.T) {
+	table := New(1024)
+	keys := make([]C.UDPNatKey, 128)
+	for i := range keys {
+		keys[i] = C.UDPNatKey{
+			AddrPort:    netip.AddrPortFrom(netip.AddrFrom4([4]byte{192, 0, 2, 1}), uint16(10000+i)),
+			IngressType: C.Type(i%3 + 1),
+			IngressName: "in",
+		}
+	}
+	var wg sync.WaitGroup
+	const workers = 8
+	const iters = 500
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for n := 0; n < iters; n++ {
+				key := keys[(id+n)%len(keys)]
+				sender := &benchmarkPacketSender{}
+				table.GetOrCreate(key, func() C.PacketSender { return sender })
+				table.GetOrCreate(key, func() C.PacketSender { return sender })
+				table.Delete(key)
+			}
+		}(w)
+	}
+	wg.Wait()
+	assertLiveHitsMatchMapping(t, table)
+	if sz := table.Size(); sz < 0 || sz > int64(len(keys)) {
+		t.Fatalf("table size = %d", sz)
+	}
+}
+
 func TestGetOrCreateLocalConnRetriesAfterFailure(t *testing.T) {
 	table := New()
 	flow := C.UDPNatKey{AddrPort: netip.MustParseAddrPort("192.0.2.2:23456")}
