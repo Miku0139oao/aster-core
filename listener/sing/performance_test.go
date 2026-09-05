@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	C "github.com/Miku0139oao/aster-core/constant"
@@ -135,3 +136,154 @@ func (dropWriteBackWriter) WriteTo(p []byte, _ net.Addr) (int, error) {
 func (dropWriteBackWriter) WritePacket(*buf.Buffer, M.Socksaddr) error {
 	return nil
 }
+
+type captureUDPTunnel struct {
+	mu      sync.Mutex
+	packets []C.UDPPacket
+}
+
+func (t *captureUDPTunnel) HandleTCPConn(net.Conn, *C.Metadata) {}
+func (t *captureUDPTunnel) HandleUDPPacket(packet C.UDPPacket, _ *C.Metadata) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.packets = append(t.packets, packet)
+}
+func (t *captureUDPTunnel) NatTable() C.NatTable { return nil }
+
+func (t *captureUDPTunnel) last() *packet {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if len(t.packets) == 0 {
+		return nil
+	}
+	pkt, _ := t.packets[len(t.packets)-1].(*packet)
+	return pkt
+}
+
+type countingWriter struct {
+	n atomic.Int32
+}
+
+func (w *countingWriter) WriteTo(p []byte, _ net.Addr) (int, error) {
+	w.n.Add(1)
+	return len(p), nil
+}
+
+func (w *countingWriter) WritePacket(*buf.Buffer, M.Socksaddr) error {
+	return nil
+}
+
+func newPacketForTest(t *testing.T, tunnel C.Tunnel, writer network.PacketWriter) *packet {
+	t.Helper()
+	h := &ListenerHandler{ListenerConfig: ListenerConfig{
+		Tunnel: tunnel,
+		Type:   C.TUN,
+	}}
+	src := M.SocksaddrFrom(netip.MustParseAddr("192.0.2.1"), 12345)
+	dst := M.SocksaddrFrom(netip.MustParseAddr("198.51.100.1"), 443)
+	buff := buf.NewPacket()
+	_, _ = buff.Write([]byte("x"))
+	h.NewPacket(context.Background(), netip.MustParseAddrPort("192.0.2.1:12345"), buff, M.Metadata{
+		Source:      src,
+		Destination: dst,
+	}, func(network.PacketConn) network.PacketWriter {
+		return writer
+	})
+	captured, ok := tunnel.(*captureUDPTunnel)
+	if !ok {
+		t.Fatal("test tunnel is not captureUDPTunnel")
+	}
+	pkt := captured.last()
+	if pkt == nil {
+		t.Fatal("NewPacket did not emit a packet")
+	}
+	return pkt
+}
+
+func TestNewPacketIndependentWriteHandles(t *testing.T) {
+	tunnel := &captureUDPTunnel{}
+	w1 := &countingWriter{}
+	w2 := &countingWriter{}
+	p1 := newPacketForTest(t, tunnel, w1)
+	p2 := newPacketForTest(t, tunnel, w2)
+	if p1.mutex == nil || p1.writer == nil || p2.mutex == nil || p2.writer == nil {
+		t.Fatal("missing write handle pointers")
+	}
+	if p1.mutex == p2.mutex || p1.writer == p2.writer {
+		t.Fatal("NewPacket reused write handle across packets")
+	}
+	if _, err := p1.WriteBack([]byte("a"), &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 53}); err != nil {
+		t.Fatal(err)
+	}
+	if w1.n.Load() != 1 || w2.n.Load() != 0 {
+		t.Fatalf("independent write counts w1=%d w2=%d", w1.n.Load(), w2.n.Load())
+	}
+	p1.Drop()
+	p2.Drop()
+}
+
+func TestNewPacketWriteBackAfterDrop(t *testing.T) {
+	tunnel := &captureUDPTunnel{}
+	w := &countingWriter{}
+	pkt := newPacketForTest(t, tunnel, w)
+	pkt.Drop()
+	if pkt.writer == nil || pkt.mutex == nil {
+		t.Fatal("Drop recycled NewPacket WriteBack handle")
+	}
+	if _, err := pkt.WriteBack([]byte("x"), &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 53}); err != nil {
+		t.Fatal(err)
+	}
+	if w.n.Load() != 1 {
+		t.Fatalf("writes = %d", w.n.Load())
+	}
+}
+
+func TestNewPacketConcurrentWriteBackAndDrop(t *testing.T) {
+	tunnel := &captureUDPTunnel{}
+	w := &countingWriter{}
+	pkt := newPacketForTest(t, tunnel, w)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 64; i++ {
+			_, _ = pkt.WriteBack([]byte("x"), &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 53})
+		}
+	}()
+	pkt.Drop()
+	<-done
+	if pkt.writer == nil || pkt.mutex == nil {
+		t.Fatal("Drop recycled NewPacket WriteBack handle")
+	}
+}
+
+func BenchmarkNewPacket(b *testing.B) {
+	h := &ListenerHandler{ListenerConfig: ListenerConfig{
+		Tunnel: dropUDPTunnel{},
+		Type:   C.TUN,
+	}}
+	src := M.SocksaddrFrom(netip.MustParseAddr("192.0.2.1"), 12345)
+	dst := M.SocksaddrFrom(netip.MustParseAddr("198.51.100.1"), 443)
+	meta := M.Metadata{Source: src, Destination: dst}
+	key := netip.MustParseAddrPort("192.0.2.1:12345")
+	writer := dropWriteBackWriter{}
+	init := func(network.PacketConn) network.PacketWriter { return writer }
+	ctx := context.Background()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		buff := buf.NewPacket()
+		_, _ = buff.Write([]byte("x"))
+		h.NewPacket(ctx, key, buff, meta, init)
+	}
+}
+
+type dropUDPTunnel struct{}
+
+func (dropUDPTunnel) HandleTCPConn(net.Conn, *C.Metadata) {}
+func (dropUDPTunnel) HandleUDPPacket(packet C.UDPPacket, _ *C.Metadata) {
+	if packet != nil {
+		packet.Drop()
+	}
+}
+func (dropUDPTunnel) NatTable() C.NatTable { return nil }

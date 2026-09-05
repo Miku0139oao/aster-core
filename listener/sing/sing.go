@@ -214,12 +214,19 @@ type localAddr interface {
 	LocalAddr() net.Addr
 }
 
+// packetWriteHandle owns the per-datagram WriteBack mutex and writer for NewPacket.
+// Interior pointers are stored on packet so the struct layout stays unchanged.
+// NewPacketConnection keeps a shared close-barrier mutex/writer instead.
+type packetWriteHandle struct {
+	mu     sync.Mutex
+	writer network.NetPacketWriter
+}
+
 func (h *ListenerHandler) NewPacket(ctx context.Context, key netip.AddrPort, buffer *buf.Buffer, metadata M.Metadata, init func(natConn network.PacketConn) network.PacketWriter) {
-	writer := bufio.NewNetPacketWriter(init(nil))
-	mutex := sync.Mutex{}
+	handle := &packetWriteHandle{writer: bufio.NewNetPacketWriter(init(nil))}
 	cPacket := &packet{
-		writer: &writer,
-		mutex:  &mutex,
+		writer: &handle.writer,
+		mutex:  &handle.mu,
 		buff:   buffer,
 	}
 	assignUDPAddr(&cPacket.rawSrc, &cPacket.srcIP, metadata.Source)
@@ -228,7 +235,7 @@ func (h *ListenerHandler) NewPacket(ctx context.Context, key netip.AddrPort, buf
 		connID := fmt.Sprintf("%s:%s", h.handlerId, key)
 		cPacket.rAddr = N.NewCustomAddr(h.Type.String(), connID, cPacket.rAddr) // for tunnel's handleUDPConn
 	}
-	if conn, ok := common.Cast[localAddr](writer); ok { // tun does not have real inAddr
+	if conn, ok := common.Cast[localAddr](handle.writer); ok { // tun does not have real inAddr
 		cPacket.lAddr = conn.LocalAddr()
 	}
 	h.handlePacket(ctx, cPacket, metadata.Source, metadata.Destination)
