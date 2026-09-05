@@ -13,6 +13,7 @@ type IpCidrSet struct {
 	merged bool
 	// Compact, family-split bounds used only after Merge. Binary search
 	// touches from[] then a single to[] compare, without IPRange.Contains.
+	// Merged sets retain only these tables; rr is cleared.
 	v4From []uint32
 	v4To   []uint32
 	v6From []v6addr
@@ -37,6 +38,11 @@ func (set *IpCidrSet) AddIpCidrForString(ipCidr string) error {
 
 func (set *IpCidrSet) AddIpCidr(ipCidr netip.Prefix) (err error) {
 	if r := netipx.RangeOfPrefix(ipCidr); r.IsValid() {
+		// Reconstruct merged content from compact tables before dropping
+		// them. Invalid Add must not take this path.
+		if set.merged {
+			set.rr = set.appendCompactTo(nil)
+		}
 		// Drop compact tables before appending so a concurrent or same-
 		// package reader cannot observe merged=true with stale v4/v6 bounds.
 		set.merged = false
@@ -92,6 +98,10 @@ func (set *IpCidrSet) MatchIp(ip netip.Addr) bool {
 }
 
 func (set *IpCidrSet) Merge() error {
+	if set.merged {
+		// Already compact-only. Rebuilding from rr would see nil and erase.
+		return nil
+	}
 	var b netipx.IPSetBuilder
 	for _, r := range set.rr {
 		if !r.IsValid() {
@@ -108,17 +118,24 @@ func (set *IpCidrSet) Merge() error {
 }
 
 func (set *IpCidrSet) IsEmpty() bool {
-	return set == nil || len(set.rr) == 0
+	if set == nil {
+		return true
+	}
+	if set.merged {
+		return len(set.v4From)+len(set.v6From) == 0
+	}
+	return len(set.rr) == 0
 }
 
 func (set *IpCidrSet) Foreach(f func(prefix netip.Prefix) bool) {
-	for _, r := range set.rr {
+	set.forEachRange(func(r netipx.IPRange) bool {
 		for _, prefix := range r.Prefixes() {
 			if !f(prefix) {
-				return
+				return false
 			}
 		}
-	}
+		return true
+	})
 }
 
 func (set *IpCidrSet) ToIPSet() *netipx.IPSet {
@@ -126,11 +143,12 @@ func (set *IpCidrSet) ToIPSet() *netipx.IPSet {
 		return new(netipx.IPSet)
 	}
 	var b netipx.IPSetBuilder
-	for _, r := range set.rr {
+	set.forEachRange(func(r netipx.IPRange) bool {
 		if r.IsValid() {
 			b.AddRange(r)
 		}
-	}
+		return true
+	})
 	i, err := b.IPSet()
 	if err != nil {
 		return new(netipx.IPSet)
@@ -139,14 +157,14 @@ func (set *IpCidrSet) ToIPSet() *netipx.IPSet {
 }
 
 func (set *IpCidrSet) fromIPSet(i *netipx.IPSet) {
-	set.rr = i.Ranges()
+	set.buildLookup(i.Ranges())
 	set.merged = true
-	set.buildLookup()
+	set.rr = nil
 }
 
-func (set *IpCidrSet) buildLookup() {
+func (set *IpCidrSet) buildLookup(rr []netipx.IPRange) {
 	n4, n6 := 0, 0
-	for _, r := range set.rr {
+	for _, r := range rr {
 		from := r.From()
 		switch {
 		case from.Is4():
@@ -159,7 +177,7 @@ func (set *IpCidrSet) buildLookup() {
 	v4To := make([]uint32, 0, n4)
 	v6From := make([]v6addr, 0, n6)
 	v6To := make([]v6addr, 0, n6)
-	for _, r := range set.rr {
+	for _, r := range rr {
 		from, to := r.From(), r.To()
 		switch {
 		case from.Is4():
@@ -174,9 +192,55 @@ func (set *IpCidrSet) buildLookup() {
 	set.v6From, set.v6To = v6From, v6To
 }
 
+func (set *IpCidrSet) rangeCount() int {
+	if set.merged {
+		return len(set.v4From) + len(set.v6From)
+	}
+	return len(set.rr)
+}
+
+// forEachRange visits each IPRange without allocating a duplicate []IPRange.
+// Merged order is IPv4 then IPv6, matching netip.Addr.Compare / netipx merge.
+func (set *IpCidrSet) forEachRange(f func(netipx.IPRange) bool) {
+	if set.merged {
+		for i := range set.v4From {
+			r := netipx.IPRangeFrom(ipv4FromUint32(set.v4From[i]), ipv4FromUint32(set.v4To[i]))
+			if !f(r) {
+				return
+			}
+		}
+		for i := range set.v6From {
+			r := netipx.IPRangeFrom(v6ToIP(set.v6From[i]), v6ToIP(set.v6To[i]))
+			if !f(r) {
+				return
+			}
+		}
+		return
+	}
+	for _, r := range set.rr {
+		if !f(r) {
+			return
+		}
+	}
+}
+
+func (set *IpCidrSet) appendCompactTo(rr []netipx.IPRange) []netipx.IPRange {
+	for i := range set.v4From {
+		rr = append(rr, netipx.IPRangeFrom(ipv4FromUint32(set.v4From[i]), ipv4FromUint32(set.v4To[i])))
+	}
+	for i := range set.v6From {
+		rr = append(rr, netipx.IPRangeFrom(v6ToIP(set.v6From[i]), v6ToIP(set.v6To[i])))
+	}
+	return rr
+}
+
 func ipv4Uint32(ip netip.Addr) uint32 {
 	a := ip.As4()
 	return uint32(a[0])<<24 | uint32(a[1])<<16 | uint32(a[2])<<8 | uint32(a[3])
+}
+
+func ipv4FromUint32(v uint32) netip.Addr {
+	return netip.AddrFrom4([4]byte{byte(v >> 24), byte(v >> 16), byte(v >> 8), byte(v)})
 }
 
 func ipv6Addr(ip netip.Addr) v6addr {
@@ -187,6 +251,28 @@ func ipv6Addr(ip netip.Addr) v6addr {
 		lo: uint64(a[8])<<56 | uint64(a[9])<<48 | uint64(a[10])<<40 | uint64(a[11])<<32 |
 			uint64(a[12])<<24 | uint64(a[13])<<16 | uint64(a[14])<<8 | uint64(a[15]),
 	}
+}
+
+func v6ToIP(a v6addr) netip.Addr {
+	var b [16]byte
+	hi, lo := a.hi, a.lo
+	b[0] = byte(hi >> 56)
+	b[1] = byte(hi >> 48)
+	b[2] = byte(hi >> 40)
+	b[3] = byte(hi >> 32)
+	b[4] = byte(hi >> 24)
+	b[5] = byte(hi >> 16)
+	b[6] = byte(hi >> 8)
+	b[7] = byte(hi)
+	b[8] = byte(lo >> 56)
+	b[9] = byte(lo >> 48)
+	b[10] = byte(lo >> 40)
+	b[11] = byte(lo >> 32)
+	b[12] = byte(lo >> 24)
+	b[13] = byte(lo >> 16)
+	b[14] = byte(lo >> 8)
+	b[15] = byte(lo)
+	return netip.AddrFrom16(b)
 }
 
 func (a v6addr) greater(b v6addr) bool {

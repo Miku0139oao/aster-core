@@ -17,21 +17,25 @@ func (ss *IpCidrSet) WriteBin(w io.Writer) (err error) {
 		return err
 	}
 
+	n := ss.rangeCount()
 	var hdr [8]byte
-	binary.BigEndian.PutUint64(hdr[:], uint64(len(ss.rr)))
+	binary.BigEndian.PutUint64(hdr[:], uint64(n))
 	if _, err = w.Write(hdr[:]); err != nil {
 		return err
 	}
-	if len(ss.rr) == 0 {
+	if n == 0 {
 		return nil
 	}
-	buf := make([]byte, len(ss.rr)*32)
-	for i, r := range ss.rr {
+	buf := make([]byte, n*32)
+	i := 0
+	ss.forEachRange(func(r netipx.IPRange) bool {
 		from := r.From().As16()
 		to := r.To().As16()
 		copy(buf[i*32:], from[:])
 		copy(buf[i*32+16:], to[:])
-	}
+		i++
+		return true
+	})
 	_, err = w.Write(buf)
 	return err
 }
