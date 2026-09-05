@@ -227,8 +227,12 @@ func BenchmarkNewBufferedConn(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		conn := NewBufferedConn(&testReaderConn{Reader: bytes.NewReader(payload)})
 		_, _ = conn.Peek(1)
-		_ = conn.ReadCached()
-		_ = conn.ReadCached()
+		if cached := conn.ReadCached(); cached != nil {
+			cached.Release()
+		}
+		if empty := conn.ReadCached(); empty != nil {
+			empty.Release()
+		}
 	}
 }
 
