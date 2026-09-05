@@ -108,13 +108,14 @@ func (c *BufferedConn) ReadCached() *buf.Buffer { // call in sing/common/bufio.C
 	if c.r != nil && c.r.Buffered() > 0 {
 		length := c.r.Buffered()
 		b, _ := c.r.Peek(length)
+		// Independent managed buffer. Do not alias the bufio backing array:
+		// pooling reuses that array after dropReader, and Copy writes leftover
+		// before the next empty ReadCached. Caller (bufio.Copy) Releases after
+		// the synchronous Write.
+		cloned := buf.NewSize(length)
+		copy(cloned.Extend(length), b)
 		_, _ = c.r.Discard(length)
-		// Copy out of the bufio buffer. Returning an alias was GC-safe when
-		// dropReader only nilled c.r, but pooling reuses that array for the
-		// next connection and would overwrite leftover bytes still being written.
-		cloned := make([]byte, length)
-		copy(cloned, b)
-		return buf.As(cloned)
+		return cloned
 	}
 	c.dropReader()
 	return nil

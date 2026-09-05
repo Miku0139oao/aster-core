@@ -232,6 +232,26 @@ func BenchmarkNewBufferedConn(b *testing.B) {
 	}
 }
 
+// BenchmarkReadCachedDrainRelease is the baseline-compatible leftover-drain
+// harness matching sing/common/bufio.Copy (Write leftover, then Release).
+// Compare B/op as allocation churn, not process RSS.
+func BenchmarkReadCachedDrainRelease(b *testing.B) {
+	payload := []byte("0123456789abcdef")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		conn := NewBufferedConn(&testReaderConn{Reader: bytes.NewReader(payload)})
+		_, _ = conn.Peek(len(payload))
+		cached := conn.ReadCached()
+		if cached != nil {
+			cached.Release()
+		}
+		if empty := conn.ReadCached(); empty != nil {
+			empty.Release()
+		}
+	}
+}
+
 func TestReadCachedBytesSurviveReaderRecycle(t *testing.T) {
 	payload := bytes.Repeat([]byte("x"), 32)
 	conn := NewBufferedConn(&testReaderConn{Reader: bytes.NewReader(payload)})
@@ -246,8 +266,11 @@ func TestReadCachedBytesSurviveReaderRecycle(t *testing.T) {
 	_, err = other.Peek(32)
 	require.NoError(t, err)
 	require.Equal(t, payload, cached.Bytes())
-	_ = other.ReadCached()
-	_ = other.ReadCached()
+	if leftover := other.ReadCached(); leftover != nil {
+		leftover.Release()
+	}
+	require.Nil(t, other.ReadCached())
+	cached.Release()
 }
 
 func TestBufferedConnReaderPoolIsolation(t *testing.T) {
@@ -258,15 +281,19 @@ func TestBufferedConnReaderPoolIsolation(t *testing.T) {
 		peeked, err := ca.Peek(len(a))
 		require.NoError(t, err)
 		require.Equal(t, a, peeked)
-		_ = ca.ReadCached()
-		_ = ca.ReadCached()
+		if leftover := ca.ReadCached(); leftover != nil {
+			leftover.Release()
+		}
+		require.Nil(t, ca.ReadCached())
 
 		cb := NewBufferedConn(&testReaderConn{Reader: bytes.NewReader(b)})
 		peeked, err = cb.Peek(len(b))
 		require.NoError(t, err)
 		require.Equal(t, b, peeked)
-		_ = cb.ReadCached()
-		_ = cb.ReadCached()
+		if leftover := cb.ReadCached(); leftover != nil {
+			leftover.Release()
+		}
+		require.Nil(t, cb.ReadCached())
 	}
 }
 
@@ -289,4 +316,69 @@ func TestWarpConnWithBioReaderDoesNotRecycleExternalReader(t *testing.T) {
 	got, err := io.ReadAll(br)
 	require.NoError(t, err)
 	require.Equal(t, []byte("still-usable"), got)
+	cached.Release()
+}
+
+func TestReadCachedOwnedPartialReleaseOnce(t *testing.T) {
+	payload := []byte("abcdefghijklmnop")
+	conn := NewBufferedConn(&testReaderConn{Reader: bytes.NewReader(payload)})
+	_, err := conn.Peek(len(payload))
+	require.NoError(t, err)
+	discarded, err := conn.Discard(4)
+	require.NoError(t, err)
+	require.Equal(t, 4, discarded)
+
+	cached := conn.ReadCached()
+	require.NotNil(t, cached)
+	require.Equal(t, payload[4:], cached.Bytes())
+	require.True(t, conn.owned)
+	require.NotNil(t, conn.Reader())
+
+	cached.Release()
+	require.Equal(t, 0, cached.Len())
+	cached.Release() // exactly once is enough; a second Release must be a no-op
+
+	require.Nil(t, conn.ReadCached())
+	require.False(t, conn.owned)
+	require.Nil(t, conn.Reader())
+}
+
+func TestReadCachedBorrowedPartialIndependentOfOwnedPool(t *testing.T) {
+	payload := []byte("borrowed-partial")
+	br := bufio.NewReader(bytes.NewReader(payload))
+	_, err := br.Peek(len(payload))
+	require.NoError(t, err)
+	discarded, err := br.Discard(8)
+	require.NoError(t, err)
+	require.Equal(t, 8, discarded)
+
+	conn := WarpConnWithBioReader(&testReaderConn{Reader: bytes.NewReader(nil)}, br)
+	bc, ok := conn.(*BufferedConn)
+	require.True(t, ok)
+	require.False(t, bc.owned)
+
+	cached := bc.ReadCached()
+	require.NotNil(t, cached)
+	require.Equal(t, payload[8:], cached.Bytes())
+	require.Same(t, br, bc.Reader())
+
+	owned := NewBufferedConn(&testReaderConn{Reader: bytes.NewReader(bytes.Repeat([]byte{'z'}, 32))})
+	_, err = owned.Peek(32)
+	require.NoError(t, err)
+	if leftover := owned.ReadCached(); leftover != nil {
+		leftover.Release()
+	}
+	require.Nil(t, owned.ReadCached())
+
+	require.Equal(t, payload[8:], cached.Bytes())
+	cached.Release()
+	require.Equal(t, 0, cached.Len())
+
+	require.Nil(t, bc.ReadCached())
+	require.False(t, bc.owned)
+	require.Nil(t, bc.Reader())
+	br.Reset(bytes.NewReader([]byte("borrowed-still-usable")))
+	got, err := io.ReadAll(br)
+	require.NoError(t, err)
+	require.Equal(t, []byte("borrowed-still-usable"), got)
 }
