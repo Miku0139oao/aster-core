@@ -288,6 +288,16 @@ func getMsgFromCache(c dnsCache, q D.Question) (*D.Msg, time.Time, bool) {
 	return msg, expireTime, hit
 }
 
+// peekIPsFromCache copies A/AAAA addresses out of a cache-owned message.
+// It never returns cache-owned RR or []byte pointers; netip.AddrFromSlice copies octets.
+func peekIPsFromCache(c dnsCache, q D.Question) (ips []netip.Addr, expire time.Time, hit bool) {
+	msg, expire, hit := c.GetWithExpire(cacheKey(q))
+	if !hit || msg == nil {
+		return nil, expire, hit
+	}
+	return msgToIP(msg), expire, true
+}
+
 // putMsgToCache puts a dns message into the cache.
 // the msg is copied before being stored in the cache, so it can be modified without affecting the original msg.
 func putMsgToCache(c dnsCache, q D.Question, msg *D.Msg) {

@@ -377,8 +377,28 @@ func (r *Resolver) lookupIP(ctx context.Context, host string, dnsType uint16) (i
 		}
 	}
 
+	q := D.Question{Name: D.Fqdn(host), Qtype: dnsType, Qclass: D.ClassINET}
+	if cached, expireTime, hit := peekIPsFromCache(r.cache, q); hit {
+		if log.Enabled(log.DEBUG) {
+			log.Debugln("[DNS] cache hit %s --> %s %s, expire at %s", trimDots(q.Name), cached, D.Type(q.Qtype), expireTime.Format("2006-01-02 15:04:05"))
+		}
+		if expireTime.Before(time.Now()) {
+			query := new(D.Msg)
+			query.SetQuestion(q.Name, dnsType)
+			go func() {
+				bg, cancel := context.WithTimeout(context.Background(), resolver.DefaultDNSTimeout)
+				defer cancel()
+				_, _ = r.exchangeWithoutCache(bg, query)
+			}()
+		}
+		if len(cached) == 0 {
+			return []netip.Addr{}, resolver.ErrIPNotFound
+		}
+		return cached, nil
+	}
+
 	query := &D.Msg{}
-	query.SetQuestion(D.Fqdn(host), dnsType)
+	query.SetQuestion(q.Name, dnsType)
 
 	msg, err := r.ExchangeContext(ctx, query)
 	if err != nil {
@@ -386,8 +406,7 @@ func (r *Resolver) lookupIP(ctx context.Context, host string, dnsType uint16) (i
 	}
 
 	ips = msgToIP(msg)
-	ipLength := len(ips)
-	if ipLength == 0 {
+	if len(ips) == 0 {
 		return []netip.Addr{}, resolver.ErrIPNotFound
 	}
 

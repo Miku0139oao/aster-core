@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/netip"
+	"sync"
 	"testing"
 	"time"
 
@@ -372,6 +373,209 @@ func TestNegativeCacheNXDOMAINWithoutSOANotCached(t *testing.T) {
 	if hit {
 		t.Fatal("NXDOMAIN without SOA/records must not be cached (ttl=0)")
 	}
+}
+
+type countingDNSClient struct {
+	mu    sync.Mutex
+	calls int
+	a     []net.IP
+	aaaa  []net.IP
+}
+
+func (c *countingDNSClient) ExchangeContext(ctx context.Context, m *D.Msg) (*D.Msg, error) {
+	c.mu.Lock()
+	c.calls++
+	c.mu.Unlock()
+	q := m.Question[0]
+	msg := new(D.Msg)
+	msg.SetReply(m)
+	switch q.Qtype {
+	case D.TypeA:
+		for _, ip := range c.a {
+			msg.Answer = append(msg.Answer, &D.A{
+				Hdr: D.RR_Header{Name: q.Name, Rrtype: D.TypeA, Class: D.ClassINET, Ttl: 60},
+				A:   ip,
+			})
+		}
+	case D.TypeAAAA:
+		for _, ip := range c.aaaa {
+			msg.Answer = append(msg.Answer, &D.AAAA{
+				Hdr:  D.RR_Header{Name: q.Name, Rrtype: D.TypeAAAA, Class: D.ClassINET, Ttl: 60},
+				AAAA: ip,
+			})
+		}
+	default:
+		msg.SetRcode(m, D.RcodeNameError)
+	}
+	return msg, nil
+}
+
+func (c *countingDNSClient) Address() string { return "counting" }
+
+func (c *countingDNSClient) ResetConnection() {}
+
+func (c *countingDNSClient) Calls() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.calls
+}
+
+func waitCalls(t *testing.T, c *countingDNSClient, min int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if c.Calls() >= min {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("client calls = %d, want >= %d", c.Calls(), min)
+}
+
+func TestLookupIPCacheHitDoesNotMutateStoredRdata(t *testing.T) {
+	r, req := cachedAResolver(t)
+	ips, err := r.LookupIPv4(context.Background(), "warm.example")
+	if err != nil || len(ips) != 1 || ips[0] != netip.MustParseAddr("192.0.2.1") {
+		t.Fatalf("LookupIPv4 = %v, %v", ips, err)
+	}
+
+	msg, err := r.ExchangeContext(context.Background(), req)
+	if err != nil || len(msg.Answer) != 1 {
+		t.Fatalf("ExchangeContext after lookup: %v %v", msg, err)
+	}
+	a := msg.Answer[0].(*D.A)
+	orig := a.A[0]
+	a.A[0] ^= 0xff
+	msg.Answer[0].Header().Ttl = 1
+
+	msg2, err := r.ExchangeContext(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a2 := msg2.Answer[0].(*D.A)
+	if a2.A[0] != orig {
+		t.Fatal("lookupIP peek mutated cached A octets")
+	}
+	if msg2.Answer[0].Header().Ttl == 1 {
+		t.Fatal("lookupIP peek mutated cached TTL")
+	}
+}
+
+func TestLookupIPv6CacheHitFresh(t *testing.T) {
+	client := &countingDNSClient{aaaa: []net.IP{net.ParseIP("2001:db8::1")}}
+	r := testResolver(client, 50*time.Millisecond)
+	ctx := context.Background()
+	got, err := r.LookupIPv6(ctx, "v6.example")
+	if err != nil || len(got) != 1 || got[0] != netip.MustParseAddr("2001:db8::1") {
+		t.Fatalf("warm LookupIPv6 = %v, %v", got, err)
+	}
+	calls := client.Calls()
+	got, err = r.LookupIPv6(ctx, "v6.example")
+	if err != nil || len(got) != 1 || got[0] != netip.MustParseAddr("2001:db8::1") {
+		t.Fatalf("hit LookupIPv6 = %v, %v", got, err)
+	}
+	if client.Calls() != calls {
+		t.Fatalf("AAAA cache hit queried upstream (%d -> %d)", calls, client.Calls())
+	}
+}
+
+func TestLookupIPNegativeCachedNXDOMAIN(t *testing.T) {
+	r := testResolver(&staticDNSClient{}, 50*time.Millisecond)
+	req := new(D.Msg)
+	req.SetQuestion("nx.example.", D.TypeA)
+	resp := new(D.Msg)
+	resp.SetRcode(req, D.RcodeNameError)
+	resp.Ns = []D.RR{&D.SOA{
+		Hdr:    D.RR_Header{Name: "example.", Rrtype: D.TypeSOA, Class: D.ClassINET, Ttl: 30},
+		Ns:     "ns.example.",
+		Mbox:   "hostmaster.example.",
+		Minttl: 30,
+	}}
+	putMsgToCache(r.cache, req.Question[0], resp)
+
+	ips, err := r.LookupIPv4(context.Background(), "nx.example")
+	if err != resolver.ErrIPNotFound {
+		t.Fatalf("LookupIPv4 NXDOMAIN err = %v, want ErrIPNotFound", err)
+	}
+	if len(ips) != 0 {
+		t.Fatalf("LookupIPv4 NXDOMAIN ips = %v", ips)
+	}
+
+	req6 := new(D.Msg)
+	req6.SetQuestion("nx.example.", D.TypeAAAA)
+	resp6 := resp.Copy()
+	resp6.SetQuestion("nx.example.", D.TypeAAAA)
+	resp6.SetRcode(req6, D.RcodeNameError)
+	putMsgToCache(r.cache, req6.Question[0], resp6)
+	ips, err = r.LookupIPv6(context.Background(), "nx.example")
+	if err != resolver.ErrIPNotFound || len(ips) != 0 {
+		t.Fatalf("LookupIPv6 NXDOMAIN = %v, %v", ips, err)
+	}
+}
+
+func TestLookupIPStaleRefreshesWithoutWAN(t *testing.T) {
+	client := &countingDNSClient{a: []net.IP{net.ParseIP("192.0.2.1").To4()}}
+	r := testResolver(client, 50*time.Millisecond)
+	ctx := context.Background()
+	if _, err := r.LookupIPv4(ctx, "stale.example"); err != nil {
+		t.Fatalf("warm: %v", err)
+	}
+	warmCalls := client.Calls()
+
+	q := D.Question{Name: D.Fqdn("stale.example"), Qtype: D.TypeA, Qclass: D.ClassINET}
+	stored, _, hit := r.cache.GetWithExpire(cacheKey(q))
+	if !hit || stored == nil {
+		t.Fatal("warm cache miss")
+	}
+	r.cache.SetWithExpire(cacheKey(q), stored, time.Now().Add(-time.Second))
+
+	ips, err := r.LookupIPv4(ctx, "stale.example")
+	if err != nil || len(ips) != 1 || ips[0] != netip.MustParseAddr("192.0.2.1") {
+		t.Fatalf("stale LookupIPv4 = %v, %v", ips, err)
+	}
+	waitCalls(t, client, warmCalls+1)
+}
+
+func TestLookupIPConcurrentCacheReplaceAndClear(t *testing.T) {
+	client := &countingDNSClient{
+		a:    []net.IP{net.ParseIP("192.0.2.1").To4()},
+		aaaa: []net.IP{net.ParseIP("2001:db8::1")},
+	}
+	r := testResolver(client, 50*time.Millisecond)
+	ctx := context.Background()
+	if _, err := r.LookupIPv4(ctx, "conc.example"); err != nil {
+		t.Fatal(err)
+	}
+
+	req := new(D.Msg)
+	req.SetQuestion("conc.example.", D.TypeA)
+	resp := new(D.Msg)
+	resp.SetReply(req)
+	resp.Answer = []D.RR{&D.A{
+		Hdr: D.RR_Header{Name: "conc.example.", Rrtype: D.TypeA, Class: D.ClassINET, Ttl: 60},
+		A:   net.IPv4(192, 0, 2, 1).To4(),
+	}}
+
+	const n = 64
+	var wg sync.WaitGroup
+	wg.Add(n + 1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < n; i++ {
+			putMsgToCache(r.cache, req.Question[0], resp)
+			if i%3 == 0 {
+				r.cache.Clear()
+			}
+		}
+	}()
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			_, _ = r.LookupIPv4(ctx, "conc.example")
+			_, _ = r.LookupIPv6(ctx, "conc.example")
+		}()
+	}
+	wg.Wait()
 }
 
 func BenchmarkGetMsgFromCacheHit(b *testing.B) {
