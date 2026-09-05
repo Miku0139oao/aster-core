@@ -20,12 +20,22 @@ type packetSender struct {
 	ch     chan C.PacketAdapter
 
 	// destination NAT mapping
-	// originToTarget is owned by the single Process goroutine. Reverse lookups
-	// share targetToOrigin with the receive goroutine under reverseMu; this keeps
-	// insertion O(1) instead of copying the complete map for every destination.
+	// Origin state is owned by the single Process goroutine (and the dial
+	// goroutine before Process starts). Reverse lookups share reverse state with
+	// the receive goroutine under reverseMu.
+	// The first destination is stored inline with nil maps. A second distinct
+	// origin or reverse target promotes that side into a map; the two sides
+	// promote independently so a reverse collision can keep reverse inline.
+	hasSingle      bool
+	singleOrigin   destinationKey
+	singleTarget   *net.UDPAddr
 	originToTarget map[destinationKey]*net.UDPAddr
-	targetToOrigin map[netip.AddrPort]netip.AddrPort
+
 	reverseMu      sync.RWMutex
+	hasSingleRev   bool
+	singleRevFrom  netip.AddrPort
+	singleRevTo    netip.AddrPort
+	targetToOrigin map[netip.AddrPort]netip.AddrPort
 
 	nextDeadlineRefresh atomic.Int64
 }
@@ -52,9 +62,6 @@ func newPacketSender() C.PacketSender {
 		ctx:    ctx,
 		cancel: cancel,
 		ch:     ch,
-
-		originToTarget: make(map[destinationKey]*net.UDPAddr),
-		targetToOrigin: make(map[netip.AddrPort]netip.AddrPort),
 	}
 }
 
@@ -62,22 +69,85 @@ const maxUDPDestinationMappings = 4096
 
 func (s *packetSender) addMapping(originMetadata *C.Metadata, metadata *C.Metadata) bool {
 	originKey := metadataDestinationKey(originMetadata)
-	if s.originToTarget[originKey] != nil {
+	if s.hasOrigin(originKey) {
 		return true
 	}
-	if len(s.originToTarget) >= maxUDPDestinationMappings {
+	if s.originCount() >= maxUDPDestinationMappings {
 		return false
 	}
 	originAddrPort := originMetadata.AddrPort()
 	targetAddrPort := metadata.AddrPort()
-	s.originToTarget[originKey] = net.UDPAddrFromAddrPort(targetAddrPort)
+	s.storeOrigin(originKey, net.UDPAddrFromAddrPort(targetAddrPort))
 
 	s.reverseMu.Lock()
-	if addr := s.targetToOrigin[targetAddrPort]; !addr.IsValid() && originAddrPort.IsValid() {
-		s.targetToOrigin[targetAddrPort] = originAddrPort
-	}
+	s.storeReverseLocked(targetAddrPort, originAddrPort)
 	s.reverseMu.Unlock()
 	return true
+}
+
+func (s *packetSender) hasOrigin(key destinationKey) bool {
+	if s.originToTarget != nil {
+		return s.originToTarget[key] != nil
+	}
+	return s.hasSingle && s.singleOrigin == key
+}
+
+func (s *packetSender) originCount() int {
+	if s.originToTarget != nil {
+		return len(s.originToTarget)
+	}
+	if s.hasSingle {
+		return 1
+	}
+	return 0
+}
+
+func (s *packetSender) storeOrigin(key destinationKey, target *net.UDPAddr) {
+	if s.originToTarget != nil {
+		s.originToTarget[key] = target
+		return
+	}
+	if !s.hasSingle {
+		s.hasSingle = true
+		s.singleOrigin = key
+		s.singleTarget = target
+		return
+	}
+	originToTarget := make(map[destinationKey]*net.UDPAddr, 2)
+	originToTarget[s.singleOrigin] = s.singleTarget
+	originToTarget[key] = target
+	s.originToTarget = originToTarget
+	s.hasSingle = false
+	s.singleOrigin = destinationKey{}
+	s.singleTarget = nil
+}
+
+func (s *packetSender) storeReverseLocked(target, origin netip.AddrPort) {
+	if !origin.IsValid() {
+		return
+	}
+	if s.targetToOrigin != nil {
+		if addr := s.targetToOrigin[target]; !addr.IsValid() {
+			s.targetToOrigin[target] = origin
+		}
+		return
+	}
+	if s.hasSingleRev {
+		if s.singleRevFrom == target {
+			return // first-wins
+		}
+		targetToOrigin := make(map[netip.AddrPort]netip.AddrPort, 2)
+		targetToOrigin[s.singleRevFrom] = s.singleRevTo
+		targetToOrigin[target] = origin
+		s.targetToOrigin = targetToOrigin
+		s.hasSingleRev = false
+		s.singleRevFrom = netip.AddrPort{}
+		s.singleRevTo = netip.AddrPort{}
+		return
+	}
+	s.hasSingleRev = true
+	s.singleRevFrom = target
+	s.singleRevTo = origin
 }
 
 func (s *packetSender) AddMapping(originMetadata *C.Metadata, metadata *C.Metadata) {
@@ -87,7 +157,12 @@ func (s *packetSender) AddMapping(originMetadata *C.Metadata, metadata *C.Metada
 func (s *packetSender) RestoreReadFrom(addr netip.AddrPort) netip.AddrPort {
 	addr = netip.AddrPortFrom(addr.Addr().Unmap(), addr.Port())
 	s.reverseMu.RLock()
-	originAddr := s.targetToOrigin[addr]
+	var originAddr netip.AddrPort
+	if s.targetToOrigin != nil {
+		originAddr = s.targetToOrigin[addr]
+	} else if s.hasSingleRev && s.singleRevFrom == addr {
+		originAddr = s.singleRevTo
+	}
 	s.reverseMu.RUnlock()
 	if originAddr.IsValid() {
 		return originAddr
@@ -112,7 +187,14 @@ func (s *packetSender) RefreshReadDeadline(pc C.PacketConn) {
 }
 
 func (s *packetSender) targetAddress(metadata *C.Metadata) *net.UDPAddr {
-	return s.originToTarget[metadataDestinationKey(metadata)]
+	key := metadataDestinationKey(metadata)
+	if s.originToTarget != nil {
+		return s.originToTarget[key]
+	}
+	if s.hasSingle && s.singleOrigin == key {
+		return s.singleTarget
+	}
+	return nil
 }
 
 func (s *packetSender) processPacket(pc C.PacketConn, packet C.PacketAdapter) {

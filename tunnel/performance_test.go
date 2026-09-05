@@ -129,6 +129,9 @@ func TestPacketSenderDestinationMapping(t *testing.T) {
 	originIP := &C.Metadata{DstIP: netip.MustParseAddr("192.0.2.1")}
 	targetIP := &C.Metadata{DstIP: netip.MustParseAddr("198.51.100.1")}
 	sender.AddMapping(originIP, targetIP)
+	if sender.originToTarget != nil || sender.targetToOrigin != nil {
+		t.Fatal("single destination allocated maps")
+	}
 	if got := sender.targetAddress(originIP); got == nil || got.AddrPort() != targetIP.AddrPort() {
 		t.Fatalf("unexpected IP target: %v", got)
 	}
@@ -139,8 +142,14 @@ func TestPacketSenderDestinationMapping(t *testing.T) {
 	originHost := &C.Metadata{Host: "example.com", DstIP: originIP.DstIP}
 	targetHost := &C.Metadata{DstIP: netip.MustParseAddr("203.0.113.1")}
 	sender.AddMapping(originHost, targetHost)
+	if sender.originToTarget == nil {
+		t.Fatal("second origin did not promote origin map")
+	}
 	if got := sender.targetAddress(originHost); got == nil || got.AddrPort() != targetHost.AddrPort() {
 		t.Fatalf("unexpected host target: %v", got)
+	}
+	if got := sender.targetAddress(originIP); got == nil || got.AddrPort() != targetIP.AddrPort() {
+		t.Fatalf("promoted first origin lost: %v", got)
 	}
 }
 
@@ -155,6 +164,9 @@ func TestPacketSenderDestinationMappingUnmaps(t *testing.T) {
 
 	const port = 53
 	sender.AddMapping(&C.Metadata{DstIP: origin4in6, DstPort: port}, &C.Metadata{DstIP: target4in6, DstPort: port})
+	if sender.originToTarget != nil || sender.targetToOrigin != nil {
+		t.Fatal("unmapped single destination allocated maps")
+	}
 	originAddrPort := netip.AddrPortFrom(origin, port)
 	targetAddrPort := netip.AddrPortFrom(target, port)
 	if got := sender.RestoreReadFrom(targetAddrPort); got != originAddrPort {
@@ -181,6 +193,9 @@ func TestPacketSenderReverseMappingDistinguishesPorts(t *testing.T) {
 	secondTarget := &C.Metadata{DstIP: targetIP, DstPort: 443}
 	sender.AddMapping(firstOrigin, firstTarget)
 	sender.AddMapping(secondOrigin, secondTarget)
+	if sender.originToTarget == nil || sender.targetToOrigin == nil {
+		t.Fatal("distinct reverse targets should promote both maps")
+	}
 
 	if got := sender.RestoreReadFrom(firstTarget.AddrPort()); got != firstOrigin.AddrPort() {
 		t.Fatalf("first endpoint restored as %s", got)
@@ -204,6 +219,9 @@ func TestPacketSenderDestinationMappingIsBounded(t *testing.T) {
 	overflowTarget := &C.Metadata{DstIP: netip.MustParseAddr("198.51.100.1"), DstPort: 1}
 	if sender.addMapping(overflowOrigin, overflowTarget) {
 		t.Fatal("mapping beyond per-association limit was accepted")
+	}
+	if sender.originCount() != maxUDPDestinationMappings {
+		t.Fatalf("origin count = %d, want %d", sender.originCount(), maxUDPDestinationMappings)
 	}
 	if got := sender.targetAddress(overflowOrigin); got != nil {
 		t.Fatalf("rejected mapping retained target %v", got)
@@ -271,7 +289,7 @@ func TestMatchUsesRoutingSnapshot(t *testing.T) {
 }
 
 func BenchmarkPacketSenderMappingInsert(b *testing.B) {
-	for _, count := range []int{100, 1000} {
+	for _, count := range []int{1, 2, 100, 1000} {
 		b.Run(strconv.Itoa(count), func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {

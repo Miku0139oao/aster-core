@@ -143,6 +143,128 @@ func TestUDPWriteAddrCacheReusesMappedAddr(t *testing.T) {
 	}
 }
 
+func TestPacketSenderSingleDestinationKeepsMapsNil(t *testing.T) {
+	sender := newPacketSender().(*packetSender)
+	t.Cleanup(sender.Close)
+
+	origin := &C.Metadata{DstIP: netip.MustParseAddr("192.0.2.1"), DstPort: 53}
+	target := &C.Metadata{DstIP: netip.MustParseAddr("198.51.100.1"), DstPort: 53}
+	if !sender.addMapping(origin, target) {
+		t.Fatal("first mapping rejected")
+	}
+	if sender.originToTarget != nil || sender.targetToOrigin != nil {
+		t.Fatal("single destination allocated maps")
+	}
+	if !sender.hasSingle || sender.singleTarget == nil || sender.singleTarget.AddrPort() != target.AddrPort() {
+		t.Fatal("single destination not stored inline")
+	}
+	if !sender.hasSingleRev || sender.singleRevFrom != target.AddrPort() || sender.singleRevTo != origin.AddrPort() {
+		t.Fatal("single reverse mapping not stored inline")
+	}
+	if got := sender.targetAddress(origin); got == nil || got.AddrPort() != target.AddrPort() {
+		t.Fatalf("inline targetAddress = %v", got)
+	}
+	if got := sender.RestoreReadFrom(target.AddrPort()); got != origin.AddrPort() {
+		t.Fatalf("inline RestoreReadFrom = %s", got)
+	}
+
+	// Duplicate origin must not promote.
+	if !sender.addMapping(origin, target) {
+		t.Fatal("duplicate origin rejected")
+	}
+	if sender.originToTarget != nil || sender.targetToOrigin != nil {
+		t.Fatal("duplicate origin allocated maps")
+	}
+}
+
+func TestPacketSenderReverseMappingFirstWins(t *testing.T) {
+	sender := newPacketSender().(*packetSender)
+	t.Cleanup(sender.Close)
+	target := &C.Metadata{DstIP: netip.MustParseAddr("198.51.100.1"), DstPort: 53}
+	firstOrigin := &C.Metadata{DstIP: netip.MustParseAddr("192.0.2.1"), DstPort: 53}
+	secondOrigin := &C.Metadata{DstIP: netip.MustParseAddr("192.0.2.2"), DstPort: 53}
+	sender.AddMapping(firstOrigin, target)
+	sender.AddMapping(secondOrigin, target)
+
+	if got := sender.RestoreReadFrom(target.AddrPort()); got != firstOrigin.AddrPort() {
+		t.Fatalf("reverse collision restored %s, want first origin", got)
+	}
+	if got := sender.targetAddress(secondOrigin); got == nil || got.AddrPort() != target.AddrPort() {
+		t.Fatalf("second origin lost forward mapping: %v", got)
+	}
+	if sender.originToTarget == nil {
+		t.Fatal("two origins should promote origin map")
+	}
+	if sender.targetToOrigin != nil || !sender.hasSingleRev {
+		t.Fatal("same target should keep reverse inline (first-wins)")
+	}
+}
+
+func TestPacketSenderPromoteWithConcurrentRestore(t *testing.T) {
+	sender := newPacketSender().(*packetSender)
+	t.Cleanup(sender.Close)
+
+	firstOrigin := &C.Metadata{DstIP: netip.MustParseAddr("192.0.2.10"), DstPort: 53}
+	firstTarget := &C.Metadata{DstIP: netip.MustParseAddr("198.51.100.10"), DstPort: 53}
+	secondOrigin := &C.Metadata{DstIP: netip.MustParseAddr("192.0.2.11"), DstPort: 443}
+	secondTarget := &C.Metadata{DstIP: netip.MustParseAddr("198.51.100.11"), DstPort: 443}
+	if !sender.addMapping(firstOrigin, firstTarget) {
+		t.Fatal("first mapping rejected")
+	}
+
+	const readers = 8
+	var wg sync.WaitGroup
+	var ready sync.WaitGroup
+	var failed atomic.Int64
+	start := make(chan struct{})
+	stop := make(chan struct{})
+	wg.Add(readers)
+	ready.Add(readers)
+	for i := 0; i < readers; i++ {
+		go func() {
+			defer wg.Done()
+			<-start
+			for n := 0; n < 64; n++ {
+				if got := sender.RestoreReadFrom(firstTarget.AddrPort()); got != firstOrigin.AddrPort() {
+					failed.Add(1)
+					ready.Done()
+					return
+				}
+			}
+			ready.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				if got := sender.RestoreReadFrom(firstTarget.AddrPort()); got != firstOrigin.AddrPort() {
+					failed.Add(1)
+					return
+				}
+			}
+		}()
+	}
+	close(start)
+	ready.Wait()
+	if !sender.addMapping(secondOrigin, secondTarget) {
+		close(stop)
+		wg.Wait()
+		t.Fatal("second mapping rejected")
+	}
+	close(stop)
+	wg.Wait()
+	if n := failed.Load(); n != 0 {
+		t.Fatalf("restore observed missing first mapping during promote (%d)", n)
+	}
+	if got := sender.RestoreReadFrom(secondTarget.AddrPort()); got != secondOrigin.AddrPort() {
+		t.Fatalf("second restore = %s", got)
+	}
+	if sender.targetToOrigin == nil {
+		t.Fatal("expected reverse map after second distinct target")
+	}
+}
+
 func TestPacketSenderCloseDoesNotStrandInflightSend(t *testing.T) {
 	const packets = 256
 	for i := 0; i < 50; i++ {
