@@ -44,8 +44,136 @@ type record struct {
 }
 
 type addressRecords struct {
-	byHost   map[string]record
-	lastSeen uint64
+	// hasPrimary is the occupancy flag for host/rec. ObserveDNS rejects empty
+	// names, but fixtures and overflow promotion must not treat host=="" as
+	// absent — an explicit flag keeps the invariant independent of that filter.
+	hasPrimary bool
+	host       string
+	rec        record
+	extra      map[string]record // nil unless a second host is stored
+	lastSeen   uint64
+}
+
+func (a *addressRecords) lookup(host string) (record, bool) {
+	if a.hasPrimary && a.host == host {
+		return a.rec, true
+	}
+	if a.extra == nil {
+		return record{}, false
+	}
+	rec, ok := a.extra[host]
+	return rec, ok
+}
+
+func (a *addressRecords) upsert(host string, rec record) (prev record, existed bool) {
+	if a.hasPrimary && a.host == host {
+		prev = a.rec
+		a.rec = rec
+		return prev, true
+	}
+	if a.extra != nil {
+		if prev, existed = a.extra[host]; existed {
+			a.extra[host] = rec
+			return prev, true
+		}
+	}
+	if !a.hasPrimary {
+		a.host = host
+		a.rec = rec
+		a.hasPrimary = true
+		return record{}, false
+	}
+	if a.extra == nil {
+		a.extra = make(map[string]record)
+	}
+	a.extra[host] = rec
+	return record{}, false
+}
+
+func (a *addressRecords) setExisting(host string, rec record) {
+	if a.hasPrimary && a.host == host {
+		a.rec = rec
+		return
+	}
+	a.extra[host] = rec
+}
+
+func (a *addressRecords) remove(host string) bool {
+	if a.hasPrimary && a.host == host {
+		a.clearPrimary()
+		a.promoteFromExtra()
+		return true
+	}
+	if a.extra == nil {
+		return false
+	}
+	if _, ok := a.extra[host]; !ok {
+		return false
+	}
+	delete(a.extra, host)
+	if len(a.extra) == 0 {
+		a.extra = nil
+	}
+	return true
+}
+
+func (a *addressRecords) clearPrimary() {
+	a.hasPrimary = false
+	a.host = ""
+	a.rec = record{}
+}
+
+func (a *addressRecords) promoteFromExtra() {
+	if a.hasPrimary {
+		return
+	}
+	for host, rec := range a.extra {
+		a.host = host
+		a.rec = rec
+		a.hasPrimary = true
+		delete(a.extra, host)
+		break
+	}
+	if len(a.extra) == 0 {
+		a.extra = nil
+	}
+}
+
+func (a *addressRecords) lenHosts() int {
+	n := len(a.extra)
+	if a.hasPrimary {
+		n++
+	}
+	return n
+}
+
+func (a *addressRecords) empty() bool {
+	return !a.hasPrimary && len(a.extra) == 0
+}
+
+func (a *addressRecords) forEach(fn func(host string, rec record) bool) {
+	if a.hasPrimary {
+		if !fn(a.host, a.rec) {
+			return
+		}
+	}
+	for host, rec := range a.extra {
+		if !fn(host, rec) {
+			return
+		}
+	}
+}
+
+func (a *addressRecords) proxyOrDirect() (proxy, direct bool) {
+	a.forEach(func(_ string, rec record) bool {
+		if rec.direct {
+			direct = true
+			return true
+		}
+		proxy = true
+		return false
+	})
+	return proxy, direct
 }
 
 type ControllerOptions struct {
@@ -262,7 +390,7 @@ func (c *controller) observe(host string, answers []DNSAnswer) {
 		address := c.records[item.addr]
 		hostExists := false
 		if address != nil {
-			_, hostExists = address.byHost[host]
+			_, hostExists = address.lookup(host)
 		}
 		if !hostExists && c.recordsLen >= c.maxRecords {
 			if address != nil {
@@ -275,7 +403,7 @@ func (c *controller) observe(host string, answers []DNSAnswer) {
 				// observations stay. Drop DIRECT hosts on this address first.
 				before := c.recordsLen
 				c.dropDirectHostsLocked(address)
-				if len(address.byHost) == 0 {
+				if address.empty() {
 					delete(c.records, item.addr)
 					address = nil
 				}
@@ -310,17 +438,17 @@ func (c *controller) observe(host string, answers []DNSAnswer) {
 			if uint32(len(c.records)) >= c.maxEntries {
 				continue
 			}
-			address = &addressRecords{byHost: make(map[string]record)}
+			address = &addressRecords{}
 			c.records[item.addr] = address
 		}
 		c.touchLocked(address)
-		if prev, exists := address.byHost[host]; !exists {
+		prev, exists := address.upsert(host, record{direct: item.direct, expires: item.expires})
+		if !exists {
 			c.recordsLen++
 			dirty = true
 		} else if prev.direct != item.direct {
 			dirty = true
 		}
-		address.byHost[host] = record{direct: item.direct, expires: item.expires}
 		if c.nextExpiry.IsZero() || item.expires.Before(c.nextExpiry) {
 			c.nextExpiry = item.expires
 		}
@@ -364,7 +492,7 @@ func (c *controller) refreshExistingLocked(host string, answers []DNSAnswer, now
 		if address == nil {
 			return false, nil
 		}
-		prev, exists := address.byHost[host]
+		prev, exists := address.lookup(host)
 		if !exists || !prev.expires.After(now) {
 			return false, nil
 		}
@@ -386,8 +514,8 @@ func (c *controller) refreshExistingLocked(host string, answers []DNSAnswer, now
 		}
 		expires := now.Add(ttl)
 		address := c.records[addr]
-		prev := address.byHost[host]
-		address.byHost[host] = record{direct: prev.direct, expires: expires}
+		prev, _ := address.lookup(host)
+		address.setExisting(host, record{direct: prev.direct, expires: expires})
 		c.touchLocked(address)
 		if c.nextExpiry.IsZero() || expires.Before(c.nextExpiry) {
 			c.nextExpiry = expires
@@ -468,18 +596,34 @@ func (c *controller) removeExpiredLocked(now time.Time) bool {
 	changed := false
 	nextExpiry := time.Time{}
 	for addr, address := range c.records {
-		for host, item := range address.byHost {
-			if !item.expires.After(now) {
-				delete(address.byHost, host)
-				c.decRecordsLenLocked(1)
-				changed = true
-				continue
+		if address.extra != nil {
+			for host, item := range address.extra {
+				if !item.expires.After(now) {
+					delete(address.extra, host)
+					c.decRecordsLenLocked(1)
+					changed = true
+					continue
+				}
+				if nextExpiry.IsZero() || item.expires.Before(nextExpiry) {
+					nextExpiry = item.expires
+				}
 			}
-			if nextExpiry.IsZero() || item.expires.Before(nextExpiry) {
-				nextExpiry = item.expires
+			if len(address.extra) == 0 {
+				address.extra = nil
 			}
 		}
-		if len(address.byHost) == 0 {
+		if address.hasPrimary {
+			if !address.rec.expires.After(now) {
+				address.clearPrimary()
+				address.promoteFromExtra()
+				c.decRecordsLenLocked(1)
+				changed = true
+			}
+		}
+		if address.hasPrimary && (nextExpiry.IsZero() || address.rec.expires.Before(nextExpiry)) {
+			nextExpiry = address.rec.expires
+		}
+		if address.empty() {
 			delete(c.records, addr)
 		}
 	}
@@ -506,11 +650,21 @@ func (c *controller) touchLocked(address *addressRecords) {
 }
 
 func (c *controller) dropDirectHostsLocked(address *addressRecords) {
-	for host, item := range address.byHost {
-		if item.direct {
-			delete(address.byHost, host)
-			c.decRecordsLenLocked(1)
+	if address.extra != nil {
+		for host, item := range address.extra {
+			if item.direct {
+				delete(address.extra, host)
+				c.decRecordsLenLocked(1)
+			}
 		}
+		if len(address.extra) == 0 {
+			address.extra = nil
+		}
+	}
+	if address.hasPrimary && address.rec.direct {
+		address.clearPrimary()
+		address.promoteFromExtra()
+		c.decRecordsLenLocked(1)
 	}
 }
 
@@ -518,13 +672,14 @@ func (c *controller) dropOldestHostLocked(address *addressRecords, incomingExpir
 	var oldestHost string
 	var oldestExpires time.Time
 	found := false
-	for host, item := range address.byHost {
+	address.forEach(func(host string, item record) bool {
 		if !found || item.expires.Before(oldestExpires) {
 			oldestHost = host
 			oldestExpires = item.expires
 			found = true
 		}
-	}
+		return true
+	})
 	if !found {
 		return false
 	}
@@ -533,7 +688,9 @@ func (c *controller) dropOldestHostLocked(address *addressRecords, incomingExpir
 	if oldestExpires.After(incomingExpires) {
 		return false
 	}
-	delete(address.byHost, oldestHost)
+	if !address.remove(oldestHost) {
+		return false
+	}
 	c.decRecordsLenLocked(1)
 	return true
 }
@@ -551,7 +708,7 @@ func (c *controller) evictOldestLocked() bool {
 		c.healRecordsLenLocked()
 		return false
 	}
-	c.decRecordsLenLocked(uint64(len(c.records[oldestAddr].byHost)))
+	c.decRecordsLenLocked(uint64(c.records[oldestAddr].lenHosts()))
 	delete(c.records, oldestAddr)
 	c.evictions++
 	return true
@@ -578,16 +735,7 @@ func (c *controller) buildSetsLocked() DecisionSets {
 	var directBuilder netipx.IPSetBuilder
 	var proxyBuilder netipx.IPSetBuilder
 	for addr, address := range c.records {
-		direct := false
-		proxy := false
-		for _, item := range address.byHost {
-			if item.direct {
-				direct = true
-			} else {
-				proxy = true
-				break
-			}
-		}
+		proxy, direct := address.proxyOrDirect()
 		// Proxy wins when multiple domains share an address.
 		if proxy {
 			proxyBuilder.Add(addr)
@@ -614,16 +762,7 @@ func (c *controller) status() ControllerStatus {
 	}
 	status := ControllerStatus{MaxEntries: c.maxEntries, MaxRecords: uint32(c.maxRecords), LearnedAddresses: len(c.records), LearnedDomains: int(c.recordsLen), Evictions: c.evictions}
 	for _, address := range c.records {
-		proxy := false
-		direct := false
-		for _, item := range address.byHost {
-			if item.direct {
-				direct = true
-			} else {
-				proxy = true
-				break
-			}
-		}
+		proxy, direct := address.proxyOrDirect()
 		if proxy {
 			status.ProxyAddresses++
 		} else if direct {

@@ -3,9 +3,11 @@ package kerneldirect
 import (
 	"io"
 	"math"
+	"math/rand"
 	"net/netip"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -273,8 +275,10 @@ func TestControllerExpiresBeforeEvictingLiveAddress(t *testing.T) {
 	live := netip.MustParseAddr("203.0.113.11")
 	c.mu.Lock()
 	c.records[expired] = &addressRecords{
-		byHost:   map[string]record{"expired.example": {direct: true, expires: time.Now().Add(-time.Second)}},
-		lastSeen: 1,
+		hasPrimary: true,
+		host:       "expired.example",
+		rec:        record{direct: true, expires: time.Now().Add(-time.Second)},
+		lastSeen:   1,
 	}
 	c.recordsLen = 1
 	c.sequence = 1
@@ -358,13 +362,13 @@ func TestControllerProxyCollapseKeepsLongerLivedProxy(t *testing.T) {
 		t.Fatal("address must stay PROXY after a full-budget PROXY observation")
 	}
 	c.mu.Lock()
-	if _, kept := c.records[addr].byHost["p1.example"]; !kept {
+	if _, kept := c.records[addr].lookup("p1.example"); !kept {
 		c.mu.Unlock()
 		t.Fatal("collapse must not discard a still-valid PROXY host")
 	}
-	if rec, ok := c.records[addr].byHost["p2.example"]; ok {
+	if rec, ok := c.records[addr].lookup("p2.example"); ok {
 		rec.expires = time.Now().Add(-time.Second)
-		c.records[addr].byHost["p2.example"] = rec
+		c.records[addr].setExisting("p2.example", rec)
 	}
 	c.mu.Unlock()
 
@@ -373,7 +377,7 @@ func TestControllerProxyCollapseKeepsLongerLivedProxy(t *testing.T) {
 		t.Fatal("expiring the short-lived PROXY host must not expose leftover DIRECT")
 	}
 	c.mu.Lock()
-	_, kept := c.records[addr].byHost["p1.example"]
+	_, kept := c.records[addr].lookup("p1.example")
 	c.mu.Unlock()
 	if !kept {
 		t.Fatal("longer-lived PROXY observation must survive p2 expiry")
@@ -386,15 +390,12 @@ func TestControllerExpiresDomainRecordsBeforeRejectingNewHost(t *testing.T) {
 
 	addr := netip.MustParseAddr("203.0.113.31")
 	c.mu.Lock()
-	c.records[addr] = &addressRecords{
-		byHost: map[string]record{
-			"one.example":   {direct: true, expires: time.Now().Add(-time.Second)},
-			"two.example":   {direct: true, expires: time.Now().Add(time.Minute)},
-			"three.example": {direct: true, expires: time.Now().Add(time.Minute)},
-			"four.example":  {direct: true, expires: time.Now().Add(time.Minute)},
-		},
-		lastSeen: 4,
-	}
+	seeded := &addressRecords{lastSeen: 4}
+	seeded.upsert("one.example", record{direct: true, expires: time.Now().Add(-time.Second)})
+	seeded.upsert("two.example", record{direct: true, expires: time.Now().Add(time.Minute)})
+	seeded.upsert("three.example", record{direct: true, expires: time.Now().Add(time.Minute)})
+	seeded.upsert("four.example", record{direct: true, expires: time.Now().Add(time.Minute)})
+	c.records[addr] = seeded
 	c.recordsLen = 4
 	c.sequence = 4
 	c.mu.Unlock()
@@ -405,8 +406,8 @@ func TestControllerExpiresDomainRecordsBeforeRejectingNewHost(t *testing.T) {
 		t.Fatalf("expired host should free a domain slot without eviction: %+v", status)
 	}
 	c.mu.Lock()
-	_, added := c.records[addr].byHost["five.example"]
-	_, expired := c.records[addr].byHost["one.example"]
+	_, added := c.records[addr].lookup("five.example")
+	_, expired := c.records[addr].lookup("one.example")
 	c.mu.Unlock()
 	if !added || expired {
 		t.Fatal("expired domain record must be replaced by the new host")
@@ -454,8 +455,8 @@ func TestControllerSequenceWrapKeepsOldestEviction(t *testing.T) {
 	newer := netip.MustParseAddr("203.0.113.51")
 	incoming := netip.MustParseAddr("203.0.113.52")
 	c.mu.Lock()
-	c.records[older] = &addressRecords{byHost: map[string]record{"older.example": {direct: true, expires: time.Now().Add(time.Minute)}}, lastSeen: 1}
-	c.records[newer] = &addressRecords{byHost: map[string]record{"newer.example": {direct: true, expires: time.Now().Add(time.Minute)}}, lastSeen: math.MaxUint64}
+	c.records[older] = &addressRecords{hasPrimary: true, host: "older.example", rec: record{direct: true, expires: time.Now().Add(time.Minute)}, lastSeen: 1}
+	c.records[newer] = &addressRecords{hasPrimary: true, host: "newer.example", rec: record{direct: true, expires: time.Now().Add(time.Minute)}, lastSeen: math.MaxUint64}
 	c.recordsLen = 2
 	c.sequence = math.MaxUint64
 	c.mu.Unlock()
@@ -532,7 +533,7 @@ func countLearnedDomains(c *controller) int {
 
 	count := 0
 	for _, address := range c.records {
-		count += len(address.byHost)
+		count += address.lenHosts()
 	}
 	return count
 }
@@ -749,8 +750,8 @@ func TestControllerKeepsLongerLivedProxyUnderHostBudget(t *testing.T) {
 	ObserveDNS("short.example", []DNSAnswer{{Addr: addr, TTL: time.Second}})
 
 	c.mu.Lock()
-	_, kept := c.records[addr].byHost["long.example"]
-	_, added := c.records[addr].byHost["short.example"]
+	_, kept := c.records[addr].lookup("long.example")
+	_, added := c.records[addr].lookup("short.example")
 	recordsLen := c.recordsLen
 	c.mu.Unlock()
 	if !kept {
@@ -785,8 +786,8 @@ func TestControllerReplacesShorterLivedProxyUnderHostBudget(t *testing.T) {
 	ObserveDNS("long.example", []DNSAnswer{{Addr: addr, TTL: time.Hour}})
 
 	c.mu.Lock()
-	_, dropped := c.records[addr].byHost["short.example"]
-	_, added := c.records[addr].byHost["long.example"]
+	_, dropped := c.records[addr].lookup("short.example")
+	_, added := c.records[addr].lookup("long.example")
 	recordsLen := c.recordsLen
 	c.mu.Unlock()
 	if dropped {
@@ -1222,7 +1223,7 @@ func TestControllerRefreshDoesNotReclassifyUnexpired(t *testing.T) {
 	}
 
 	c.mu.Lock()
-	rec, ok := c.records[addr].byHost["refresh.example"]
+	rec, ok := c.records[addr].lookup("refresh.example")
 	lastSeen := c.records[addr].lastSeen
 	seq := c.sequence
 	c.mu.Unlock()
@@ -1284,6 +1285,194 @@ func TestControllerRefreshKeepsCachedDecisionUntilFlush(t *testing.T) {
 	}
 	if !afterFlushProxy {
 		t.Fatal("after Flush, classifier=false must learn PROXY")
+	}
+}
+
+func TestAddressRecordsPrimaryOverflowAndPromotion(t *testing.T) {
+	tests := []struct {
+		name           string
+		ops            func(*addressRecords)
+		wantPrimary    string
+		wantHosts      []string
+		wantExtraNil   bool
+		wantHasPrimary bool
+	}{
+		{
+			name: "first host stays primary without extra map",
+			ops: func(a *addressRecords) {
+				a.upsert("a.example", record{direct: true})
+			},
+			wantPrimary:    "a.example",
+			wantHosts:      []string{"a.example"},
+			wantExtraNil:   true,
+			wantHasPrimary: true,
+		},
+		{
+			name: "second host allocates overflow",
+			ops: func(a *addressRecords) {
+				a.upsert("a.example", record{direct: true})
+				a.upsert("b.example", record{direct: false})
+			},
+			wantPrimary:    "a.example",
+			wantHosts:      []string{"a.example", "b.example"},
+			wantExtraNil:   false,
+			wantHasPrimary: true,
+		},
+		{
+			name: "removing primary promotes overflow and nils empty extra",
+			ops: func(a *addressRecords) {
+				a.upsert("a.example", record{direct: true})
+				a.upsert("b.example", record{direct: false})
+				if !a.remove("a.example") {
+					t.Fatal("remove primary returned false")
+				}
+			},
+			wantPrimary:    "b.example",
+			wantHosts:      []string{"b.example"},
+			wantExtraNil:   true,
+			wantHasPrimary: true,
+		},
+		{
+			name: "removing overflow nils extra and keeps primary",
+			ops: func(a *addressRecords) {
+				a.upsert("a.example", record{direct: true})
+				a.upsert("b.example", record{direct: false})
+				if !a.remove("b.example") {
+					t.Fatal("remove overflow returned false")
+				}
+			},
+			wantPrimary:    "a.example",
+			wantHosts:      []string{"a.example"},
+			wantExtraNil:   true,
+			wantHasPrimary: true,
+		},
+		{
+			name: "removing last host clears presence",
+			ops: func(a *addressRecords) {
+				a.upsert("a.example", record{direct: true})
+				a.remove("a.example")
+			},
+			wantPrimary:    "",
+			wantHosts:      nil,
+			wantExtraNil:   true,
+			wantHasPrimary: false,
+		},
+		{
+			name: "empty-string host is distinct occupancy via hasPrimary",
+			ops: func(a *addressRecords) {
+				a.upsert("", record{direct: true})
+				a.upsert("b.example", record{direct: false})
+				a.remove("")
+			},
+			wantPrimary:    "b.example",
+			wantHosts:      []string{"b.example"},
+			wantExtraNil:   true,
+			wantHasPrimary: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			a := &addressRecords{}
+			test.ops(a)
+			if a.hasPrimary != test.wantHasPrimary {
+				t.Fatalf("hasPrimary=%v, want %v", a.hasPrimary, test.wantHasPrimary)
+			}
+			if a.host != test.wantPrimary {
+				t.Fatalf("primary=%q, want %q", a.host, test.wantPrimary)
+			}
+			if got := a.extra == nil; got != test.wantExtraNil {
+				t.Fatalf("extra nil=%v, want %v (len=%d)", got, test.wantExtraNil, len(a.extra))
+			}
+			if a.lenHosts() != len(test.wantHosts) {
+				t.Fatalf("lenHosts=%d, want %d", a.lenHosts(), len(test.wantHosts))
+			}
+			for _, host := range test.wantHosts {
+				if _, ok := a.lookup(host); !ok {
+					t.Fatalf("missing host %q", host)
+				}
+			}
+			if a.hasPrimary && a.extra != nil {
+				if _, dup := a.extra[a.host]; dup {
+					t.Fatalf("primary %q duplicated in extra", a.host)
+				}
+			}
+		})
+	}
+}
+
+func TestControllerHostAccountingRandomized(t *testing.T) {
+	c := Register(func(host string, _ netip.Addr) bool {
+		return host != "proxy.example" && !strings.HasPrefix(host, "p-")
+	}, func(DecisionSets) {}, ControllerOptions{MaxEntries: 16}).(*controller)
+	defer c.Close()
+
+	rng := rand.New(rand.NewSource(1))
+	const nAddr = 24
+	addrs := make([]netip.Addr, nAddr)
+	for i := range addrs {
+		addrs[i] = netip.AddrFrom4([4]byte{203, 0, 113, byte(i + 1)})
+	}
+	hosts := []string{"a.example", "b.example", "c.example", "proxy.example", "p-1.example", "direct.example"}
+
+	for i := 0; i < 400; i++ {
+		switch rng.Intn(7) {
+		case 0, 1, 2, 3:
+			host := hosts[rng.Intn(len(hosts))]
+			addr := addrs[rng.Intn(len(addrs))]
+			ObserveDNS(host, []DNSAnswer{{Addr: addr, TTL: time.Minute}})
+		case 4:
+			Flush()
+		case 5:
+			_ = Statuses()
+		case 6:
+			c.mu.Lock()
+			for _, address := range c.records {
+				expired := false
+				address.forEach(func(host string, rec record) bool {
+					if !expired && rng.Intn(3) == 0 {
+						rec.expires = time.Now().Add(-time.Second)
+						address.setExisting(host, rec)
+						expired = true
+					}
+					return !expired
+				})
+				if expired {
+					break
+				}
+			}
+			c.nextExpiry = time.Time{}
+			c.mu.Unlock()
+			ObserveDNS("direct.example", []DNSAnswer{{Addr: addrs[0], TTL: time.Minute}})
+		}
+		assertHostInvariants(t, c)
+	}
+}
+
+func assertHostInvariants(t *testing.T, c *controller) {
+	t.Helper()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	hosts := 0
+	for addr, address := range c.records {
+		if address.empty() {
+			t.Fatalf("empty address node retained for %s", addr)
+		}
+		if address.extra != nil && len(address.extra) == 0 {
+			t.Fatalf("empty extra map retained for %s", addr)
+		}
+		if !address.hasPrimary && address.extra != nil {
+			t.Fatalf("overflow without primary for %s", addr)
+		}
+		if address.hasPrimary && address.extra != nil {
+			if _, dup := address.extra[address.host]; dup {
+				t.Fatalf("primary %q duplicated in extra for %s", address.host, addr)
+			}
+		}
+		hosts += address.lenHosts()
+	}
+	if uint64(hosts) != c.recordsLen {
+		t.Fatalf("recordsLen=%d actual hosts=%d", c.recordsLen, hosts)
 	}
 }
 
