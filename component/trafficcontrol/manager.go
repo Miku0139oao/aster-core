@@ -94,6 +94,11 @@ type runtimePolicy struct {
 	overageUpload   *rate.Limiter
 	overageDownload *rate.Limiter
 	bucketWidthSecs int64
+	// dimension, self, and singletonKeys are immutable after construction.
+	// bindSession may share them with a singleton match; never append.
+	dimension     string
+	self          []*runtimePolicy
+	singletonKeys []string
 }
 
 type runtimeState struct {
@@ -398,6 +403,9 @@ func newRuntimePolicy(spec Policy, state *policyState) *runtimePolicy {
 		upload: newLimiter(spec.UploadBPS), download: newLimiter(spec.DownloadBPS),
 		overageUpload: newLimiter(spec.Quota.OverageUploadBPS), overageDownload: newLimiter(spec.Quota.OverageDownloadBPS),
 	}
+	policy.dimension = string(spec.Kind) + ":" + spec.ID
+	policy.self = []*runtimePolicy{policy}
+	policy.singletonKeys = []string{policy.dimension}
 	if spec.Quota.Window > 0 {
 		policy.bucketWidthSecs = quotaBucketWidthSecs(spec.Quota.Window)
 		state.mu.Lock()
@@ -461,23 +469,60 @@ func cloneFlow(flow Flow) Flow {
 }
 
 func (m *Manager) bindSession(runtime *runtimeState, flow Flow) *sessionBinding {
+	// Always return a runtime-tagged binding, including the empty miss. Open
+	// discards misses; currentBinding caches them so a live session that rebinds
+	// to no-match (or disabled) does not rescan every packet.
 	binding := &sessionBinding{runtime: runtime}
 	if runtime == nil || runtime.config == nil {
 		return binding
 	}
-	canonicalRule := CanonicalRule(flow.RuleType, flow.RulePayload, flow.RuleTarget)
-	binding.policies = make([]*runtimePolicy, 0, 5)
-	binding.dimensions = make([]string, 0, 4)
+	var (
+		canonicalRule RuleSelector
+		haveRule      bool
+		first         *runtimePolicy
+		matched       []*runtimePolicy
+	)
 	for _, policy := range runtime.policies {
-		if !policy.spec.Enabled || !policyMatches(policy.spec, flow, canonicalRule) {
+		if !policy.spec.Enabled {
+			continue
+		}
+		if policy.spec.Kind == PolicyRule && !haveRule {
+			canonicalRule = CanonicalRule(flow.RuleType, flow.RulePayload, flow.RuleTarget)
+			haveRule = true
+		}
+		if !policyMatches(policy.spec, flow, canonicalRule) {
 			continue
 		}
 		policy.refreshQuota(m.now())
-		binding.policies = append(binding.policies, policy)
 		policy.state.Active.Add(1)
-		binding.dimensions = append(binding.dimensions, string(policy.spec.Kind)+":"+policy.spec.ID)
+		if first == nil {
+			first = policy
+			continue
+		}
+		if matched == nil {
+			matched = make([]*runtimePolicy, 0, 5)
+			matched = append(matched, first, policy)
+			continue
+		}
+		matched = append(matched, policy)
 	}
-	binding.dimensions = uniqueStrings(binding.dimensions)
+	if first == nil {
+		return binding
+	}
+	if matched == nil {
+		binding.policies = first.self
+		binding.dimensions = first.singletonKeys
+		if runtime.config.Reports.Enabled {
+			binding.reportKeys = first.singletonKeys
+		}
+		return binding
+	}
+	binding.policies = matched
+	dimensions := make([]string, 0, len(matched))
+	for _, policy := range matched {
+		dimensions = append(dimensions, policy.dimension)
+	}
+	binding.dimensions = uniqueStrings(dimensions)
 	if runtime.config.Reports.Enabled {
 		binding.reportKeys = reportKeys(binding.dimensions)
 	}

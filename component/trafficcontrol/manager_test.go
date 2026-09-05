@@ -15,6 +15,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func samePolicySlice(left, right []*runtimePolicy) bool {
+	return len(left) > 0 && len(right) == len(left) && &left[0] == &right[0]
+}
+
+func sameStringSlice(left, right []string) bool {
+	return len(left) > 0 && len(right) == len(left) && &left[0] == &right[0]
+}
+
 func testManagerConfig(path string) *Config {
 	return &Config{
 		Enabled: true, StorePath: path, CheckpointInterval: time.Hour, MaxStoreSize: DefaultStoreLimit,
@@ -456,6 +464,176 @@ func TestRecordDoesNotFalseExceedFromStaleRollingWindow(t *testing.T) {
 	require.Zero(t, state.Counters.ExceededEvents)
 	require.Equal(t, int64(20), state.rolling.UploadBytes)
 	session.Close()
+}
+
+func TestSingletonBindingSharesInternedSlices(t *testing.T) {
+	manager := NewManager()
+	now := time.Date(2026, time.August, 6, 12, 0, 0, 0, time.UTC)
+	manager.now = func() time.Time { return now }
+	config := testManagerConfig(filepath.Join(t.TempDir(), "traffic.db"))
+	config.Policies = config.Policies[:1]
+	require.NoError(t, manager.Configure(config))
+	defer manager.Close()
+
+	first := manager.Open(Flow{})
+	second := manager.Open(Flow{})
+	require.NotNil(t, first)
+	require.NotNil(t, second)
+	defer first.Close()
+	defer second.Close()
+
+	policy := manager.runtime.Load().policies[0]
+	firstBinding, secondBinding := first.binding.Load(), second.binding.Load()
+	require.True(t, samePolicySlice(policy.self, firstBinding.policies))
+	require.True(t, samePolicySlice(firstBinding.policies, secondBinding.policies))
+	require.True(t, sameStringSlice(policy.singletonKeys, firstBinding.dimensions))
+	require.True(t, sameStringSlice(firstBinding.dimensions, secondBinding.dimensions))
+	require.True(t, sameStringSlice(policy.singletonKeys, firstBinding.reportKeys))
+	require.True(t, sameStringSlice(firstBinding.reportKeys, secondBinding.reportKeys))
+	require.Equal(t, []string{"global:global"}, policy.singletonKeys)
+	require.Equal(t, int64(2), policy.state.Active.Load())
+
+	first.Record(Upload, 4)
+	second.Record(Download, 6)
+	hourly, err := manager.Reports("global:global", "hour", manager.now().Add(-time.Hour), manager.now().Add(time.Hour))
+	require.NoError(t, err)
+	require.Equal(t, []UsageBucket{{
+		Start:    manager.now().Unix() / 3600 * 3600,
+		Counters: Counters{UploadBytes: 4, DownloadBytes: 6, Connections: 2},
+	}}, hourly)
+}
+
+func TestMultiMatchBindingsAreIndependentAndDedup(t *testing.T) {
+	manager := NewManager()
+	require.NoError(t, manager.Configure(testManagerConfig(filepath.Join(t.TempDir(), "traffic.db"))))
+	defer manager.Close()
+
+	flow := Flow{SourceIP: netip.MustParseAddr("192.0.2.9"), RuleType: "DomainSuffix", RulePayload: "example.com", RuleTarget: "Proxy", Chains: []string{"edge", "Proxy"}}
+	first := manager.Open(flow)
+	second := manager.Open(flow)
+	require.NotNil(t, first)
+	require.NotNil(t, second)
+	defer first.Close()
+	defer second.Close()
+
+	firstBinding, secondBinding := first.binding.Load(), second.binding.Load()
+	require.Len(t, firstBinding.policies, 4)
+	require.Equal(t, firstBinding.policies, secondBinding.policies)
+	require.False(t, samePolicySlice(firstBinding.policies, secondBinding.policies))
+	require.False(t, samePolicySlice(firstBinding.policies, firstBinding.policies[0].self))
+
+	wantDimensions := []string{"global:global", "device:phone", "rule:rule", "target:target"}
+	require.Equal(t, wantDimensions, firstBinding.dimensions)
+	require.Equal(t, wantDimensions, secondBinding.dimensions)
+	require.False(t, sameStringSlice(firstBinding.dimensions, secondBinding.dimensions))
+	require.Equal(t, reportKeys(wantDimensions), firstBinding.reportKeys)
+	require.Equal(t, firstBinding.reportKeys, secondBinding.reportKeys)
+	require.False(t, sameStringSlice(firstBinding.reportKeys, secondBinding.reportKeys))
+
+	duplicate := NewManager()
+	leftState := &policyState{ID: "global", Buckets: make(map[int64]Counters)}
+	rightState := &policyState{ID: "global", Buckets: make(map[int64]Counters)}
+	left := newRuntimePolicy(Policy{ID: "global", Kind: PolicyGlobal, Enabled: true}, leftState)
+	right := newRuntimePolicy(Policy{ID: "global", Kind: PolicyGlobal, Enabled: true}, rightState)
+	duplicate.runtime.Store(&runtimeState{
+		config:   &Config{Enabled: true, Reports: ReportsConfig{Enabled: true}},
+		policies: []*runtimePolicy{left, right},
+	})
+	session := duplicate.Open(Flow{})
+	require.NotNil(t, session)
+	defer session.Close()
+	binding := session.binding.Load()
+	require.Len(t, binding.policies, 2)
+	require.Equal(t, []string{"global:global"}, binding.dimensions)
+	require.Equal(t, []string{"global:global"}, binding.reportKeys)
+	require.False(t, sameStringSlice(left.singletonKeys, binding.dimensions))
+}
+
+func TestOpenMissesAllPolicyKinds(t *testing.T) {
+	manager := NewManager()
+	config := testManagerConfig(filepath.Join(t.TempDir(), "traffic.db"))
+	config.Policies[0].Enabled = false
+	require.NoError(t, manager.Configure(config))
+	defer manager.Close()
+
+	require.Nil(t, manager.Open(Flow{}))
+	require.Nil(t, manager.Open(Flow{SourceIP: netip.MustParseAddr("198.51.100.9"), RuleType: "DOMAIN", RulePayload: "other.test", RuleTarget: "Direct", Chains: []string{"direct"}}))
+
+	matched := manager.Open(Flow{SourceIP: netip.MustParseAddr("192.0.2.9"), RuleType: "DomainSuffix", RulePayload: "example.com", RuleTarget: "Proxy", Chains: []string{"Proxy"}})
+	require.NotNil(t, matched)
+	require.Len(t, matched.binding.Load().policies, 3)
+	matched.Close()
+}
+
+func TestSessionRebindsFromNoMatchBackToPolicies(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "traffic.db")
+	manager := NewManager()
+	config := testManagerConfig(path)
+	require.NoError(t, manager.Configure(config))
+	defer manager.Close()
+
+	session := manager.Open(Flow{})
+	require.NotNil(t, session)
+	session.Record(Upload, 10)
+	state := session.binding.Load().policies[0].state
+	require.Equal(t, int64(1), state.Active.Load())
+
+	removed := config.Clone()
+	removed.Policies = nil
+	require.NoError(t, manager.Configure(removed))
+	session.Record(Upload, 1)
+	empty := session.binding.Load()
+	require.NotNil(t, empty)
+	require.Same(t, manager.runtime.Load(), empty.runtime)
+	require.Empty(t, empty.policies)
+	require.Equal(t, int64(0), state.Active.Load())
+	require.Equal(t, int64(10), state.Counters.UploadBytes)
+
+	session.Record(Upload, 1)
+	require.Same(t, empty, session.binding.Load())
+
+	require.NoError(t, manager.Configure(config))
+	session.Record(Upload, 7)
+	rebound := session.binding.Load()
+	require.NotSame(t, empty, rebound)
+	require.Same(t, manager.runtime.Load(), rebound.runtime)
+	require.Len(t, rebound.policies, 1)
+	require.True(t, samePolicySlice(rebound.policies[0].self, rebound.policies))
+	require.Equal(t, int64(1), rebound.policies[0].state.Active.Load())
+	require.Equal(t, int64(17), rebound.policies[0].state.Counters.UploadBytes)
+	session.Close()
+	require.Equal(t, int64(0), rebound.policies[0].state.Active.Load())
+}
+
+func TestConcurrentRecordAndConfigure(t *testing.T) {
+	manager := NewManager()
+	config := testManagerConfig(filepath.Join(t.TempDir(), "traffic.db"))
+	config.Policies[0].Quota = QuotaConfig{}
+	require.NoError(t, manager.Configure(config))
+	defer manager.Close()
+
+	flow := Flow{SourceIP: netip.MustParseAddr("192.0.2.9"), RuleType: "DomainSuffix", RulePayload: "example.com", RuleTarget: "Proxy", Chains: []string{"Proxy"}}
+	session := manager.Open(flow)
+	require.NotNil(t, session)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 200; i++ {
+			session.Record(Upload, 1)
+			session.Record(Download, 1)
+		}
+	}()
+	for i := 0; i < 20; i++ {
+		updated := config.Clone()
+		updated.Policies[0].UploadBPS = int64(8_000 + i)
+		require.NoError(t, manager.Configure(updated))
+	}
+	<-done
+	session.Close()
+	for _, policy := range manager.Status().Policies {
+		require.Zero(t, policy.Active)
+	}
 }
 
 func TestRecordRecoversAfterQuotaWindowWithoutRescanningEveryPacket(t *testing.T) {

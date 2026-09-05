@@ -1,6 +1,7 @@
 package trafficcontrol
 
 import (
+	"net/netip"
 	"testing"
 	"time"
 )
@@ -68,6 +69,61 @@ func BenchmarkSessionRecordParallel(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			session.Record(Upload, 1500)
+		}
+	})
+}
+
+func openBenchManager(reportsEnabled bool, policies []Policy) *Manager {
+	manager := NewManager()
+	now := time.Date(2026, time.August, 6, 12, 0, 0, 0, time.UTC)
+	manager.now = func() time.Time { return now }
+	runtime := &runtimeState{
+		config:   &Config{Enabled: true, Reports: ReportsConfig{Enabled: reportsEnabled}},
+		policies: make([]*runtimePolicy, 0, len(policies)),
+	}
+	for _, spec := range policies {
+		runtime.policies = append(runtime.policies, newRuntimePolicy(spec, &policyState{ID: spec.ID, Buckets: make(map[int64]Counters)}))
+	}
+	manager.runtime.Store(runtime)
+	return manager
+}
+
+func BenchmarkSessionOpen(b *testing.B) {
+	global := []Policy{{ID: "global", Kind: PolicyGlobal, Enabled: true}}
+	device := []Policy{{ID: "phone", Kind: PolicyDevice, Enabled: true, SourceCIDRs: []netip.Prefix{netip.MustParsePrefix("192.0.2.9/32")}}}
+	flow := Flow{}
+
+	b.Run("global", func(b *testing.B) {
+		manager := openBenchManager(false, global)
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			session := manager.Open(flow)
+			if session != nil {
+				session.Close()
+			}
+		}
+	})
+	b.Run("miss", func(b *testing.B) {
+		manager := openBenchManager(false, device)
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			session := manager.Open(flow)
+			if session != nil {
+				session.Close()
+			}
+		}
+	})
+	b.Run("reports", func(b *testing.B) {
+		manager := openBenchManager(true, global)
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			session := manager.Open(flow)
+			if session != nil {
+				session.Close()
+			}
 		}
 	})
 }
