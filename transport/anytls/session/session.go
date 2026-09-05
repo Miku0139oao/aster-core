@@ -561,6 +561,8 @@ func (s *Session) writeConn(b []byte) (n int, err error) {
 			}
 		} else {
 			s.sendPadding = false
+			s.padBuf = nil
+			s.pktSizes = nil
 		}
 	}
 
