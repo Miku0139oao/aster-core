@@ -27,15 +27,33 @@ func (ss *IpCidrSet) WriteBin(w io.Writer) (err error) {
 		return nil
 	}
 	buf := make([]byte, n*32)
-	i := 0
-	ss.forEachRange(func(r netipx.IPRange) bool {
-		from := r.From().As16()
-		to := r.To().As16()
-		copy(buf[i*32:], from[:])
-		copy(buf[i*32+16:], to[:])
-		i++
-		return true
-	})
+	if ss.merged {
+		// Preserve As16's IPv4-mapped encoding and IPv4-before-IPv6 order
+		// without reconstructing an IPRange and two Addr values per row.
+		for i, from := range ss.v4From {
+			row := buf[i*32 : (i+1)*32]
+			binary.BigEndian.PutUint16(row[10:12], 0xffff)
+			binary.BigEndian.PutUint32(row[12:16], from)
+			binary.BigEndian.PutUint16(row[26:28], 0xffff)
+			binary.BigEndian.PutUint32(row[28:32], ss.v4To[i])
+		}
+		offset := len(ss.v4From) * 32
+		for i, from := range ss.v6From {
+			row := buf[offset+i*32 : offset+(i+1)*32]
+			to := ss.v6To[i]
+			binary.BigEndian.PutUint64(row[:8], from.hi)
+			binary.BigEndian.PutUint64(row[8:16], from.lo)
+			binary.BigEndian.PutUint64(row[16:24], to.hi)
+			binary.BigEndian.PutUint64(row[24:32], to.lo)
+		}
+	} else {
+		for i, r := range ss.rr {
+			from := r.From().As16()
+			to := r.To().As16()
+			copy(buf[i*32:], from[:])
+			copy(buf[i*32+16:], to[:])
+		}
+	}
 	_, err = w.Write(buf)
 	return err
 }
