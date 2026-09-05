@@ -182,6 +182,8 @@ func New(config LC.ShadowsocksServer, lc C.InboundListenConfig, tunnel C.Tunnel,
 				if isReadWaiter {
 					readWaiter.InitializeReadWaiter(rwOptions)
 				}
+				// Bound socket address is immutable for this goroutine.
+				pktCtx := sing.WithInAddr(context.TODO(), ul.LocalAddr())
 				for {
 					var (
 						buff *buf.Buffer
@@ -205,12 +207,7 @@ func New(config LC.ShadowsocksServer, lc C.InboundListenConfig, tunnel C.Tunnel,
 						}
 						continue
 					}
-					ctx := context.TODO()
-					ctx = sing.WithInAddr(ctx, ul.LocalAddr())
-					_ = sl.service.NewPacket(ctx, conn, buff, M.Metadata{
-						Protocol: "shadowsocks",
-						Source:   dest,
-					})
+					_ = dispatchInboundPacket(pktCtx, sl.service, conn, buff, dest)
 				}
 			}()
 		}
@@ -306,4 +303,18 @@ func HandleShadowSocks(conn net.Conn, tunnel C.Tunnel, additions ...inbound.Addi
 		return true
 	}
 	return embedSS.HandleShadowSocks(conn, tunnel, additions...)
+}
+
+// dispatchInboundPacket calls service.NewPacket and Releases buffer only on error.
+// Pinned none/AEAD/2022 return err only before udpnat enqueue (caller still owns
+// buffer). A nil error means ownership transferred; do not Release on success.
+func dispatchInboundPacket(ctx context.Context, service network.UDPHandler, conn network.PacketConn, buffer *buf.Buffer, dest M.Socksaddr) error {
+	err := service.NewPacket(ctx, conn, buffer, M.Metadata{
+		Protocol: "shadowsocks",
+		Source:   dest,
+	})
+	if err != nil {
+		buffer.Release()
+	}
+	return err
 }
