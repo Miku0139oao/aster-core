@@ -149,6 +149,20 @@ func checkTunName(tunName string) (ok bool) {
 	return true
 }
 
+// closeAllocatedListenerOnErr is deferred from New after Listener allocation.
+// allocated is captured by value so explicit `return nil, err` cannot nil the
+// Close receiver. On error the captured listener is closed and the named
+// result must be set to nil; on success allocated is returned unchanged.
+func closeAllocatedListenerOnErr(allocated *Listener, err error) *Listener {
+	if err == nil {
+		return allocated
+	}
+	if allocated != nil {
+		allocated.Close()
+	}
+	return nil
+}
+
 func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Listener, err error) {
 	if len(additions) == 0 {
 		additions = []inbound.Addition{
@@ -376,12 +390,9 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 		tunName:            tunName,
 	}
 	l.ctx, l.cancel = context.WithCancel(context.Background())
-	defer func() {
-		if err != nil {
-			l.Close()
-			l = nil
-		}
-	}()
+	defer func(allocated *Listener) {
+		l = closeAllocatedListenerOnErr(allocated, err)
+	}(l)
 
 	interfaceFinder := DefaultInterfaceFinder
 

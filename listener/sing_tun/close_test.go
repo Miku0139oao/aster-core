@@ -2,6 +2,7 @@ package sing_tun
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -98,4 +99,41 @@ func TestCloseUnblocksDependentContextWaiter(t *testing.T) {
 		t.Fatal("dependent ctx waiter did not exit after Close")
 	}
 	require.ErrorIs(t, l.ctx.Err(), context.Canceled)
+}
+
+func TestCloseAllocatedListenerOnErrSuccess(t *testing.T) {
+	allocated := newTestListener(t)
+	l := closeAllocatedListenerOnErr(allocated, nil)
+	require.Equal(t, allocated, l)
+	require.NoError(t, allocated.ctx.Err())
+	require.False(t, allocated.closed)
+}
+
+func TestCloseAllocatedListenerOnErrNilAllocated(t *testing.T) {
+	require.Nil(t, closeAllocatedListenerOnErr(nil, errors.New("fail")))
+}
+
+// TestNewFailureCleanupAfterReturnNilErr uses New's real helper and the same
+// defer-argument capture, then explicit `return nil, err` (the path that used
+// to overwrite named l before Close). Device-free: no TUN.
+func TestNewFailureCleanupAfterReturnNilErr(t *testing.T) {
+	var allocated *Listener
+	var stack *fakeTunStack
+	run := func() (l *Listener, err error) {
+		l = newTestListener(t)
+		allocated = l
+		stack = &fakeTunStack{ctx: l.ctx}
+		l.tunStack = stack
+		defer func(allocated *Listener) {
+			l = closeAllocatedListenerOnErr(allocated, err)
+		}(l)
+		return nil, errors.New("`auto-route` is required by `auto-redirect`")
+	}
+	l, err := run()
+	require.EqualError(t, err, "`auto-route` is required by `auto-redirect`")
+	require.Nil(t, l)
+	require.NotNil(t, allocated)
+	require.True(t, allocated.closed)
+	require.True(t, stack.sawCancelOnClose, "cancel must run before captured tunStack.Close")
+	require.ErrorIs(t, allocated.ctx.Err(), context.Canceled)
 }
