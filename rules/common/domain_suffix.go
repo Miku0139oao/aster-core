@@ -8,9 +8,8 @@ import (
 
 type DomainSuffix struct {
 	Base
-	suffix    string
-	dotSuffix string
-	adapter   string
+	suffix  string
+	adapter string
 }
 
 func (ds *DomainSuffix) RuleType() C.RuleType {
@@ -18,7 +17,7 @@ func (ds *DomainSuffix) RuleType() C.RuleType {
 }
 
 func (ds *DomainSuffix) Match(metadata *C.Metadata, helper C.RuleMatchHelper) (bool, string) {
-	return matchDomainSuffix(metadata.RuleHost(), ds.suffix, ds.dotSuffix), ds.adapter
+	return matchDomainSuffix(metadata.RuleHost(), ds.suffix), ds.adapter
 }
 
 func (ds *DomainSuffix) Adapter() string {
@@ -30,12 +29,10 @@ func (ds *DomainSuffix) Payload() string {
 }
 
 func NewDomainSuffix(suffix string, adapter string) *DomainSuffix {
-	suffix = strings.ToLower(suffix)
 	return &DomainSuffix{
-		Base:      Base{},
-		suffix:    suffix,
-		dotSuffix: "." + suffix,
-		adapter:   adapter,
+		Base:    Base{},
+		suffix:  strings.ToLower(suffix),
+		adapter: adapter,
 	}
 }
 

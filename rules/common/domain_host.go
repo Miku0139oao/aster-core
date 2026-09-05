@@ -25,8 +25,17 @@ func matchDomainExact(host, domain string) bool {
 	return host == domain || strings.EqualFold(host, domain)
 }
 
-func matchDomainSuffix(host, suffix, dotSuffix string) bool {
-	if host == suffix || strings.HasSuffix(host, dotSuffix) {
+// hasDotLabelSuffix is host==suffix or HasSuffix(host, "."+suffix) without allocating.
+func hasDotLabelSuffix(host, suffix string) bool {
+	if host == suffix {
+		return true
+	}
+	n := len(suffix)
+	return len(host) > n && host[len(host)-n-1] == '.' && host[len(host)-n:] == suffix
+}
+
+func matchDomainSuffix(host, suffix string) bool {
+	if hasDotLabelSuffix(host, suffix) {
 		return true
 	}
 	if isASCIILower(host) {
@@ -35,8 +44,7 @@ func matchDomainSuffix(host, suffix, dotSuffix string) bool {
 	// EqualFold is not ToLower+HasSuffix: "SS" folds to "ß". Only use it when
 	// both sides are ASCII, where the two algorithms agree.
 	if !isASCII(host) || !isASCII(suffix) {
-		domain := strings.ToLower(host)
-		return domain == suffix || strings.HasSuffix(domain, dotSuffix)
+		return hasDotLabelSuffix(strings.ToLower(host), suffix)
 	}
 	if strings.EqualFold(host, suffix) {
 		return true

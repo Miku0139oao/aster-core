@@ -1,6 +1,7 @@
 package common
 
 import (
+	"strings"
 	"testing"
 
 	C "github.com/Miku0139oao/aster-core/constant"
@@ -133,6 +134,85 @@ func TestDomainKeywordBoundaries(t *testing.T) {
 		got, _ := rule.Match(&C.Metadata{Host: tc.host}, helper)
 		if got != tc.want {
 			t.Fatalf("host %q: got %v want %v", tc.host, got, tc.want)
+		}
+	}
+}
+
+func TestDomainSuffixPayloadLowered(t *testing.T) {
+	rule := NewDomainSuffix("Example.COM", "DIRECT")
+	if rule.Payload() != "example.com" {
+		t.Fatalf("payload: %q", rule.Payload())
+	}
+}
+
+// matchDomainSuffixRef is an independent copy of the pre-change matcher
+// (host==suffix || HasSuffix(host, "."+suffix), then the same ASCII/Unicode branches).
+func matchDomainSuffixRef(host, suffix string) bool {
+	dotSuffix := "." + suffix
+	if host == suffix || strings.HasSuffix(host, dotSuffix) {
+		return true
+	}
+	if isASCIILower(host) {
+		return false
+	}
+	if !isASCII(host) || !isASCII(suffix) {
+		domain := strings.ToLower(host)
+		return domain == suffix || strings.HasSuffix(domain, dotSuffix)
+	}
+	if strings.EqualFold(host, suffix) {
+		return true
+	}
+	n := len(suffix)
+	return len(host) > n && host[len(host)-n-1] == '.' && strings.EqualFold(host[len(host)-n:], suffix)
+}
+
+func TestMatchDomainSuffixMatchesOldHasSuffixReference(t *testing.T) {
+	suffixes := []string{
+		"",
+		"com",
+		"example.com",
+		".example.com",
+		"example.com.",
+		"ß.com",
+		"ss.com",
+	}
+	hosts := []string{
+		"",
+		".",
+		"com",
+		".com",
+		"com.",
+		"example.com",
+		".example.com",
+		"example.com.",
+		"www.example.com",
+		"notexample.com",
+		"EXAMPLE.COM",
+		"WWW.Example.COM",
+		"a.b.example.com",
+		"example.com.evil",
+		strings.Repeat("a.", 64) + "example.com",
+		"www.ß.com",
+		"WWW.ß.COM",
+		"SS.com",
+		"www.ss.com",
+	}
+	for _, suffix := range suffixes {
+		lowered := strings.ToLower(suffix)
+		for _, host := range hosts {
+			got := matchDomainSuffix(host, lowered)
+			want := matchDomainSuffixRef(host, lowered)
+			if got != want {
+				t.Fatalf("host %q suffix %q: got %v want %v", host, lowered, got, want)
+			}
+			rule := NewDomainSuffix(suffix, "DIRECT")
+			matched, adapter := rule.Match(&C.Metadata{Host: host}, C.RuleMatchHelper{})
+			if matched != want {
+				t.Fatalf("Match host %q suffix %q: got %v want %v", host, suffix, matched, want)
+			}
+			if matched && adapter != "DIRECT" {
+				t.Fatalf("adapter %q", adapter)
+			}
 		}
 	}
 }

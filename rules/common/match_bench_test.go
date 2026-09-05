@@ -50,6 +50,17 @@ func BenchmarkDomainSuffixMatchMixedCase(b *testing.B) {
 	}
 }
 
+func BenchmarkNewDomainSuffix(b *testing.B) {
+	var sink *DomainSuffix
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		sink = NewDomainSuffix("example.com", "DIRECT")
+	}
+	if sink == nil {
+		b.Fatal("nil")
+	}
+}
+
 func BenchmarkDomainKeywordMatch(b *testing.B) {
 	rule := NewDomainKeyword("google", "DIRECT")
 	hit := benchMetadataHost("www.google.com")
