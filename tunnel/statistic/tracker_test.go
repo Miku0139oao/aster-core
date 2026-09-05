@@ -162,6 +162,47 @@ func TestTCPTrackerSkipsZeroBytePush(t *testing.T) {
 	require.Zero(t, download)
 }
 
+func TestTCPTrackerDefaultPathHasNoControl(t *testing.T) {
+	manager := &Manager{}
+	tracker := NewTCPTracker(newDiscardTrackerConn(), manager, &C.Metadata{NetWork: C.TCP, Type: C.TUN, Host: "example.com", DstPort: 443}, nil, 0, 0, true)
+	t.Cleanup(func() { _ = tracker.Close() })
+
+	require.Nil(t, tracker.control, "TC-off NewTCPTracker must not allocate tcpControl")
+	require.Equal(t, 1, manager.ConnectionCount())
+
+	reader, counts := tracker.UnwrapReader()
+	_, controlledRead := reader.(*controlledReader)
+	require.False(t, controlledRead)
+	require.Len(t, counts, 1)
+	writer, writeCounts := tracker.UnwrapWriter()
+	_, controlledWrite := writer.(*controlledWriter)
+	require.False(t, controlledWrite)
+	require.Len(t, writeCounts, 1)
+
+	require.NoError(t, tracker.Close())
+	require.Zero(t, manager.ConnectionCount())
+}
+
+func TestTCPTrackerDefaultPathLifecycleAllocs(t *testing.T) {
+	manager := &Manager{}
+	conn := &staticChainConn{Conn: newDiscardTrackerConn(), chain: C.Chain{"DIRECT"}}
+	metadata := &C.Metadata{NetWork: C.TCP, Type: C.TUN, Host: "example.com", DstPort: 443}
+	warm := NewTCPTracker(conn, manager, metadata, nil, 0, 0, true)
+	require.Nil(t, warm.control)
+	require.NoError(t, warm.Close())
+
+	allocs := testing.AllocsPerRun(100, func() {
+		tracker := NewTCPTracker(conn, manager, metadata, nil, 0, 0, true)
+		if tracker.control != nil {
+			t.Fatal("default path allocated tcpControl")
+		}
+		if err := tracker.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	require.Equal(t, 3.0, allocs, "default path must stay tcpTracker + TrackerInfo + map entry")
+}
+
 type staticChainConn struct {
 	C.Conn
 	chain C.Chain

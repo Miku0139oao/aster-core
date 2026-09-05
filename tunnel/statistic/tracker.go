@@ -102,27 +102,34 @@ type TrackerInfo struct {
 	RulePayload   string       `json:"rulePayload"`
 }
 
-type tcpTracker struct {
-	C.Conn `json:"-"`
-	*TrackerInfo
-	manager        *Manager
-	principal      *principal
-	traffic        *trafficControl.Session
+// tcpControl holds traffic-control, quota-portal, and unwrap-limiter state.
+// It is allocated only when a traffic session exists so the default path keeps
+// a smaller live tcpTracker without a control object.
+type tcpControl struct {
+	session        *trafficControl.Session
 	ctx            context.Context
 	cancel         context.CancelFunc
 	portalMu       sync.Mutex
 	portalResponse []byte
 	portalOffset   int
+	limitedReader  io.Reader
+	limitedWriter  io.Writer
+}
+
+type tcpTracker struct {
+	C.Conn `json:"-"`
+	*TrackerInfo
+	manager   *Manager
+	principal *principal
+	control   *tcpControl
 
 	pushToManager bool `json:"-"`
 
 	// Cached UnwrapReader/UnwrapWriter results. Relay unwraps the counter layer
 	// when starting a copy; a wrapper plus CountFunc slice used to be 3 allocs.
-	unwrapOnce    sync.Once
-	readCounts    [1]N.CountFunc
-	writeCounts   [1]N.CountFunc
-	limitedReader io.Reader
-	limitedWriter io.Writer
+	unwrapOnce  sync.Once
+	readCounts  [1]N.CountFunc
+	writeCounts [1]N.CountFunc
 }
 
 func (tt *tcpTracker) ID() string {
@@ -156,12 +163,16 @@ func (tt *tcpTracker) pushUploaded(upload int64) {
 }
 
 func (tt *tcpTracker) countDownload(n int64) {
-	tt.traffic.Record(trafficControl.Download, n)
+	if c := tt.control; c != nil {
+		c.session.Record(trafficControl.Download, n)
+	}
 	tt.pushDownloaded(n)
 }
 
 func (tt *tcpTracker) countUpload(n int64) {
-	tt.traffic.Record(trafficControl.Upload, n)
+	if c := tt.control; c != nil {
+		c.session.Record(trafficControl.Upload, n)
+	}
 	tt.pushUploaded(n)
 }
 
@@ -169,52 +180,55 @@ func (tt *tcpTracker) ensureUnwrap() {
 	tt.unwrapOnce.Do(func() {
 		tt.readCounts[0] = tt.countDownload
 		tt.writeCounts[0] = tt.countUpload
-		if tt.traffic == nil {
+		c := tt.control
+		if c == nil {
 			return
 		}
 		reader := io.Reader(tt.Conn)
 		writer := io.Writer(tt.Conn)
-		if tt.portalResponse != nil {
+		if c.portalResponse != nil {
 			reader = tt
 			writer = io.Discard
 		}
-		tt.limitedReader = &controlledReader{reader: reader, session: tt.traffic, ctx: tt.ctx}
-		tt.limitedWriter = &controlledWriter{writer: writer, session: tt.traffic, ctx: tt.ctx}
+		c.limitedReader = &controlledReader{reader: reader, session: c.session, ctx: c.ctx}
+		c.limitedWriter = &controlledWriter{writer: writer, session: c.session, ctx: c.ctx}
 	})
 }
 
 func (tt *tcpTracker) Read(b []byte) (int, error) {
-	if tt.portalResponse != nil {
+	c := tt.control
+	if c != nil && c.portalResponse != nil {
 		return tt.readPortal(b)
 	}
 	n, err := tt.Conn.Read(b)
-	if traffic := tt.traffic; traffic != nil {
-		if waitErr := traffic.Wait(tt.ctx, trafficControl.Download, n); waitErr != nil && err == nil {
+	if c != nil {
+		if waitErr := c.session.Wait(c.ctx, trafficControl.Download, n); waitErr != nil && err == nil {
 			err = waitErr
 		}
-		traffic.Record(trafficControl.Download, int64(n))
+		c.session.Record(trafficControl.Download, int64(n))
 	}
 	tt.pushDownloaded(int64(n))
 	return n, err
 }
 
 func (tt *tcpTracker) ReadBuffer(buffer *buf.Buffer) (err error) {
-	if tt.portalResponse != nil {
-		tt.portalMu.Lock()
-		defer tt.portalMu.Unlock()
-		if tt.portalOffset >= len(tt.portalResponse) {
+	c := tt.control
+	if c != nil && c.portalResponse != nil {
+		c.portalMu.Lock()
+		defer c.portalMu.Unlock()
+		if c.portalOffset >= len(c.portalResponse) {
 			return io.EOF
 		}
-		_, err = buffer.Write(tt.portalResponse[tt.portalOffset:])
-		tt.portalOffset = len(tt.portalResponse)
+		_, err = buffer.Write(c.portalResponse[c.portalOffset:])
+		c.portalOffset = len(c.portalResponse)
 		return err
 	}
 	err = tt.Conn.ReadBuffer(buffer)
-	if traffic := tt.traffic; traffic != nil {
-		if waitErr := traffic.Wait(tt.ctx, trafficControl.Download, buffer.Len()); waitErr != nil && err == nil {
+	if c != nil {
+		if waitErr := c.session.Wait(c.ctx, trafficControl.Download, buffer.Len()); waitErr != nil && err == nil {
 			err = waitErr
 		}
-		traffic.Record(trafficControl.Download, int64(buffer.Len()))
+		c.session.Record(trafficControl.Download, int64(buffer.Len()))
 	}
 	tt.pushDownloaded(int64(buffer.Len()))
 	return
@@ -222,23 +236,24 @@ func (tt *tcpTracker) ReadBuffer(buffer *buf.Buffer) (err error) {
 
 func (tt *tcpTracker) UnwrapReader() (io.Reader, []N.CountFunc) {
 	tt.ensureUnwrap()
-	if tt.limitedReader != nil {
-		return tt.limitedReader, tt.readCounts[:]
+	if c := tt.control; c != nil && c.limitedReader != nil {
+		return c.limitedReader, tt.readCounts[:]
 	}
 	return tt.Conn, tt.readCounts[:]
 }
 
 func (tt *tcpTracker) Write(b []byte) (int, error) {
-	if tt.portalResponse != nil {
+	c := tt.control
+	if c != nil && c.portalResponse != nil {
 		return len(b), nil
 	}
-	if traffic := tt.traffic; traffic != nil {
-		if err := traffic.Wait(tt.ctx, trafficControl.Upload, len(b)); err != nil {
+	if c != nil {
+		if err := c.session.Wait(c.ctx, trafficControl.Upload, len(b)); err != nil {
 			return 0, err
 		}
 		n, err := tt.Conn.Write(b)
 		upload := int64(n)
-		traffic.Record(trafficControl.Upload, upload)
+		c.session.Record(trafficControl.Upload, upload)
 		tt.pushUploaded(upload)
 		return n, err
 	}
@@ -248,12 +263,13 @@ func (tt *tcpTracker) Write(b []byte) (int, error) {
 }
 
 func (tt *tcpTracker) WriteBuffer(buffer *buf.Buffer) (err error) {
-	if tt.portalResponse != nil {
+	c := tt.control
+	if c != nil && c.portalResponse != nil {
 		return nil
 	}
 	upload := int64(buffer.Len())
-	if traffic := tt.traffic; traffic != nil {
-		if err = traffic.Wait(tt.ctx, trafficControl.Upload, buffer.Len()); err != nil {
+	if c != nil {
+		if err = c.session.Wait(c.ctx, trafficControl.Upload, buffer.Len()); err != nil {
 			return err
 		}
 	}
@@ -261,8 +277,8 @@ func (tt *tcpTracker) WriteBuffer(buffer *buf.Buffer) (err error) {
 	if err != nil {
 		return err
 	}
-	if traffic := tt.traffic; traffic != nil {
-		traffic.Record(trafficControl.Upload, upload)
+	if c != nil {
+		c.session.Record(trafficControl.Upload, upload)
 	}
 	tt.pushUploaded(upload)
 	return nil
@@ -270,17 +286,19 @@ func (tt *tcpTracker) WriteBuffer(buffer *buf.Buffer) (err error) {
 
 func (tt *tcpTracker) UnwrapWriter() (io.Writer, []N.CountFunc) {
 	tt.ensureUnwrap()
-	if tt.limitedWriter != nil {
-		return tt.limitedWriter, tt.writeCounts[:]
+	if c := tt.control; c != nil && c.limitedWriter != nil {
+		return c.limitedWriter, tt.writeCounts[:]
 	}
 	return tt.Conn, tt.writeCounts[:]
 }
 
 func (tt *tcpTracker) Close() error {
-	if tt.cancel != nil {
-		tt.cancel()
+	if c := tt.control; c != nil {
+		if c.cancel != nil {
+			c.cancel()
+		}
+		c.session.Close()
 	}
-	tt.traffic.Close()
 	tt.manager.Leave(tt)
 	if tt.pushToManager {
 		tt.principal.flush(tt.manager)
@@ -295,21 +313,22 @@ func (tt *tcpTracker) Upstream() any {
 func NewTCPTracker(conn C.Conn, manager *Manager, metadata *C.Metadata, rule C.Rule, uploadTotal int64, downloadTotal int64, pushToManager bool) *tcpTracker {
 	metadata.RemoteDst = conn.RemoteDestination()
 	traffic := openTrafficSession(metadata, rule, conn.Chains())
-	var ctx context.Context
-	var cancel context.CancelFunc
+	var control *tcpControl
 	if traffic != nil {
-		ctx, cancel = context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(context.Background())
+		control = &tcpControl{
+			session:        traffic,
+			ctx:            ctx,
+			cancel:         cancel,
+			portalResponse: trafficControlPortalResponse(traffic, metadata),
+		}
 	}
-	portalResponse := trafficControlPortalResponse(traffic, metadata)
 
 	t := &tcpTracker{
-		Conn:           conn,
-		manager:        manager,
-		principal:      newPrincipal(metadata),
-		traffic:        traffic,
-		ctx:            ctx,
-		cancel:         cancel,
-		portalResponse: portalResponse,
+		Conn:      conn,
+		manager:   manager,
+		principal: newPrincipal(metadata),
+		control:   control,
 		TrackerInfo: &TrackerInfo{
 			UUID:          utils.NewUUIDV4(),
 			Start:         time.Now(),
@@ -346,13 +365,14 @@ func NewTCPTracker(conn C.Conn, manager *Manager, metadata *C.Metadata, rule C.R
 }
 
 func (tt *tcpTracker) readPortal(buffer []byte) (int, error) {
-	tt.portalMu.Lock()
-	defer tt.portalMu.Unlock()
-	if tt.portalOffset >= len(tt.portalResponse) {
+	c := tt.control
+	c.portalMu.Lock()
+	defer c.portalMu.Unlock()
+	if c.portalOffset >= len(c.portalResponse) {
 		return 0, io.EOF
 	}
-	n := copy(buffer, tt.portalResponse[tt.portalOffset:])
-	tt.portalOffset += n
+	n := copy(buffer, c.portalResponse[c.portalOffset:])
+	c.portalOffset += n
 	return n, nil
 }
 
