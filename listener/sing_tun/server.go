@@ -43,6 +43,8 @@ var (
 
 type Listener struct {
 	closed  bool
+	ctx     context.Context
+	cancel  context.CancelFunc
 	options LC.Tun
 	handler *ListenerHandler
 	tunName string
@@ -154,7 +156,6 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 			inbound.WithSpecialRules(""),
 		}
 	}
-	ctx := context.TODO()
 	rpTunnel := tunnel.(P.Tunnel)
 	var directClassifier kernelDirectClassifier
 	kernelDirectMetadata := C.Metadata{Type: C.TUN}
@@ -374,6 +375,7 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 		ruleProviderTunnel: rpTunnel,
 		tunName:            tunName,
 	}
+	l.ctx, l.cancel = context.WithCancel(context.Background())
 	defer func() {
 		if err != nil {
 			l.Close()
@@ -485,7 +487,7 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 		disableNFTables, dErr := strconv.ParseBool(os.Getenv("DISABLE_NFTABLES"))
 		l.autoRedirect, err = tun.NewAutoRedirect(tun.AutoRedirectOptions{
 			TunOptions:             &tunOptions,
-			Context:                ctx,
+			Context:                l.ctx,
 			Handler:                handler.TypeMutation(C.REDIR),
 			Logger:                 log.SingLogger,
 			NetworkMonitor:         l.networkUpdateMonitor,
@@ -544,7 +546,7 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 	resolver.AddSystemDnsBlacklist(dnsServerIp...)
 
 	stackOptions := tun.StackOptions{
-		Context:                ctx,
+		Context:                l.ctx,
 		Tun:                    tunIf,
 		TunOptions:             tunOptions,
 		EndpointIndependentNat: options.EndpointIndependentNat,
@@ -810,6 +812,9 @@ func (l *Listener) Close() error {
 	l.ruleUpdateMutex.Lock()
 	l.closed = true
 	l.ruleUpdateMutex.Unlock()
+	if l.cancel != nil {
+		l.cancel()
+	}
 	resolver.RemoveSystemDnsBlacklist(l.dnsServerIp...)
 	if l.autoRedirectOutputMark != 0 {
 		dialer.DefaultRoutingMark.CompareAndSwap(l.autoRedirectOutputMark, 0)
