@@ -191,15 +191,26 @@ func (q *quicPacketSender) Send(current constant.PacketAdapter) {
 
 // DoSniff wait sniffer recv all fragments and update the domain
 func (q *quicPacketSender) DoSniff(metadata *constant.Metadata) error {
+	applyResult := false
 	select {
 	case <-q.done:
+		applyResult = true
+	default:
+		timer := time.NewTimer(quicWaitConn)
+		defer timer.Stop()
+		select {
+		case <-q.done:
+			applyResult = true
+		case <-timer.C:
+			q.close()
+		}
+	}
+	if applyResult {
 		q.lock.RLock()
 		if r := q.result; r != "" {
 			q.replaceDomain(metadata, r)
 		}
 		q.lock.RUnlock()
-	case <-time.After(quicWaitConn):
-		q.close()
 	}
 
 	return q.PacketSender.DoSniff(metadata)
@@ -225,6 +236,9 @@ func (q *quicPacketSender) close() {
 	}
 	q.receivedCryptoData = bitmap{}
 	q.contiguousCryptoEnd = 0
+	// Drop AES/GCM epochs once sniffing is finished. result stays readable for
+	// DoSniff, which may run after close on the success path.
+	q.initialKeys = nil
 }
 
 func (q *quicPacketSender) readQUICData(b []byte) error {
@@ -365,6 +379,13 @@ func (q *quicPacketSender) readQUICPacket(b []byte, coalesced bool) (int, error)
 func (q *quicPacketSender) decryptQUICInitialPacket(b []byte, hdrLen, packetEnd int, destConnID []byte, s *quicStructure, cache *buf.Buffer) ([]byte, error) {
 	q.lock.Lock()
 	defer q.lock.Unlock()
+
+	if q.closed.Load() {
+		// Send may have observed closed==false before Close. Returning nil,nil
+		// lets readQUICFrames(nil) ignore this packet while the caller still
+		// walks coalesced packet boundaries without mutating input.
+		return nil, nil
+	}
 
 	if len(q.initialKeys) == 0 {
 		key, err := newQUICInitialKey(destConnID, s)

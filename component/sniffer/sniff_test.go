@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/netip"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/Miku0139oao/aster-core/common/buf"
@@ -83,6 +84,8 @@ func (e *fakeSender) Send(packet constant.PacketAdapter) {
 }
 
 func (e *fakeSender) DoSniff(metadata *constant.Metadata) error { return nil }
+
+func (e *fakeSender) Close() {}
 
 type fakeUDPPacket struct {
 	data  []byte
@@ -479,6 +482,105 @@ func TestQUICPacketNumbers(t *testing.T) {
 		next, _ := makeProtectedQUICInitialPacket(t, destConnID, &initialKey, 201, 1, cryptoFrame)
 		require.NoError(t, packetSender.readQUICData(next))
 		assert.Equal(t, "example.com", packetSender.result)
+		assert.True(t, packetSender.closed.Load())
+		assert.Nil(t, packetSender.buffer)
+		assert.Empty(t, packetSender.initialKeys)
+	})
+}
+
+func TestQUICPostSniffRetention(t *testing.T) {
+	t.Run("success keeps result without keys or buffer", func(t *testing.T) {
+		pkt, err := hex.DecodeString(quicGoogleInitialHex)
+		require.NoError(t, err)
+		q, err := NewQUICSniffer(SnifferConfig{})
+		require.NoError(t, err)
+
+		sender := q.WrapperSender(&fakeSender{}, func(metadata *constant.Metadata, host string) {
+			replaceDomain(metadata, host, true)
+		}).(*quicPacketSender)
+
+		require.NoError(t, sender.readQUICData(pkt))
+		assert.True(t, sender.closed.Load())
+		assert.Nil(t, sender.buffer)
+		assert.Empty(t, sender.initialKeys)
+		assert.Equal(t, "www.google.com", sender.result)
+
+		meta := &constant.Metadata{Host: fakeHost}
+		require.NoError(t, sender.DoSniff(meta))
+		assert.Equal(t, "www.google.com", meta.SniffHost)
+		assert.Equal(t, "www.google.com", meta.Host)
+		assert.Empty(t, sender.initialKeys)
+		assert.Nil(t, sender.buffer)
+	})
+
+	t.Run("close on unfinished fragment frees keys and buffer", func(t *testing.T) {
+		destConnID := []byte("initial dcid")
+		key, err := newQUICInitialKey(destConnID, &quicV1)
+		require.NoError(t, err)
+		sender := &quicPacketSender{
+			PacketSender: &fakeSender{},
+			initialKeys:  []quicInitialKey{key},
+			done:         make(chan struct{}),
+		}
+
+		hello := makeTestClientHello("example.com", 0)
+		require.NoError(t, sender.addCryptoData(0, hello[:4]))
+		assert.NotNil(t, sender.buffer)
+		require.Len(t, sender.initialKeys, 1)
+
+		sender.Close()
+		assert.True(t, sender.closed.Load())
+		assert.Nil(t, sender.buffer)
+		assert.Empty(t, sender.initialKeys)
+	})
+
+	t.Run("decrypt after close does not derive keys", func(t *testing.T) {
+		destConnID := []byte("initial dcid")
+		key, err := newQUICInitialKey(destConnID, &quicV1)
+		require.NoError(t, err)
+		packet, hdrLen := makeProtectedQUICInitialPacket(t, destConnID, &key, 0, 1, []byte{framePing, framePadding, framePadding})
+
+		sender := &quicPacketSender{done: make(chan struct{})}
+		sender.close()
+
+		cache := buf.NewPacket()
+		defer cache.Release()
+		decrypted, err := sender.decryptQUICInitialPacket(packet, hdrLen, len(packet), destConnID, &quicV1, cache)
+		require.NoError(t, err)
+		assert.Nil(t, decrypted)
+		assert.Empty(t, sender.initialKeys)
+	})
+
+	t.Run("concurrent send close and dosniff", func(t *testing.T) {
+		q, err := NewQUICSniffer(SnifferConfig{})
+		require.NoError(t, err)
+		sender := q.WrapperSender(&fakeSender{}, func(metadata *constant.Metadata, host string) {
+			replaceDomain(metadata, host, true)
+		})
+
+		var wg sync.WaitGroup
+		for i := 0; i < 8; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				sender.Send(asPacket(quicGoogleInitialHex))
+			}()
+		}
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_ = sender.DoSniff(&constant.Metadata{Host: fakeHost})
+		}()
+		go func() {
+			defer wg.Done()
+			sender.Close()
+		}()
+		wg.Wait()
+
+		retained := sender.(*quicPacketSender)
+		assert.True(t, retained.closed.Load())
+		assert.Nil(t, retained.buffer)
+		assert.Empty(t, retained.initialKeys)
 	})
 }
 
