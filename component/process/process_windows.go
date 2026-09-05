@@ -29,7 +29,14 @@ var (
 	once sync.Once
 
 	lastTableSize [4]uint32
+
+	// Occupancy is not bounded by GOMAXPROCS; oversized backing arrays are dropped.
+	tableScratchPools [4]sync.Pool // *tableScratch
 )
+
+type tableScratch struct {
+	buf []byte
+}
 
 func resolveSocketByNetlink(network string, ip netip.Addr, srcPort int) (uint32, uint32, error) {
 	return 0, 0, ErrPlatformNotSupport
@@ -95,12 +102,15 @@ func findProcessName(network string, ip netip.Addr, srcPort int) (uint32, string
 	}
 
 	s := cachedSearcher(isV4, isTCP)
-	buf, err := getTransportTable(fn, family, class)
+	slot := tableSlot(family, class)
+	scratch := acquireTableScratch(slot)
+	used, err := fillTransportTable(scratch, fn, family, class)
 	if err != nil {
+		releaseTableScratch(slot, scratch, used)
 		return 0, "", err
 	}
-
-	pid, err := s.Search(buf, ip, uint16(srcPort))
+	pid, err := s.Search(scratch.buf, ip, uint16(srcPort))
+	releaseTableScratch(slot, scratch, used)
 	if err != nil {
 		return 0, "", err
 	}
@@ -204,14 +214,59 @@ func tableSlot(family int, class int) int {
 	return slot
 }
 
+func acquireTableScratch(slot int) *tableScratch {
+	if slot < 0 || slot >= len(tableScratchPools) {
+		return &tableScratch{}
+	}
+	if v := tableScratchPools[slot].Get(); v != nil {
+		return v.(*tableScratch)
+	}
+	return &tableScratch{}
+}
+
+func releaseTableScratch(slot int, s *tableScratch, used int) {
+	if s == nil {
+		return
+	}
+	if !shouldKeepTransportScratch(cap(s.buf), used) {
+		s.buf = nil
+	}
+	if slot < 0 || slot >= len(tableScratchPools) {
+		return
+	}
+	tableScratchPools[slot].Put(s)
+}
+
+func shouldKeepTransportScratch(ncap, used int) bool {
+	limit := 4096
+	if used > limit/2 {
+		limit = used * 2
+	}
+	return ncap <= limit
+}
+
+// getTransportTable dumps a fresh table into a caller-owned buffer (never a pooled slice).
 func getTransportTable(fn uintptr, family int, class int) ([]byte, error) {
+	var s tableScratch
+	if _, err := fillTransportTable(&s, fn, family, class); err != nil {
+		return nil, err
+	}
+	return s.buf, nil
+}
+
+func fillTransportTable(s *tableScratch, fn uintptr, family int, class int) (int, error) {
 	slot := tableSlot(family, class)
 	size := atomic.LoadUint32(&lastTableSize[slot])
 	if size < 256 {
 		size = 4096
 	}
 
-	buf := make([]byte, size)
+	buf := s.buf
+	if uint32(cap(buf)) < size {
+		buf = make([]byte, size)
+	} else {
+		buf = buf[:size]
+	}
 	for {
 		if len(buf) == 0 {
 			buf = make([]byte, 8)
@@ -227,7 +282,11 @@ func getTransportTable(fn uintptr, family int, class int) ([]byte, error) {
 				stored += 512
 			}
 			atomic.StoreUint32(&lastTableSize[slot], stored)
-			return buf, nil
+			if size > uint32(len(buf)) {
+				size = uint32(len(buf))
+			}
+			s.buf = buf[:size]
+			return int(size), nil
 		case uintptr(syscall.ERROR_INSUFFICIENT_BUFFER):
 			if size <= uint32(cap(buf)) {
 				// kernel asked for a size we already have; avoid a tight loop
@@ -241,7 +300,8 @@ func getTransportTable(fn uintptr, family int, class int) ([]byte, error) {
 				buf = buf[:size]
 			}
 		default:
-			return nil, fmt.Errorf("syscall error: %d", err)
+			s.buf = buf
+			return 0, fmt.Errorf("syscall error: %d", err)
 		}
 	}
 }

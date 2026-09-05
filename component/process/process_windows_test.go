@@ -1,9 +1,12 @@
 package process
 
 import (
+	"bytes"
 	"encoding/binary"
+	"errors"
 	"net"
 	"net/netip"
+	"sync"
 	"syscall"
 	"testing"
 	"unsafe"
@@ -84,6 +87,72 @@ func TestSearcherSameTupleDifferentPID(t *testing.T) {
 	}), ip, port)
 	if err != nil || second != 200 {
 		t.Fatalf("reused socket pid=%d err=%v, want 200", second, err)
+	}
+}
+
+func TestShouldKeepTransportScratch(t *testing.T) {
+	cases := []struct {
+		ncap, used int
+		keep       bool
+	}{
+		{4096, 100, true},
+		{4096, 2048, true},
+		{4096, 0, true},
+		{8192, 4096, true},
+		{8193, 4096, false},
+		{100000, 8000, false},
+		{8000, 8000, true},
+		{4097, 100, false},
+	}
+	for _, tc := range cases {
+		got := shouldKeepTransportScratch(tc.ncap, tc.used)
+		if got != tc.keep {
+			t.Fatalf("cap=%d used=%d keep=%v want %v", tc.ncap, tc.used, got, tc.keep)
+		}
+	}
+}
+
+func TestFillTransportTableOverwritesScratch(t *testing.T) {
+	if err := initWin32API(); err != nil {
+		t.Fatal(err)
+	}
+	s := &tableScratch{buf: bytes.Repeat([]byte{0xFF}, 8192)}
+	used, err := fillTransportTable(s, getExTCPTable, windows.AF_INET, tcpTablePidConn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if used < 4 || len(s.buf) < 4 {
+		t.Fatalf("short table used=%d len=%d", used, len(s.buf))
+	}
+	if readNativeUint32(s.buf) == 0xFFFFFFFF {
+		t.Fatal("stale table header after fill")
+	}
+}
+
+func TestFindProcessNameConcurrentLocal(t *testing.T) {
+	ip, port := localTCPEndpoint(t)
+	resetCachesForTest()
+	const n = 8
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, name, err := FindProcessName(TCP, ip, int(port))
+			if err != nil {
+				errs <- err
+				return
+			}
+			if name == "" {
+				errs <- errors.New("empty process name")
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
 	}
 }
 
