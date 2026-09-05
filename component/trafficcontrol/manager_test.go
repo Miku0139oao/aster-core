@@ -608,7 +608,6 @@ func TestSessionRebindsFromNoMatchBackToPolicies(t *testing.T) {
 func TestConcurrentRecordAndConfigure(t *testing.T) {
 	manager := NewManager()
 	config := testManagerConfig(filepath.Join(t.TempDir(), "traffic.db"))
-	config.Policies[0].Quota = QuotaConfig{}
 	require.NoError(t, manager.Configure(config))
 	defer manager.Close()
 
@@ -619,19 +618,35 @@ func TestConcurrentRecordAndConfigure(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		for i := 0; i < 200; i++ {
-			session.Record(Upload, 1)
-			session.Record(Download, 1)
+		for i := 0; i < 400; i++ {
+			// Crossing 100-byte quota requestFlush; identity-changing Configure
+			// below reseeds counters so the edge fires repeatedly against flusher restart.
+			session.Record(Upload, 60)
+			session.Record(Download, 50)
 		}
 	}()
-	for i := 0; i < 20; i++ {
+	for i := 0; i < 40; i++ {
 		updated := config.Clone()
 		updated.Policies[0].UploadBPS = int64(8_000 + i)
+		updated.Policies[0].Quota.Window = time.Hour + time.Duration(i)*time.Minute
 		require.NoError(t, manager.Configure(updated))
 	}
 	<-done
+	session.Record(Upload, 101)
 	session.Close()
-	for _, policy := range manager.Status().Policies {
+	status := manager.Status()
+	require.NotEmpty(t, status.Policies)
+	var global *PolicyStatus
+	for i := range status.Policies {
+		if status.Policies[i].Policy.ID == "global" {
+			global = &status.Policies[i]
+			break
+		}
+	}
+	require.NotNil(t, global)
+	require.True(t, global.OverQuota)
+	require.Positive(t, global.Counters.ExceededEvents)
+	for _, policy := range status.Policies {
 		require.Zero(t, policy.Active)
 	}
 }

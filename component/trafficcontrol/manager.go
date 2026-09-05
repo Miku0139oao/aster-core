@@ -130,7 +130,7 @@ type Manager struct {
 	revision       atomic.Uint64
 	lastCheckpoint atomic.Int64
 	dirty          atomic.Bool
-	flushWake      chan struct{}
+	flushWake      atomic.Pointer[chan struct{}]
 	flushStop      chan struct{}
 	flushDone      chan struct{}
 	now            func() time.Time
@@ -895,8 +895,16 @@ func uniqueStrings(values []string) []string {
 }
 
 func (m *Manager) requestFlush() {
+	handle := m.flushWake.Load()
+	if handle == nil {
+		return
+	}
+	wake := *handle
+	if wake == nil {
+		return
+	}
 	select {
-	case m.flushWake <- struct{}{}:
+	case wake <- struct{}{}:
 	default:
 	}
 }
@@ -904,22 +912,27 @@ func (m *Manager) requestFlush() {
 func (m *Manager) startFlusher(interval time.Duration) {
 	m.flusherMu.Lock()
 	defer m.flusherMu.Unlock()
-	m.flushWake, m.flushStop, m.flushDone = make(chan struct{}, 1), make(chan struct{}), make(chan struct{})
-	go func() {
+	wake := make(chan struct{}, 1)
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	m.flushStop = stop
+	m.flushDone = done
+	m.flushWake.Store(&wake)
+	go func(wake, stop, done chan struct{}) {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
-		defer close(m.flushDone)
+		defer close(done)
 		for {
 			select {
 			case <-ticker.C:
 				_ = m.Flush()
-			case <-m.flushWake:
+			case <-wake:
 				_ = m.Flush()
-			case <-m.flushStop:
+			case <-stop:
 				return
 			}
 		}
-	}()
+	}(wake, stop, done)
 }
 
 func (m *Manager) stopFlusher() error {
@@ -928,9 +941,10 @@ func (m *Manager) stopFlusher() error {
 	if m.flushStop == nil {
 		return nil
 	}
+	m.flushWake.Store(nil)
 	close(m.flushStop)
 	<-m.flushDone
-	m.flushStop, m.flushDone, m.flushWake = nil, nil, nil
+	m.flushStop, m.flushDone = nil, nil
 	return nil
 }
 
