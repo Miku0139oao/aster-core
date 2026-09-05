@@ -165,19 +165,26 @@ func exchangeLengthPrefixedConnContext(ctx context.Context, conn net.Conn, m *D.
 		}
 	}
 
-	callbackDone := make(chan struct{})
-	stop := contextutils.AfterFunc(ctx, func() {
-		defer close(callbackDone)
-		_ = conn.SetDeadline(time.Now()) // cancel any read or write operation on this conn
-	})
-	defer func() {
-		// Stop does not join an already-running callback. Wait before clearing
-		// the deadline so a late SetDeadline(now) cannot poison the next borrower.
-		if !stop() {
-			<-callbackDone
-		}
-		_ = conn.SetDeadline(time.Time{})
-	}()
+	// Background (Done()==nil) must not allocate AfterFunc/callbackDone, and
+	// timeout=0 must not touch a pre-existing deadline. Only cancelable ctx
+	// installs a wakeup callback; join it before clearing the deadline.
+	if ctx.Done() != nil {
+		callbackDone := make(chan struct{})
+		stop := contextutils.AfterFunc(ctx, func() {
+			defer close(callbackDone)
+			_ = conn.SetDeadline(time.Now()) // cancel any read or write operation on this conn
+		})
+		defer func() {
+			// Stop does not join an already-running callback. Wait before clearing
+			// the deadline so a late SetDeadline(now) cannot poison the next borrower.
+			if !stop() {
+				<-callbackDone
+			}
+			_ = conn.SetDeadline(time.Time{})
+		}()
+	} else if applyDeadline {
+		defer conn.SetDeadline(time.Time{})
+	}
 
 	buf := pool.Get(2 + MaxMsgSize)
 	defer pool.Put(buf)

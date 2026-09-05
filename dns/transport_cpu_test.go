@@ -445,6 +445,97 @@ func (c *raceDeadlineConn) SetDeadline(t time.Time) error {
 	return c.Conn.SetDeadline(t)
 }
 
+type recordDeadlineConn struct {
+	net.Conn
+	mu    sync.Mutex
+	calls []time.Time
+}
+
+func (c *recordDeadlineConn) SetDeadline(t time.Time) error {
+	c.mu.Lock()
+	c.calls = append(c.calls, t)
+	c.mu.Unlock()
+	return c.Conn.SetDeadline(t)
+}
+
+func (c *recordDeadlineConn) deadlineCalls() []time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]time.Time, len(c.calls))
+	copy(out, c.calls)
+	return out
+}
+
+func TestDoTBackgroundTimeoutZeroPreservesDeadline(t *testing.T) {
+	req := newAQuestion()
+	packedResp := packedAReply(req)
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	pre := time.Now().Add(time.Hour)
+	if err := clientConn.SetDeadline(pre); err != nil {
+		t.Fatal(err)
+	}
+	wrapped := &recordDeadlineConn{Conn: clientConn}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- serveDoTReply(serverConn, packedResp)
+	}()
+
+	msg, err := exchangeLengthPrefixedConn(wrapped, req, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg == nil || len(msg.Answer) != 1 {
+		t.Fatal("missing answer")
+	}
+	if err := <-errCh; err != nil {
+		t.Fatal(err)
+	}
+	if calls := wrapped.deadlineCalls(); len(calls) != 0 {
+		t.Fatalf("timeout=0 SetDeadline calls=%v, want none", calls)
+	}
+}
+
+func TestDoTBackgroundPositiveTimeoutClearsDeadline(t *testing.T) {
+	req := newAQuestion()
+	packedResp := packedAReply(req)
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	wrapped := &recordDeadlineConn{Conn: clientConn}
+	start := time.Now()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- serveDoTReply(serverConn, packedResp)
+	}()
+
+	msg, err := exchangeLengthPrefixedConn(wrapped, req, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg == nil || len(msg.Answer) != 1 {
+		t.Fatal("missing answer")
+	}
+	if err := <-errCh; err != nil {
+		t.Fatal(err)
+	}
+	calls := wrapped.deadlineCalls()
+	if len(calls) != 2 {
+		t.Fatalf("SetDeadline calls=%v, want future then zero", calls)
+	}
+	if calls[0].IsZero() || calls[0].Before(start) {
+		t.Fatalf("first deadline %v, want after %v", calls[0], start)
+	}
+	if !calls[1].IsZero() {
+		t.Fatalf("last deadline %v, want zero after response", calls[1])
+	}
+}
+
 func TestDoTCallbackVsSuccessRace(t *testing.T) {
 	req := newAQuestion()
 	packedResp := packedAReply(req)
