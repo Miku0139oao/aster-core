@@ -95,5 +95,6 @@ func handleSocksUDP(pc net.PacketConn, tunnel C.Tunnel, buf []byte, put func(), 
 		payload: payload,
 		put:     put,
 	}
-	tunnel.HandleUDPPacket(inbound.NewPacket(target, packet, C.SOCKS5, additions...))
+	metadata := fillSocksUDPMetadata(packet, target, additions...)
+	tunnel.HandleUDPPacket(packet, metadata)
 }

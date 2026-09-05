@@ -8,8 +8,17 @@ import (
 	"time"
 
 	"github.com/Miku0139oao/aster-core/adapter/inbound"
+	C "github.com/Miku0139oao/aster-core/constant"
 	authStore "github.com/Miku0139oao/aster-core/listener/auth"
 )
+
+type dropUDPTunnel struct{ stubTunnel }
+
+func (dropUDPTunnel) HandleUDPPacket(packet C.UDPPacket, _ *C.Metadata) {
+	if packet != nil {
+		packet.Drop()
+	}
+}
 
 type benchConn struct {
 	io.Reader
@@ -60,6 +69,23 @@ func BenchmarkHandleSocks5(b *testing.B) {
 		reader.Reset(req)
 		conn.Reader = reader
 		HandleSocks5(conn, stubTunnel{}, authStore.Nil, additions...)
+	}
+}
+
+func BenchmarkHandleSocksUDP(b *testing.B) {
+	buf := []byte{
+		0, 0, 0, // RSV FRAG
+		1, 1, 2, 3, 4, 0, 53, // IPv4 1.2.3.4:53
+		'p', 'a', 'y',
+	}
+	pc := discardPacketConn{}
+	src := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 12345}
+	additions := []inbound.Addition{inbound.WithInName("bench-socks")}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		handleSocksUDP(pc, dropUDPTunnel{}, buf, nil, src, additions...)
 	}
 }
 
