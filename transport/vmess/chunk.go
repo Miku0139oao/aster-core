@@ -76,7 +76,7 @@ type chunkWriter struct {
 }
 
 func (cw *chunkWriter) Write(b []byte) (n int, err error) {
-	buf := pool.Get(pool.RelayBufferSize)
+	buf := pool.Get(lenSize + chunkSize)
 	defer pool.Put(buf)
 	length := len(b)
 	for {
