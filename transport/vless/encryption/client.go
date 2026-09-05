@@ -80,13 +80,10 @@ func (i *ClientInstance) Handshake(conn net.Conn) (*CommonConn, error) {
 	c := NewCommonConn(conn, HasAESGCMHardwareSupport)
 
 	ivAndRealysLength := 16 + i.RelaysLength
-	pfsKeyExchangeLength := 18 + 1184 + 32 + 16
-	paddingLength, paddingLens, paddingGaps := CreatPadding(i.PaddingLens, i.PaddingGaps)
-	clientHello := make([]byte, ivAndRealysLength+pfsKeyExchangeLength+paddingLength)
-
-	iv := clientHello[:16]
+	ivAndRelays := make([]byte, ivAndRealysLength)
+	iv := ivAndRelays[:16]
 	rand.Read(iv)
-	relays := clientHello[16:ivAndRealysLength]
+	relays := ivAndRelays[16:]
 	var nfsKey []byte
 	var lastCTR cipher.Stream
 	for j, k := range i.NfsPKeys {
@@ -123,21 +120,36 @@ func (i *ClientInstance) Handshake(conn net.Conn) (*CommonConn, error) {
 
 	if i.Seconds > 0 {
 		i.RWLock.RLock()
-		if time.Now().Before(i.Expire) {
+		ticketValid := time.Now().Before(i.Expire)
+		var pfsKey, ticket []byte
+		if ticketValid {
+			pfsKey = make([]byte, len(i.PfsKey))
+			copy(pfsKey, i.PfsKey)
+			ticket = make([]byte, len(i.Ticket))
+			copy(ticket, i.Ticket)
+		}
+		i.RWLock.RUnlock()
+		if ticketValid {
+			const ticketSealLen = 18 + 32
+			preWrite := make([]byte, ivAndRealysLength, ivAndRealysLength+ticketSealLen)
+			copy(preWrite, ivAndRelays)
+			nfsAEAD.Seal(preWrite[:ivAndRealysLength], nil, EncodeLength(32), nil)
+			nfsAEAD.Seal(preWrite[:ivAndRealysLength+18], nil, ticket, nil)
 			c.Client = i
-			c.UnitedKey = append(i.PfsKey, nfsKey...) // different unitedKey for each connection
-			nfsAEAD.Seal(clientHello[:ivAndRealysLength], nil, EncodeLength(32), nil)
-			nfsAEAD.Seal(clientHello[:ivAndRealysLength+18], nil, i.Ticket, nil)
-			i.RWLock.RUnlock()
-			c.PreWrite = clientHello[:ivAndRealysLength+18+32]
-			c.AEAD = NewAEAD(clientHello[ivAndRealysLength+18:ivAndRealysLength+18+32], c.UnitedKey, c.UseAES)
+			c.UnitedKey = append(pfsKey, nfsKey...) // different unitedKey for each connection
+			c.PreWrite = preWrite[:ivAndRealysLength+ticketSealLen]
+			c.AEAD = NewAEAD(c.PreWrite[ivAndRealysLength+18:], c.UnitedKey, c.UseAES)
 			if i.XorMode == 2 {
 				c.Conn = NewXorConn(conn, NewCTR(c.UnitedKey, iv), nil, len(c.PreWrite), 16)
 			}
 			return c, nil
 		}
-		i.RWLock.RUnlock()
 	}
+
+	pfsKeyExchangeLength := 18 + 1184 + 32 + 16
+	paddingLength, paddingLens, paddingGaps := CreatPadding(i.PaddingLens, i.PaddingGaps)
+	clientHello := make([]byte, ivAndRealysLength+pfsKeyExchangeLength+paddingLength)
+	copy(clientHello, ivAndRelays)
 
 	pfsKeyExchange := clientHello[ivAndRealysLength : ivAndRealysLength+pfsKeyExchangeLength]
 	nfsAEAD.Seal(pfsKeyExchange[:0], nil, EncodeLength(pfsKeyExchangeLength-18), nil)
