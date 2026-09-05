@@ -64,7 +64,11 @@ func Verify(name string) error {
 }
 
 var (
-	loadGeoSiteMatcherListSF = singleflight.Group[[]*router.Domain]{StoreResult: true}
+	// loadGeoSiteMatcherListSF only coalesces in-flight raw list decodes.
+	// StoreResult is false so completed []*router.Domain trees are not kept:
+	// matchers already hold the lookup working set. Sequential attribute
+	// variants of the same list therefore re-decode (see tests).
+	loadGeoSiteMatcherListSF = singleflight.Group[[]*router.Domain]{StoreResult: false}
 	loadGeoSiteMatcherSF     = singleflight.Group[router.DomainMatcher]{StoreResult: true}
 )
 
@@ -98,7 +102,7 @@ func LoadGeoSiteMatcher(countryCode string) (router.DomainMatcher, error) {
 	}
 	matcher, err, shared := loadGeoSiteMatcherSF.Do(matcherName, func() (router.DomainMatcher, error) {
 		log.Infoln("Load GeoSite rule: %s", matcherName)
-		domains, err, shared := loadGeoSiteMatcherListSF.Do(listName, func() ([]*router.Domain, error) {
+		domains, err, _ := loadGeoSiteMatcherListSF.Do(listName, func() ([]*router.Domain, error) {
 			geoLoader, err := GetGeoDataLoader(geoLoaderName)
 			if err != nil {
 				return nil, err
@@ -106,9 +110,9 @@ func LoadGeoSiteMatcher(countryCode string) (router.DomainMatcher, error) {
 			return geoLoader.LoadGeoSite(listName)
 		})
 		if err != nil {
-			if !shared {
-				loadGeoSiteMatcherListSF.Forget(listName) // don't store the error result
-			}
+			// StoreResult is false: doCall already deletes this completed call
+			// iff g.m[key] still points at it. Forget here would race a new
+			// in-flight decode of the same listName and evict it.
 			return nil, err
 		}
 
