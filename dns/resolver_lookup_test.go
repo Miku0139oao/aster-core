@@ -197,6 +197,183 @@ func TestCacheSeparatesAAndAAAA(t *testing.T) {
 	}
 }
 
+func extraHasOPT(rrs []D.RR) bool {
+	for _, rr := range rrs {
+		if rr != nil && rr.Header().Rrtype == D.TypeOPT {
+			return true
+		}
+	}
+	return false
+}
+
+func extraTailHasOPT(rrs []D.RR) bool {
+	if rrs == nil {
+		return false
+	}
+	tail := rrs[:cap(rrs)]
+	for i := len(rrs); i < len(tail); i++ {
+		if tail[i] != nil && tail[i].Header().Rrtype == D.TypeOPT {
+			return true
+		}
+	}
+	return false
+}
+
+func TestPutMsgToCacheStripsOPTKeepsCallerExtra(t *testing.T) {
+	cache := Config{}.newCache()
+	req := new(D.Msg)
+	req.SetQuestion("example.com.", D.TypeA)
+	resp := new(D.Msg)
+	resp.SetReply(req)
+	resp.Answer = []D.RR{&D.A{
+		Hdr: D.RR_Header{Name: "example.com.", Rrtype: D.TypeA, Class: D.ClassINET, Ttl: 300},
+		A:   net.IPv4(192, 0, 2, 1).To4(),
+	}}
+	opt := &D.OPT{Hdr: D.RR_Header{Name: ".", Rrtype: D.TypeOPT, Class: 1232, Ttl: 0}}
+	glue := &D.A{
+		Hdr: D.RR_Header{Name: "ns.example.com.", Rrtype: D.TypeA, Class: D.ClassINET, Ttl: 300},
+		A:   net.IPv4(192, 0, 2, 53).To4(),
+	}
+	resp.Extra = []D.RR{glue, opt}
+
+	putMsgToCache(cache, req.Question[0], resp)
+
+	if len(resp.Extra) != 2 || resp.Extra[0] != glue || resp.Extra[1] != opt {
+		t.Fatalf("caller Extra mutated: %#v", resp.Extra)
+	}
+
+	stored, _, hit := cache.GetWithExpire(cacheKey(req.Question[0]))
+	if !hit || stored == nil {
+		t.Fatal("expected cache hit after EDNS put")
+	}
+	if extraHasOPT(stored.Extra) {
+		t.Fatal("stored Extra still contains OPT")
+	}
+	if extraTailHasOPT(stored.Extra) {
+		t.Fatal("stored Extra backing array retained discarded OPT")
+	}
+	if len(stored.Extra) != 1 {
+		t.Fatalf("stored Extra = %d, want glue only", len(stored.Extra))
+	}
+
+	got, _, hit := getMsgFromCache(cache, req.Question[0])
+	if !hit || got == nil || extraHasOPT(got.Extra) {
+		t.Fatalf("GET Extra has OPT: %#v hit=%v", got, hit)
+	}
+	a, ok := got.Answer[0].(*D.A)
+	if !ok || !a.A.Equal(net.IPv4(192, 0, 2, 1)) {
+		t.Fatalf("GET A = %v", got.Answer)
+	}
+	a.A[0] ^= 0xff
+	got2, _, _ := getMsgFromCache(cache, req.Question[0])
+	a2 := got2.Answer[0].(*D.A)
+	if a2.A[0] != 192 {
+		t.Fatal("cached A rdata mutated after EDNS put/get")
+	}
+}
+
+func TestPutMsgToCacheEDNSZeroFlagsStillCaches(t *testing.T) {
+	cache := Config{}.newCache()
+	req := new(D.Msg)
+	req.SetQuestion("edns-zero.example.", D.TypeA)
+	resp := new(D.Msg)
+	resp.SetReply(req)
+	resp.Answer = []D.RR{&D.A{
+		Hdr: D.RR_Header{Name: "edns-zero.example.", Rrtype: D.TypeA, Class: D.ClassINET, Ttl: 60},
+		A:   net.IPv4(192, 0, 2, 9).To4(),
+	}}
+	resp.Extra = []D.RR{&D.OPT{Hdr: D.RR_Header{Name: ".", Rrtype: D.TypeOPT, Class: 1232, Ttl: 0}}}
+
+	putMsgToCache(cache, req.Question[0], resp)
+	got, _, hit := getMsgFromCache(cache, req.Question[0])
+	if !hit || got == nil || len(got.Answer) != 1 {
+		t.Fatal("OPT.Hdr.Ttl=0 (EDNS flags) must not prevent caching a positive TTL")
+	}
+}
+
+func TestPutMsgToCacheTTLZeroNotCached(t *testing.T) {
+	cache := Config{}.newCache()
+	req := new(D.Msg)
+	req.SetQuestion("zero-ttl.example.", D.TypeA)
+	resp := new(D.Msg)
+	resp.SetReply(req)
+	resp.Answer = []D.RR{&D.A{
+		Hdr: D.RR_Header{Name: "zero-ttl.example.", Rrtype: D.TypeA, Class: D.ClassINET, Ttl: 0},
+		A:   net.IPv4(192, 0, 2, 8).To4(),
+	}}
+	putMsgToCache(cache, req.Question[0], resp)
+	_, _, hit := getMsgFromCache(cache, req.Question[0])
+	if hit {
+		t.Fatal("ttl=0 answer must not be cached")
+	}
+}
+
+func TestNegativeCacheNXDOMAINSOAIsolation(t *testing.T) {
+	cache := Config{}.newCache()
+	req := new(D.Msg)
+	req.SetQuestion("missing.example.", D.TypeA)
+	resp := new(D.Msg)
+	resp.SetRcode(req, D.RcodeNameError)
+	soa := &D.SOA{
+		Hdr:     D.RR_Header{Name: "example.", Rrtype: D.TypeSOA, Class: D.ClassINET, Ttl: 30},
+		Ns:      "ns.example.",
+		Mbox:    "hostmaster.example.",
+		Serial:  1,
+		Refresh: 3600,
+		Retry:   600,
+		Expire:  86400,
+		Minttl:  30,
+	}
+	resp.Ns = []D.RR{soa}
+	resp.Extra = []D.RR{&D.OPT{Hdr: D.RR_Header{Name: ".", Rrtype: D.TypeOPT, Class: 1232, Ttl: 0}}}
+
+	putMsgToCache(cache, req.Question[0], resp)
+
+	got, _, hit := getMsgFromCache(cache, req.Question[0])
+	if !hit || got == nil {
+		t.Fatal("NXDOMAIN with SOA should be cached")
+	}
+	if got.Rcode != D.RcodeNameError {
+		t.Fatalf("Rcode = %d, want NXDOMAIN", got.Rcode)
+	}
+	if extraHasOPT(got.Extra) {
+		t.Fatal("NXDOMAIN GET Extra still has OPT")
+	}
+	gotSOA, ok := got.Ns[0].(*D.SOA)
+	if !ok {
+		t.Fatalf("Ns[0] type %T", got.Ns[0])
+	}
+	gotSOA.Serial = 99
+	gotSOA.Hdr.Ttl = 1
+	gotSOA.Ns = "mutated.example."
+
+	got2, _, hit := getMsgFromCache(cache, req.Question[0])
+	if !hit {
+		t.Fatal("second NXDOMAIN GET missed")
+	}
+	soa2 := got2.Ns[0].(*D.SOA)
+	if soa2.Serial != 1 || soa2.Hdr.Ttl == 1 || soa2.Ns != "ns.example." {
+		t.Fatalf("cached SOA mutated: %+v", soa2)
+	}
+	if soa.Serial != 1 || soa.Ns != "ns.example." {
+		t.Fatal("caller SOA mutated by cache put")
+	}
+}
+
+func TestNegativeCacheNXDOMAINWithoutSOANotCached(t *testing.T) {
+	cache := Config{}.newCache()
+	req := new(D.Msg)
+	req.SetQuestion("empty-nx.example.", D.TypeA)
+	resp := new(D.Msg)
+	resp.SetRcode(req, D.RcodeNameError)
+	resp.Extra = []D.RR{&D.OPT{Hdr: D.RR_Header{Name: ".", Rrtype: D.TypeOPT, Class: 1232, Ttl: 0}}}
+	putMsgToCache(cache, req.Question[0], resp)
+	_, _, hit := getMsgFromCache(cache, req.Question[0])
+	if hit {
+		t.Fatal("NXDOMAIN without SOA/records must not be cached (ttl=0)")
+	}
+}
+
 func BenchmarkGetMsgFromCacheHit(b *testing.B) {
 	cache := Config{}.newCache()
 	req := new(D.Msg)

@@ -111,7 +111,7 @@ func trimDots(s string) string {
 func canShareRdata(rrs []D.RR) bool {
 	for _, rr := range rrs {
 		switch rr.(type) {
-		case nil, *D.A, *D.AAAA, *D.CNAME, *D.DNAME, *D.NS, *D.PTR:
+		case nil, *D.A, *D.AAAA, *D.CNAME, *D.DNAME, *D.NS, *D.PTR, *D.SOA:
 		default:
 			return false
 		}
@@ -168,6 +168,13 @@ func cloneShareRdata(rr D.RR) (D.RR, bool) {
 		}
 		n := *r
 		return &n, true
+	case *D.SOA:
+		if r == nil {
+			return (*D.SOA)(nil), true
+		}
+		// Value-copy header and timers. Ns/Mbox are Go strings (immutable).
+		n := *r
+		return &n, true
 	case nil:
 		return nil, true
 	default:
@@ -191,8 +198,9 @@ func cloneRRs(rrs []D.RR) ([]D.RR, bool) {
 }
 
 // cloneMsg returns a message the caller may mutate without affecting msg.
-// RR headers/TTL are unique. A/AAAA IP bytes are copied. CNAME/NS/PTR/DNAME
-// strings are shared (Go strings are immutable).
+// RR headers/TTL are unique. A/AAAA IP bytes are copied. CNAME/NS/PTR/DNAME/SOA
+// strings are shared (Go strings are immutable). Nested mutable slices on other
+// RR types are not shared; those messages use Msg.Copy().
 func cloneMsg(msg *D.Msg) *D.Msg {
 	if msg == nil {
 		return nil
@@ -219,6 +227,36 @@ func cloneMsg(msg *D.Msg) *D.Msg {
 	return out
 }
 
+// extraWithoutOPT returns Extra without OPT RRs. The caller's Extra slice is
+// never compacted in place; a new slice is allocated only when OPT is mixed
+// with other records.
+func extraWithoutOPT(extra []D.RR) []D.RR {
+	if len(extra) == 0 {
+		return extra
+	}
+	n := 0
+	for _, rr := range extra {
+		if rr != nil && rr.Header().Rrtype == D.TypeOPT {
+			continue
+		}
+		n++
+	}
+	if n == 0 {
+		return nil
+	}
+	if n == len(extra) {
+		return extra
+	}
+	out := make([]D.RR, 0, n)
+	for _, rr := range extra {
+		if rr != nil && rr.Header().Rrtype == D.TypeOPT {
+			continue
+		}
+		out = append(out, rr)
+	}
+	return out
+}
+
 func dropOPT(extra []D.RR) []D.RR {
 	if len(extra) == 0 {
 		return extra
@@ -233,6 +271,9 @@ func dropOPT(extra []D.RR) []D.RR {
 	}
 	if n == 0 {
 		return nil
+	}
+	for i := n; i < len(extra); i++ {
+		extra[i] = nil
 	}
 	return extra[:n]
 }
@@ -258,24 +299,28 @@ func putMsgToCache(c dnsCache, q D.Question, msg *D.Msg) {
 		return
 	}
 
-	msg = cloneMsg(msg) // never modify the original msg
-
-	// OPT RRs MUST NOT be cached, forwarded, or stored in or loaded from master files.
-	msg.Extra = dropOPT(msg.Extra)
+	// Header copy so Extra can omit OPT without compacting the caller's slice.
+	// OPT.Hdr.Ttl is EDNS extended-RCODE/flags, not a TTL; strip before minTTLAll.
+	tmp := *msg
+	tmp.Extra = extraWithoutOPT(msg.Extra)
 
 	var ttl uint32
-	if msg.Rcode == D.RcodeServerFailure {
+	if tmp.Rcode == D.RcodeServerFailure {
 		// [...] a resolver MAY cache a server failure response.
 		// If it does so it MUST NOT cache it for longer than five (5) minutes [...]
 		ttl = serverFailureCacheTTL
 	} else {
-		ttl = minTTLAll(msg.Answer, msg.Ns, msg.Extra)
+		ttl = minTTLAll(tmp.Answer, tmp.Ns, tmp.Extra)
 	}
 	if ttl == 0 {
 		return
 	}
 
-	c.SetWithExpire(cacheKey(q), msg, time.Now().Add(time.Duration(ttl)*time.Second))
+	stored := cloneMsg(&tmp) // never modify the original msg
+	// OPT RRs MUST NOT be cached, forwarded, or stored in or loaded from master files.
+	stored.Extra = dropOPT(stored.Extra)
+
+	c.SetWithExpire(cacheKey(q), stored, time.Now().Add(time.Duration(ttl)*time.Second))
 }
 
 func setMsgTTL(msg *D.Msg, ttl uint32) {
