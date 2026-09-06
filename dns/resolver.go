@@ -507,9 +507,9 @@ func (config Config) newCache() dnsCache {
 	}
 	switch config.CacheAlgorithm {
 	case "arc":
-		return arc.New(arc.WithSize[dnsCacheKey, *D.Msg](config.CacheMaxSize))
+		return &msgCache{inner: arc.New(arc.WithSize[dnsCacheKey, *cacheEntry](config.CacheMaxSize))}
 	default:
-		return lru.New(lru.WithSize[dnsCacheKey, *D.Msg](config.CacheMaxSize), lru.WithStale[dnsCacheKey, *D.Msg](true))
+		return &msgCache{inner: lru.New(lru.WithSize[dnsCacheKey, *cacheEntry](config.CacheMaxSize), lru.WithStale[dnsCacheKey, *cacheEntry](true))}
 	}
 }
 
