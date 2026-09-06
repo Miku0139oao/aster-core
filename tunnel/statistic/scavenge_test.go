@@ -2,6 +2,7 @@ package statistic
 
 import (
 	"runtime"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -126,5 +127,120 @@ func TestIdleScavengeReleasesHeapToOS(t *testing.T) {
 
 	if after.HeapInuse >= before.HeapInuse && after.HeapReleased <= before.HeapReleased {
 		t.Fatalf("debug.FreeOSMemory did not shrink in-use heap or release idle spans")
+	}
+}
+
+func TestIdleScavengeAsyncDoesNotBlockCaller(t *testing.T) {
+	manager := &Manager{}
+	started := make(chan struct{})
+	unblock := make(chan struct{})
+	done := make(chan struct{})
+	manager.freeOSMemory = func() {
+		close(started)
+		<-unblock
+		close(done)
+	}
+	manager.SetIdleMemoryScavenge(true, time.Nanosecond)
+
+	tracker := newScavengeTracker()
+	manager.Join(tracker)
+	manager.Leave(tracker)
+	manager.maybeIdleScavengeAsync(time.Now().Add(time.Second))
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("async scavenge did not start")
+	}
+	require.False(t, manager.maybeIdleScavenge(time.Now().Add(time.Hour)), "second start must lose the CAS")
+	close(unblock)
+	<-done
+}
+
+func fillHeapMiB(n int) {
+	blobs := make([][]byte, n)
+	for i := range blobs {
+		b := make([]byte, 1<<20)
+		for j := 0; j < len(b); j += 4096 {
+			b[j] = byte(i + 1)
+		}
+		blobs[i] = b
+	}
+	runtime.KeepAlive(blobs)
+}
+
+func TestIdleScavengeGCPause(t *testing.T) {
+	sizes := []int{32, 128}
+	for _, mib := range sizes {
+		t.Run(strconv.Itoa(mib)+"MiB", func(t *testing.T) {
+			manager := &Manager{}
+			manager.SetIdleMemoryScavenge(true, time.Nanosecond)
+			fillHeapMiB(mib)
+			tracker := newScavengeTracker()
+			manager.Join(tracker)
+			manager.Leave(tracker)
+
+			var before runtime.MemStats
+			runtime.ReadMemStats(&before)
+			start := time.Now()
+			require.True(t, manager.maybeIdleScavenge(time.Now().Add(time.Second)))
+			wall := time.Since(start)
+			var after runtime.MemStats
+			runtime.ReadMemStats(&after)
+
+			pause := time.Duration(after.PauseTotalNs - before.PauseTotalNs)
+			t.Logf("wall=%s STW=%s NumGC=%d->%d HeapInuse=%dKiB->%dKiB HeapReleased=%dKiB->%dKiB",
+				wall, pause, before.NumGC, after.NumGC, before.HeapInuse>>10, after.HeapInuse>>10,
+				before.HeapReleased>>10, after.HeapReleased>>10)
+			if pause > 500*time.Millisecond {
+				t.Fatalf("STW pause %s exceeds 500ms safety budget for a %d MiB idle heap", pause, mib)
+			}
+		})
+	}
+}
+
+func BenchmarkIdleScavengeDisabled(b *testing.B) {
+	manager := &Manager{}
+	now := time.Now()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		manager.maybeIdleScavenge(now)
+	}
+}
+
+func BenchmarkIdleScavengeArmedWhileBusy(b *testing.B) {
+	manager := &Manager{}
+	manager.SetIdleMemoryScavenge(true, time.Hour)
+	tracker := newScavengeTracker()
+	manager.Join(tracker)
+	now := time.Now()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		manager.maybeIdleScavenge(now)
+	}
+}
+
+func BenchmarkJoinLeaveDefaultOff(b *testing.B) {
+	manager := &Manager{}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		tracker := newScavengeTracker()
+		manager.Join(tracker)
+		manager.Leave(tracker)
+	}
+}
+
+func BenchmarkJoinLeaveWithScavengeArmed(b *testing.B) {
+	manager := &Manager{}
+	manager.SetIdleMemoryScavenge(true, time.Hour)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		tracker := newScavengeTracker()
+		manager.Join(tracker)
+		manager.Leave(tracker)
 	}
 }

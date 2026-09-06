@@ -38,15 +38,26 @@ func (m *Manager) markIdleIfEmpty() {
 	m.idleSinceNs.CompareAndSwap(0, time.Now().UnixNano())
 }
 
-// maybeIdleScavenge returns unused heap to the OS once after every busy
-// period. It does not run on a timer while connections exist, does not
-// change GOGC, and does not fire at process start (idleSince stays 0 until
-// a tracker has joined and then left).
-//
-// HeapInuse < RSS/2 is not used as a gate. Unreachable objects from a
-// closed burst keep HeapInuse high until a GC runs, which is exactly the
-// case FreeOSMemory must handle.
+// maybeIdleScavenge runs FreeOSMemory on the caller. Tests use this so heap
+// counters are observed after the GC finishes.
 func (m *Manager) maybeIdleScavenge(now time.Time) bool {
+	if !m.tryStartIdleScavenge(now) {
+		return false
+	}
+	m.freeUnusedMemory()
+	return true
+}
+
+// maybeIdleScavengeAsync starts FreeOSMemory on another goroutine so the
+// manager ticker (blip + zero-byte reap) is not stuck in a STW pause.
+func (m *Manager) maybeIdleScavengeAsync(now time.Time) {
+	if !m.tryStartIdleScavenge(now) {
+		return
+	}
+	go m.freeUnusedMemory()
+}
+
+func (m *Manager) tryStartIdleScavenge(now time.Time) bool {
 	if !m.scavengeEnabled.Load() {
 		return false
 	}
@@ -64,14 +75,18 @@ func (m *Manager) maybeIdleScavenge(now time.Time) bool {
 	if now.UnixNano()-idleSince < int64(idle) {
 		return false
 	}
-	if !m.scavenged.CompareAndSwap(false, true) {
-		return false
-	}
+	return m.scavenged.CompareAndSwap(false, true)
+}
+
+// freeUnusedMemory is memory-safe: debug.FreeOSMemory only collects
+// unreachable objects. Live connections that Join after the CAS stay
+// reachable and are not freed. The cost is a GC STW plus returning idle
+// spans; that is why production calls this off the ticker goroutine.
+func (m *Manager) freeUnusedMemory() {
 	free := m.freeOSMemory
 	if free == nil {
 		free = debug.FreeOSMemory
 	}
 	free()
 	log.Infoln("[Memory] idle scavenge returned unused heap to the OS")
-	return true
 }

@@ -255,7 +255,7 @@ func (m *Manager) handle() {
 			m.reapIdleZeroByteTCP(now)
 			nextReap = now.Add(zeroByteReapInterval)
 		}
-		m.maybeIdleScavenge(now)
+		m.maybeIdleScavengeAsync(now)
 	}
 }
 

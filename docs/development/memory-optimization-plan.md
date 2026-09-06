@@ -41,9 +41,11 @@ StackInuse: 544 -> 8544 KiB (8.0 KiB/conn)
 ### P0-0　決策項：閒置後 heap 不回落是 Go runtime 行為 — **已裁決 (B)，已實作**
 
 - **裁決**：使用者接受並授權 opt-in 閒置回收器（2026-09-06）。
-- **實作**：`experimental.idle-memory-scavenge`（預設 `false`）+ `experimental.idle-memory-scavenge-idle`（秒，`0` 視為 300）。所有 tracker 關閉並閒置期滿後呼叫一次 `debug.FreeOSMemory()`；每個忙碌週期最多一次；啟動時空載不觸發。程式在 `tunnel/statistic/scavenge.go`，由 `hub/executor.updateExperimental` 套用。
+- **實作**：`experimental.idle-memory-scavenge`（預設 `false`）+ `experimental.idle-memory-scavenge-idle`（秒，`0` 視為 300）。所有 tracker 關閉並閒置期滿後呼叫一次 `debug.FreeOSMemory()`；每個忙碌週期最多一次；啟動時空載不觸發。`handle()` 以 goroutine 呼叫，避免 STW 堵住 blip／reaper。程式在 `tunnel/statistic/scavenge.go`，由 `hub/executor.updateExperimental` 套用。
+- **GC 安全性**：只回收不可達物件；CAS 後才 Join 的連線仍是 live，不會被釋放。代價是一次 STW + 歸還 idle span。本機 Xeon VM 上 32–128 MiB 死物件：STW 約 0.04–0.21 ms，wall 約 1–6 ms（多數時間是把 span 還給 OS，不是 STW）。這不是 OpenWrt／七輪 working-set A/B。預設關閉時 ticker 熱路徑約 2.3 ns、0 alloc。
 - **未採用**：HeapInuse < RSS/2 作為觸發條件。關閉連線後若尚未 GC，HeapInuse 仍高，該條件會剛好跳過需要回收的情境。
 - **未採用**：預設開啟或 `with_low_memory` 自動開啟。維持預設關閉，避免給未預期 GC pause 的使用者。
+- **未重跑**：2026-09-05 七輪整程序 working-set A/B。這次只能量到 heap／STW，不能把數字寫進該表。
 
 ### P0-1　每條 TCP 連線的常駐成本：先歸因，再削減閒置時持有的 relay buffer
 
