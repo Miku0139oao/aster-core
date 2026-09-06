@@ -129,9 +129,11 @@ type Cors struct {
 
 // Experimental config
 type Experimental struct {
-	QUICGoDisableGSO bool
-	QUICGoDisableECN bool
-	IP4PEnable       bool
+	QUICGoDisableGSO       bool
+	QUICGoDisableECN       bool
+	IP4PEnable             bool
+	IdleMemoryScavenge     bool
+	IdleMemoryScavengeIdle int
 }
 
 // IPTables config
@@ -373,10 +375,12 @@ type RawIPTables struct {
 }
 
 type RawExperimental struct {
-	Fingerprints     []string `yaml:"fingerprints" json:"fingerprints"`
-	QUICGoDisableGSO bool     `yaml:"quic-go-disable-gso" json:"quic-go-disable-gso"`
-	QUICGoDisableECN bool     `yaml:"quic-go-disable-ecn" json:"quic-go-disable-ecn"`
-	IP4PEnable       bool     `yaml:"dialer-ip4p-convert" json:"dialer-ip4p-convert"`
+	Fingerprints           []string `yaml:"fingerprints" json:"fingerprints"`
+	QUICGoDisableGSO       bool     `yaml:"quic-go-disable-gso" json:"quic-go-disable-gso"`
+	QUICGoDisableECN       bool     `yaml:"quic-go-disable-ecn" json:"quic-go-disable-ecn"`
+	IP4PEnable             bool     `yaml:"dialer-ip4p-convert" json:"dialer-ip4p-convert"`
+	IdleMemoryScavenge     bool     `yaml:"idle-memory-scavenge" json:"idle-memory-scavenge"`
+	IdleMemoryScavengeIdle int      `yaml:"idle-memory-scavenge-idle" json:"idle-memory-scavenge-idle"`
 }
 
 type RawProfile struct {
@@ -877,10 +881,15 @@ func parseController(cfg *RawConfig) (*Controller, error) {
 }
 
 func parseExperimental(cfg *RawConfig) (*Experimental, error) {
+	if cfg.Experimental.IdleMemoryScavengeIdle < 0 {
+		return nil, fmt.Errorf("experimental.idle-memory-scavenge-idle cannot be negative")
+	}
 	return &Experimental{
-		QUICGoDisableGSO: cfg.Experimental.QUICGoDisableGSO,
-		QUICGoDisableECN: cfg.Experimental.QUICGoDisableECN,
-		IP4PEnable:       cfg.Experimental.IP4PEnable,
+		QUICGoDisableGSO:       cfg.Experimental.QUICGoDisableGSO,
+		QUICGoDisableECN:       cfg.Experimental.QUICGoDisableECN,
+		IP4PEnable:             cfg.Experimental.IP4PEnable,
+		IdleMemoryScavenge:     cfg.Experimental.IdleMemoryScavenge,
+		IdleMemoryScavengeIdle: cfg.Experimental.IdleMemoryScavengeIdle,
 	}, nil
 }
 
