@@ -18,7 +18,7 @@ Aster Core 目前尚未發布正式的 Aster `v*` 版本。GitHub 上的 `Prerel
 
 ## 未發布｜2026-09-06 閒置記憶體回收（opt-in）
 
-- **Idle memory scavenge：** 新增 `experimental.idle-memory-scavenge`（預設 `false`）與 `experimental.idle-memory-scavenge-idle`（秒，預設 300）。開啟後，所有連線 tracker 關閉並閒置期滿，會呼叫一次 `debug.FreeOSMemory()`，把未使用的 heap 還給 OS；每個忙碌週期最多一次，啟動時空載不會觸發。這是明確的 GC 干預，不是 GOGC 調參，也不是定時回收。規劃書 P0-0 已裁決採用此 opt-in。
+- **Idle memory scavenge：** 新增 `experimental.idle-memory-scavenge`（預設 `false`）與 `experimental.idle-memory-scavenge-idle`（秒，預設 300）。開啟後，所有連線 tracker 關閉並閒置期滿，會跑一次 `runtime.GC()`；死物件交給背景 scavenger 慢慢還給 OS，不呼叫 `debug.FreeOSMemory()`。每個忙碌週期最多一次，啟動時空載不會觸發。Go 仍有極短 STW，但整理當下不會為了立刻還頁而卡住新配置。規劃書 P0-0 已裁決採用此 opt-in。
 
 ## 未發布｜2026-08-24 效能、記憶體與可靠性 review wave
 

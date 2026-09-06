@@ -2,6 +2,7 @@ package statistic
 
 import (
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"sync/atomic"
 	"testing"
@@ -22,7 +23,7 @@ func newScavengeTracker() *trackerManagerTest {
 func TestIdleScavengeDefaultOff(t *testing.T) {
 	manager := &Manager{}
 	var calls atomic.Int32
-	manager.freeOSMemory = func() { calls.Add(1) }
+	manager.collect = func() { calls.Add(1) }
 
 	tracker := newScavengeTracker()
 	manager.Join(tracker)
@@ -34,7 +35,7 @@ func TestIdleScavengeDefaultOff(t *testing.T) {
 func TestIdleScavengeSkipsUntilAConnectionHasClosed(t *testing.T) {
 	manager := &Manager{}
 	var calls atomic.Int32
-	manager.freeOSMemory = func() { calls.Add(1) }
+	manager.collect = func() { calls.Add(1) }
 	manager.SetIdleMemoryScavenge(true, time.Nanosecond)
 
 	require.False(t, manager.maybeIdleScavenge(time.Now().Add(time.Hour)))
@@ -44,7 +45,7 @@ func TestIdleScavengeSkipsUntilAConnectionHasClosed(t *testing.T) {
 func TestIdleScavengeSkipsWhileConnectionsRemain(t *testing.T) {
 	manager := &Manager{}
 	var calls atomic.Int32
-	manager.freeOSMemory = func() { calls.Add(1) }
+	manager.collect = func() { calls.Add(1) }
 	manager.SetIdleMemoryScavenge(true, time.Nanosecond)
 
 	first := newScavengeTracker()
@@ -60,7 +61,7 @@ func TestIdleScavengeSkipsWhileConnectionsRemain(t *testing.T) {
 func TestIdleScavengeWaitsForIdleDuration(t *testing.T) {
 	manager := &Manager{}
 	var calls atomic.Int32
-	manager.freeOSMemory = func() { calls.Add(1) }
+	manager.collect = func() { calls.Add(1) }
 	manager.SetIdleMemoryScavenge(true, time.Hour)
 
 	tracker := newScavengeTracker()
@@ -73,7 +74,7 @@ func TestIdleScavengeWaitsForIdleDuration(t *testing.T) {
 func TestIdleScavengeRunsOnceThenRearmsAfterTraffic(t *testing.T) {
 	manager := &Manager{}
 	var calls atomic.Int32
-	manager.freeOSMemory = func() { calls.Add(1) }
+	manager.collect = func() { calls.Add(1) }
 	manager.SetIdleMemoryScavenge(true, time.Nanosecond)
 
 	tracker := newScavengeTracker()
@@ -96,7 +97,7 @@ func TestIdleScavengeZeroIdleUsesDefaultDuration(t *testing.T) {
 	require.EqualValues(t, int64(DefaultIdleMemoryScavengeIdle), manager.scavengeIdleNs.Load())
 }
 
-func TestIdleScavengeReleasesHeapToOS(t *testing.T) {
+func TestIdleScavengeShrinksHeapInuse(t *testing.T) {
 	manager := &Manager{}
 	manager.SetIdleMemoryScavenge(true, time.Nanosecond)
 
@@ -122,11 +123,11 @@ func TestIdleScavengeReleasesHeapToOS(t *testing.T) {
 	runtime.ReadMemStats(&after)
 
 	t.Logf("HeapInuse %d KiB -> %d KiB", before.HeapInuse>>10, after.HeapInuse>>10)
-	t.Logf("HeapReleased %d KiB -> %d KiB", before.HeapReleased>>10, after.HeapReleased>>10)
 	t.Logf("HeapIdle %d KiB -> %d KiB", before.HeapIdle>>10, after.HeapIdle>>10)
+	t.Logf("HeapReleased %d KiB -> %d KiB (background scavenger may release later)", before.HeapReleased>>10, after.HeapReleased>>10)
 
-	if after.HeapInuse >= before.HeapInuse && after.HeapReleased <= before.HeapReleased {
-		t.Fatalf("debug.FreeOSMemory did not shrink in-use heap or release idle spans")
+	if after.HeapInuse >= before.HeapInuse {
+		t.Fatalf("idle GC did not shrink in-use heap: %d -> %d", before.HeapInuse, after.HeapInuse)
 	}
 }
 
@@ -135,7 +136,7 @@ func TestIdleScavengeAsyncDoesNotBlockCaller(t *testing.T) {
 	started := make(chan struct{})
 	unblock := make(chan struct{})
 	done := make(chan struct{})
-	manager.freeOSMemory = func() {
+	manager.collect = func() {
 		close(started)
 		<-unblock
 		close(done)
@@ -192,10 +193,48 @@ func TestIdleScavengeGCPause(t *testing.T) {
 			t.Logf("wall=%s STW=%s NumGC=%d->%d HeapInuse=%dKiB->%dKiB HeapReleased=%dKiB->%dKiB",
 				wall, pause, before.NumGC, after.NumGC, before.HeapInuse>>10, after.HeapInuse>>10,
 				before.HeapReleased>>10, after.HeapReleased>>10)
+			if after.HeapInuse >= before.HeapInuse {
+				t.Fatalf("idle GC did not shrink in-use heap: %d -> %d", before.HeapInuse, after.HeapInuse)
+			}
 			if pause > 500*time.Millisecond {
 				t.Fatalf("STW pause %s exceeds 500ms safety budget for a %d MiB idle heap", pause, mib)
 			}
 		})
+	}
+}
+
+func measureCollect(fn func()) (wall, stw time.Duration, inuseBefore, inuseAfter, releasedBefore, releasedAfter uint64) {
+	fillHeapMiB(32)
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	start := time.Now()
+	fn()
+	wall = time.Since(start)
+	runtime.ReadMemStats(&after)
+	stw = time.Duration(after.PauseTotalNs - before.PauseTotalNs)
+	return wall, stw, before.HeapInuse, after.HeapInuse, before.HeapReleased, after.HeapReleased
+}
+
+func TestIdleGCWallVsForcedReturnToOS(t *testing.T) {
+	gcWall, gcSTW, gcInBefore, gcInAfter, gcRelBefore, gcRelAfter := measureCollect(runtime.GC)
+	freeWall, freeSTW, freeInBefore, freeInAfter, freeRelBefore, freeRelAfter := measureCollect(debug.FreeOSMemory)
+
+	t.Logf("runtime.GC        wall=%s STW=%s HeapInuse=%dKiB->%dKiB HeapReleased=%dKiB->%dKiB",
+		gcWall, gcSTW, gcInBefore>>10, gcInAfter>>10, gcRelBefore>>10, gcRelAfter>>10)
+	t.Logf("debug.FreeOSMemory wall=%s STW=%s HeapInuse=%dKiB->%dKiB HeapReleased=%dKiB->%dKiB",
+		freeWall, freeSTW, freeInBefore>>10, freeInAfter>>10, freeRelBefore>>10, freeRelAfter>>10)
+
+	if gcInAfter >= gcInBefore {
+		t.Fatalf("runtime.GC did not shrink HeapInuse: %d -> %d", gcInBefore, gcInAfter)
+	}
+	if gcSTW > 500*time.Millisecond {
+		t.Fatalf("runtime.GC STW %s exceeds 500ms safety budget", gcSTW)
+	}
+	// FreeOSMemory walks idle pages under the heap lock. Wall time should
+	// exceed the GC-only path on a 32 MiB dead heap; if it does not, log
+	// and keep going so a quiet scavenger does not fail CI.
+	if freeWall+time.Microsecond < gcWall {
+		t.Logf("FreeOSMemory wall %s was not slower than GC %s on this run", freeWall, gcWall)
 	}
 }
 

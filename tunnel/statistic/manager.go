@@ -59,7 +59,7 @@ type Manager struct {
 	scavengeIdleNs  atomic.Int64
 	idleSinceNs     atomic.Int64
 	scavenged       atomic.Bool
-	freeOSMemory    func()
+	collect         func()
 }
 
 type Principal struct {
