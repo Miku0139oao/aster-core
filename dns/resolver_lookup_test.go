@@ -626,3 +626,121 @@ func BenchmarkLookupIPv4CacheHit(b *testing.B) {
 		}
 	}
 }
+
+func TestACacheStoresCompactIPs(t *testing.T) {
+	cache := Config{}.newCache()
+	req := new(D.Msg)
+	req.SetQuestion("compact.example.", D.TypeA)
+	resp := new(D.Msg)
+	resp.SetReply(req)
+	resp.Answer = []D.RR{&D.A{
+		Hdr: D.RR_Header{Name: "compact.example.", Rrtype: D.TypeA, Class: D.ClassINET, Ttl: 300},
+		A:   net.IPv4(192, 0, 2, 7).To4(),
+	}}
+	putMsgToCache(cache, req.Question[0], resp)
+
+	mc, ok := cache.(*msgCache)
+	if !ok {
+		t.Fatalf("cache type %T", cache)
+	}
+	entry, _, hit := mc.inner.GetWithExpire(cacheKey(req.Question[0]))
+	if !hit || entry == nil {
+		t.Fatal("expected cache hit")
+	}
+	if entry.msg != nil {
+		t.Fatal("pure A answer retained a full DNS message tree")
+	}
+	if len(entry.ips) != 1 || entry.ips[0] != netip.MustParseAddr("192.0.2.7") {
+		t.Fatalf("compact ips = %v", entry.ips)
+	}
+
+	got, _, hit := getMsgFromCache(cache, req.Question[0])
+	if !hit || got == nil {
+		t.Fatal("expand miss")
+	}
+	a, ok := got.Answer[0].(*D.A)
+	if !ok || !a.A.Equal(net.IPv4(192, 0, 2, 7)) {
+		t.Fatalf("expanded A = %v", got.Answer)
+	}
+	a.A[0] ^= 0xff
+	ips, _, hit := peekIPsFromCache(cache, req.Question[0])
+	if !hit || len(ips) != 1 || ips[0] != netip.MustParseAddr("192.0.2.7") {
+		t.Fatalf("peek after mutate = %v hit=%v", ips, hit)
+	}
+}
+
+func TestCNAMEAnswerIsNotCompacted(t *testing.T) {
+	cache := Config{}.newCache()
+	req := new(D.Msg)
+	req.SetQuestion("alias.example.", D.TypeA)
+	resp := new(D.Msg)
+	resp.SetReply(req)
+	resp.Answer = []D.RR{
+		&D.CNAME{
+			Hdr:    D.RR_Header{Name: "alias.example.", Rrtype: D.TypeCNAME, Class: D.ClassINET, Ttl: 60},
+			Target: "canonical.example.",
+		},
+		&D.A{
+			Hdr: D.RR_Header{Name: "canonical.example.", Rrtype: D.TypeA, Class: D.ClassINET, Ttl: 60},
+			A:   net.IPv4(192, 0, 2, 9).To4(),
+		},
+	}
+	putMsgToCache(cache, req.Question[0], resp)
+
+	mc := cache.(*msgCache)
+	entry, _, hit := mc.inner.GetWithExpire(cacheKey(req.Question[0]))
+	if !hit || entry == nil || entry.msg == nil {
+		t.Fatal("CNAME chain must stay a full message")
+	}
+	if _, ok := entry.msg.Answer[0].(*D.CNAME); !ok {
+		t.Fatalf("Answer[0] type %T", entry.msg.Answer[0])
+	}
+}
+
+func TestCompactACacheRetainsLessThanFullClone(t *testing.T) {
+	req := new(D.Msg)
+	req.SetQuestion("heap.example.", D.TypeA)
+	resp := new(D.Msg)
+	resp.SetReply(req)
+	resp.Answer = []D.RR{&D.A{
+		Hdr: D.RR_Header{Name: "heap.example.", Rrtype: D.TypeA, Class: D.ClassINET, Ttl: 300},
+		A:   net.IPv4(192, 0, 2, 11).To4(),
+	}}
+	tmp := *resp
+	tmp.Extra = extraWithoutOPT(resp.Extra)
+	full := cloneMsg(&tmp)
+	compact := compactIPs(cacheKey(req.Question[0]), full)
+	if compact == nil {
+		t.Fatal("expected compact encoding")
+	}
+	if estimateCacheBytes(full) <= estimateCompactBytes(compact)*2 {
+		t.Fatalf("compact encoding is not smaller: full=%d compact=%d",
+			estimateCacheBytes(full), estimateCompactBytes(compact))
+	}
+}
+
+func estimateCacheBytes(msg *D.Msg) int {
+	if msg == nil {
+		return 0
+	}
+	n := 128 // Msg + header
+	n += len(msg.Question) * 32
+	for _, rr := range msg.Answer {
+		n += 64
+		if a, ok := rr.(*D.A); ok {
+			n += len(a.Hdr.Name) + len(a.A)
+		}
+		if a, ok := rr.(*D.AAAA); ok {
+			n += len(a.Hdr.Name) + len(a.AAAA)
+		}
+	}
+	return n
+}
+
+func estimateCompactBytes(e *cacheEntry) int {
+	if e == nil {
+		return 0
+	}
+	n := 48 + len(e.ips)*16
+	return n
+}
