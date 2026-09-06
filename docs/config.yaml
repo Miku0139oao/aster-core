@@ -115,10 +115,10 @@ experimental:
   # This equivalent to the environment variable QUIC_GO_DISABLE_GSO=1.
   #quic-go-disable-gso: true
 
-  # After every tracker has closed, wait this many seconds then call debug.FreeOSMemory
-  # once. Off by default: this is an explicit GC pause, not a substitute for smaller
-  # per-connection buffers. Useful on routers after a connection burst when RSS would
-  # otherwise stay high because Go's scavenger has nothing to do without a GC.
+  # After every tracker has closed, wait this many seconds then run one GC.
+  # Unused pages return to the OS in the background (no debug.FreeOSMemory).
+  # Off by default. Go still has a short STW pause; this avoids a multi-ms
+  # allocation stall from returning every idle span immediately.
   # idle-memory-scavenge: false
   # idle-memory-scavenge-idle: 300
 

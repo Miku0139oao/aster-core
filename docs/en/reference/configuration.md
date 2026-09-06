@@ -69,10 +69,10 @@ experimental:
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `idle-memory-scavenge` | `false` | After every connection tracker has closed and the idle period has elapsed, call `debug.FreeOSMemory()` once so unused heap spans can return to the OS. That call runs a GC. A later connection restarts the idle clock; each busy period scavenges at most once. Process start with no prior connections does not trigger it. |
+| `idle-memory-scavenge` | `false` | After every connection tracker has closed and the idle period has elapsed, run one `runtime.GC()`. Dead objects become idle spans and Go’s background scavenger returns them to the OS. This does **not** call `debug.FreeOSMemory()`, which would return every idle page immediately. A later connection restarts the idle clock; each busy period runs at most once. Process start with no prior connections does not trigger it. |
 | `idle-memory-scavenge-idle` | `300` | Seconds to wait after the last tracker closes. `0` or omitted uses 300. Must be ≥ 0. |
 
-This is not GOGC/GOMEMLIMIT tuning and not a periodic GC. It stays off by default. When enabled, Aster runs **one** GC after the idle period and returns idle spans to the OS. That includes a stop-the-world pause, but it is not on the connection data path; the stats ticker starts it on another goroutine so blip counters and the zero-byte reaper keep running. A handshake that lands in that pause is delayed. Low-memory hosts that otherwise keep RSS after connections close can turn it on. The manual `PUT /debug/gc` endpoint remains.
+This is not GOGC/GOMEMLIMIT tuning and not a periodic GC. It stays off by default. Go cannot GC with zero stop-the-world pause; the remaining pause is the short GC STW, not a multi-millisecond forced return-to-OS. RSS then falls in the background. `PUT /debug/gc` still returns memory to the OS immediately.
 
 ## Controller
 

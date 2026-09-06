@@ -1,15 +1,15 @@
 package statistic
 
 import (
-	"runtime/debug"
+	"runtime"
 	"time"
 
 	"github.com/Miku0139oao/aster-core/log"
 )
 
 // DefaultIdleMemoryScavengeIdle is how long all trackers must stay gone
-// before an enabled scavenger calls debug.FreeOSMemory. It is longer than
-// the default UDP NAT timeout so a quiet association can expire first.
+// before an enabled scavenger runs a GC. It is longer than the default UDP
+// NAT timeout so a quiet association can expire first.
 const DefaultIdleMemoryScavengeIdle = 5 * time.Minute
 
 // SetIdleMemoryScavenge arms or disarms the idle scavenger. idle is ignored
@@ -38,23 +38,23 @@ func (m *Manager) markIdleIfEmpty() {
 	m.idleSinceNs.CompareAndSwap(0, time.Now().UnixNano())
 }
 
-// maybeIdleScavenge runs FreeOSMemory on the caller. Tests use this so heap
+// maybeIdleScavenge runs the idle GC on the caller. Tests use this so heap
 // counters are observed after the GC finishes.
 func (m *Manager) maybeIdleScavenge(now time.Time) bool {
 	if !m.tryStartIdleScavenge(now) {
 		return false
 	}
-	m.freeUnusedMemory()
+	m.idleCollect()
 	return true
 }
 
-// maybeIdleScavengeAsync starts FreeOSMemory on another goroutine so the
-// manager ticker (blip + zero-byte reap) is not stuck in a STW pause.
+// maybeIdleScavengeAsync starts the idle GC on another goroutine so the
+// manager ticker (blip + zero-byte reap) is not the goroutine in STW.
 func (m *Manager) maybeIdleScavengeAsync(now time.Time) {
 	if !m.tryStartIdleScavenge(now) {
 		return
 	}
-	go m.freeUnusedMemory()
+	go m.idleCollect()
 }
 
 func (m *Manager) tryStartIdleScavenge(now time.Time) bool {
@@ -78,15 +78,19 @@ func (m *Manager) tryStartIdleScavenge(now time.Time) bool {
 	return m.scavenged.CompareAndSwap(false, true)
 }
 
-// freeUnusedMemory is memory-safe: debug.FreeOSMemory only collects
-// unreachable objects. Live connections that Join after the CAS stay
-// reachable and are not freed. The cost is a GC STW plus returning idle
-// spans; that is why production calls this off the ticker goroutine.
-func (m *Manager) freeUnusedMemory() {
-	free := m.freeOSMemory
-	if free == nil {
-		free = debug.FreeOSMemory
+// idleCollect runs a concurrent GC so dead objects become idle spans. It
+// does not call debug.FreeOSMemory: that walks idle pages under the heap
+// lock and can stall new allocations for milliseconds while memory is
+// returned. Go's background scavenger then returns those spans without
+// an extra forced return-to-OS pass.
+//
+// A short stop-the-world pause is still unavoidable (Go has no zero-STW
+// GC). Live connections that Join after the CAS stay reachable.
+func (m *Manager) idleCollect() {
+	collect := m.collect
+	if collect == nil {
+		collect = runtime.GC
 	}
-	free()
-	log.Infoln("[Memory] idle scavenge returned unused heap to the OS")
+	collect()
+	log.Infoln("[Memory] idle GC finished; unused heap returns to the OS in the background")
 }

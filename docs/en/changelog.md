@@ -18,7 +18,7 @@ For the full feature and compatibility overview, see [Aster vs. Mihomo](/en/refe
 
 ## Unreleased | 2026-09-06 idle memory scavenge (opt-in)
 
-- **Idle memory scavenge:** Added `experimental.idle-memory-scavenge` (default `false`) and `experimental.idle-memory-scavenge-idle` (seconds, default 300). When enabled, Aster calls `debug.FreeOSMemory()` once after every connection tracker has closed and the idle period has elapsed, so unused heap can return to the OS. Each busy period scavenges at most once; process start with no connections does not trigger it. This is an explicit GC intervention, not GOGC tuning and not a periodic collector. Plan item P0-0 is decided as this opt-in.
+- **Idle memory scavenge:** Added `experimental.idle-memory-scavenge` (default `false`) and `experimental.idle-memory-scavenge-idle` (seconds, default 300). When enabled, Aster runs one `runtime.GC()` after every connection tracker has closed and the idle period has elapsed. Dead objects are left for the background scavenger; `debug.FreeOSMemory()` is not used. Each busy period runs at most once; process start with no connections does not trigger it. Go still has a short STW, but cleanup does not stall new allocations by returning every idle page immediately. Plan item P0-0 is decided as this opt-in.
 
 ## Unreleased | 2026-08-24 performance, memory, and reliability review
 
