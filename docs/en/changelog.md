@@ -16,6 +16,10 @@ Aster Core does not have an official Aster `v*` release yet. GitHub's `Prereleas
 
 For the full feature and compatibility overview, see [Aster vs. Mihomo](/en/reference/mihomo-differences). This page keeps the dated Aster highlights without reproducing the upstream Mihomo history.
 
+## Unreleased | 2026-09-06 idle memory scavenge (opt-in)
+
+- **Idle memory scavenge:** Added `experimental.idle-memory-scavenge` (default `false`) and `experimental.idle-memory-scavenge-idle` (seconds, default 300). When enabled, Aster calls `debug.FreeOSMemory()` once after every connection tracker has closed and the idle period has elapsed, so unused heap can return to the OS. Each busy period scavenges at most once; process start with no connections does not trigger it. This is an explicit GC intervention, not GOGC tuning and not a periodic collector. Plan item P0-0 is decided as this opt-in.
+
 ## Unreleased | 2026-08-24 performance, memory, and reliability review
 
 - **Kernel DIRECT hot path:** Skip full expiry scans until the next TTL, share one apply barrier per generation, and use a stack buffer for the common 1–4 observations. Existing-flow refresh fell from 15.286 µs / 64 B / 1 alloc to 270.8 ns / 0 alloc on the same host (**56.4×** median).

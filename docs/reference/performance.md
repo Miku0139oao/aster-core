@@ -71,7 +71,7 @@ Padding 規則在載入設定時就先解析好。真正傳資料時，Aster 只
 
 - **GeoSite working set 中位數 −23.9%，private bytes −18.2%**。兩版範圍仍重疊，這不是每次啟動都保證少固定 RAM。
 - TCP workload 為獨立 loopback echo 程序，每條連線驗證 SOCKS 握手與 echo，再上／下傳各 `128 × 4096` bytes，最多 16 個 worker。1,000 條連線每方向共 500 MiB。全部確認關閉，controller 連線數歸零。1,000 條連線流量期間 working set 為 117.02 → 117.34 MiB，流量完成仍持有時為 122.25 → 122.71 MiB；釋放後 15 秒為 122.22 → 122.69 MiB。
-- **沒有證明 TCP 程序 RAM 降低或在 60 秒內回到空載**；持有 1,000 條連線的中位數反而 +1.8%。回收物件、歸還 pool、降低 B/op，都不等於立即歸還 OS 記憶體。
+- **沒有證明 TCP 程序 RAM 降低或在 60 秒內回到空載**；持有 1,000 條連線的中位數反而 +1.8%。回收物件、歸還 pool、降低 B/op，都不等於立即歸還 OS 記憶體。連線關閉後配置速率趨近 0，Go 不會自行 GC，RSS 會留在峰值。若接受一次明確的 GC pause，可開啟 `experimental.idle-memory-scavenge`（預設關閉，見[設定總覽](/reference/configuration)）；這不是 2026-09-05 A/B 的一部分，不能回寫到該表。
 - CIDR 短期 working set 不穩定：先前候選 `4a5d6937` 的獨立七輪是 26.27 → 29.44 MiB（+12.1%），最終候選是 −1.9%。後續程式只修正未在此情境執行的 binary export 與 ShadowQUIC lint，**不能把差異歸因為修好了程序 RAM**。另行、明確強制 GC 的 heap 診斷確認約 4.58 MiB 重複 IPRange 儲存不再存活；它只驗證引用解除，不取代自然程序結果。
 
 ### 相同來源的 CPU／alloc A/B

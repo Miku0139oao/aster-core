@@ -16,6 +16,10 @@ Aster Core 目前尚未發布正式的 Aster `v*` 版本。GitHub 上的 `Prerel
 
 完整的功能差異與相容性說明，請看[Aster 與 Mihomo 的差異](/reference/mihomo-differences)；本頁只整理有日期的 Aster 變更重點。
 
+## 未發布｜2026-09-06 閒置記憶體回收（opt-in）
+
+- **Idle memory scavenge：** 新增 `experimental.idle-memory-scavenge`（預設 `false`）與 `experimental.idle-memory-scavenge-idle`（秒，預設 300）。開啟後，所有連線 tracker 關閉並閒置期滿，會呼叫一次 `debug.FreeOSMemory()`，把未使用的 heap 還給 OS；每個忙碌週期最多一次，啟動時空載不會觸發。這是明確的 GC 干預，不是 GOGC 調參，也不是定時回收。規劃書 P0-0 已裁決採用此 opt-in。
+
 ## 未發布｜2026-08-24 效能、記憶體與可靠性 review wave
 
 - **Kernel DIRECT hot path：** 未到下一筆 TTL 前跳過全表 expiry scan，共用同 generation 的 apply barrier，並讓常見 1–4 筆 observation 使用 stack buffer。既有 flow refresh 從 15.286 µs／64 B／1 alloc 降至 270.8 ns／0 alloc（同機中位數，約 **56.4×**）。

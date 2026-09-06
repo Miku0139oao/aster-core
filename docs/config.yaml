@@ -115,6 +115,13 @@ experimental:
   # This equivalent to the environment variable QUIC_GO_DISABLE_GSO=1.
   #quic-go-disable-gso: true
 
+  # After every tracker has closed, wait this many seconds then call debug.FreeOSMemory
+  # once. Off by default: this is an explicit GC pause, not a substitute for smaller
+  # per-connection buffers. Useful on routers after a connection burst when RSS would
+  # otherwise stay high because Go's scavenger has nothing to do without a GC.
+  # idle-memory-scavenge: false
+  # idle-memory-scavenge-idle: 300
+
 # 类似于 /etc/hosts, 仅支持配置单个 IP
 hosts:
 # '*.mihomo.dev': 127.0.0.1

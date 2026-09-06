@@ -141,6 +141,7 @@ func router(isDebug bool, secret string, dohServer string, cors Cors, asterPolic
 			r.Mount("/debug", func() http.Handler {
 				r := chi.NewRouter()
 				r.Put("/gc", func(w http.ResponseWriter, r *http.Request) {
+					// Manual equivalent of experimental.idle-memory-scavenge.
 					debug.FreeOSMemory()
 				})
 				handler := middleware.Profiler
