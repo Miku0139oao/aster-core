@@ -12,7 +12,7 @@
 | UDP NAT 表上限（8192／低記憶體 2048） | 既有 | `component/nat/table.go` |
 | `bytes.Buffer` 超過 128 KiB 不回全域 pool | 既有 | `common/pool/buffer.go` |
 | 低記憶體 build tag `with_low_memory` 縮小 relay／UDP buffer | 既有 | `common/pool/buffer_low_memory.go` |
-| 閒置後 opt-in `debug.FreeOSMemory`（P0-0 (B)，預設關閉） | 已完成 | `tunnel/statistic/scavenge.go`、`experimental.idle-memory-scavenge` |
+| 閒置後 opt-in `runtime.GC()`（P0-0 (B)，預設關閉；不強制 FreeOSMemory） | 已完成 | `tunnel/statistic/scavenge.go`、`experimental.idle-memory-scavenge` |
 
 `docs/reference/performance.md` 的 2026-09-05 整程序 A/B 已指出目前最大的缺口：
 
@@ -34,18 +34,18 @@ StackInuse: 544 -> 8544 KiB (8.0 KiB/conn)
 1. **整程序情境**：沿用 `docs/reference/performance.md` 的最小設定（Rule 模式 + `MATCH,DIRECT`、DNS／TUN 關閉、loopback SOCKS），情境至少包含：空載、持有 100／1,000 條 TCP、釋放後 60 秒、1,000 個 UDP flow 各 queue 若干封包。每情境七輪、新程序、前後交錯。Linux 取 `/proc/<pid>/status` 的 `VmRSS`／`VmHWM`，Windows 取 working set 與 private bytes；兩者不可互換比較。
 2. **Heap 歸因**：用 `hub/route` 的 `/debug/pprof/heap`（需 `external-controller` 開 debug）在「持有 1,000 條 TCP」時抓 `inuse_space`，以 `go tool pprof -top` 確認 top 3 符號。這是驗收「錢花在哪」的依據，不是用來取代整程序數字。
 3. **Microbenchmark**：`go test -run '^$' -bench ... -benchmem -count=7 -cpu=1`，每個 case 用 `go test -c` 建 test binary、新程序執行，見 `docs/reference/performance.md` 的「如何重跑」。
-4. **禁止事項**：不設定 `GOGC`／`GOMEMLIMIT`、不為了美化數字而呼叫 `runtime.GC()`。`debug.FreeOSMemory()` 僅允許：(1) 既有手動 `PUT /debug/gc`；(2) 預設關閉的 `experimental.idle-memory-scavenge`（P0-0）。不能拿 B/op 的下降直接宣稱 RSS 下降。
+4. **禁止事項**：不設定 `GOGC`／`GOMEMLIMIT`、不為了美化數字而呼叫 `runtime.GC()`／`debug.FreeOSMemory()`。唯一例外：(1) 既有手動 `PUT /debug/gc`；(2) 預設關閉的 `experimental.idle-memory-scavenge`，且只跑一次 `runtime.GC()`，不強制 `FreeOSMemory`。不能拿 B/op 的下降直接宣稱 RSS 下降。
 
 ## 2. 工作項目
 
 ### P0-0　決策項：閒置後 heap 不回落是 Go runtime 行為 — **已裁決 (B)，已實作**
 
 - **裁決**：使用者接受並授權 opt-in 閒置回收器（2026-09-06）。
-- **實作**：`experimental.idle-memory-scavenge`（預設 `false`）+ `experimental.idle-memory-scavenge-idle`（秒，`0` 視為 300）。所有 tracker 關閉並閒置期滿後呼叫一次 `debug.FreeOSMemory()`；每個忙碌週期最多一次；啟動時空載不觸發。`handle()` 以 goroutine 呼叫，避免 STW 堵住 blip／reaper。程式在 `tunnel/statistic/scavenge.go`，由 `hub/executor.updateExperimental` 套用。
-- **GC 安全性**：只回收不可達物件；CAS 後才 Join 的連線仍是 live，不會被釋放。代價是一次 STW + 歸還 idle span。本機 Xeon VM 上 32–128 MiB 死物件：STW 約 0.04–0.21 ms，wall 約 1–6 ms（多數時間是把 span 還給 OS，不是 STW）。這不是 OpenWrt／七輪 working-set A/B。預設關閉時 ticker 熱路徑約 2.3 ns、0 alloc。
+- **實作**：`experimental.idle-memory-scavenge`（預設 `false`）+ `experimental.idle-memory-scavenge-idle`（秒，`0` 視為 300）。所有 tracker 關閉並閒置期滿後跑一次 `runtime.GC()`，把死物件變成 idle span，由背景 scavenger 還給 OS。**不**呼叫 `debug.FreeOSMemory()`，避免 heap lock 造成數毫秒的配置停頓。每個忙碌週期最多一次；啟動時空載不觸發。`handle()` 以 goroutine 呼叫。程式在 `tunnel/statistic/scavenge.go`。
+- **GC 安全性**：只回收不可達物件。Go 做不到零 STW；剩下的是一般 GC 的極短暫停，不是「立刻還完全部頁面」。若要立刻還給 OS，用手動 `PUT /debug/gc`。
 - **未採用**：HeapInuse < RSS/2 作為觸發條件。關閉連線後若尚未 GC，HeapInuse 仍高，該條件會剛好跳過需要回收的情境。
-- **未採用**：預設開啟或 `with_low_memory` 自動開啟。維持預設關閉，避免給未預期 GC pause 的使用者。
-- **未重跑**：2026-09-05 七輪整程序 working-set A/B。這次只能量到 heap／STW，不能把數字寫進該表。
+- **未採用**：預設開啟或 `with_low_memory` 自動開啟。維持預設關閉。
+- **未重跑**：2026-09-05 七輪整程序 working-set A/B。
 
 ### P0-1　每條 TCP 連線的常駐成本：先歸因，再削減閒置時持有的 relay buffer
 
@@ -137,7 +137,7 @@ StackInuse: 544 -> 8544 KiB (8.0 KiB/conn)
 
 ## 3. 約束（接手者不得違反）
 
-1. 不使用 `GOGC`／`GOMEMLIMIT`／`debug.SetMemoryLimit`／忙碌時定時 `FreeOSMemory` 讓數字好看。P0-0 的 opt-in idle scavenge 是唯一允許的自動 `FreeOSMemory`，且必須預設關閉。
+1. 不使用 `GOGC`／`GOMEMLIMIT`／`debug.SetMemoryLimit`／忙碌時定時 `FreeOSMemory` 讓數字好看。P0-0 的 opt-in idle scavenge 只允許一次 `runtime.GC()`，且必須預設關閉。
 2. 不降低 queue／cache／NAT 上限、不縮短 TTL、不移除功能來換記憶體；`with_low_memory` 可以有更小的預設，一般 build 的預設要有數據支持才能改。
 3. 保留 stale DNS、fake-IP 反查、面板 JSON 欄位等對外語意。
 4. 每個項目獨立 PR，PR 描述必須附：改動前後整程序數字（含範圍）、heap top 3、相關 benchmark 前後值、`go test ./...`、`go vet`、`gofmt`、`golangci-lint` 結果。
