@@ -16,6 +16,12 @@ Aster Core does not have an official Aster `v*` release yet. GitHub's `Prereleas
 
 For the full feature and compatibility overview, see [Aster vs. Mihomo](/en/reference/mihomo-differences). This page keeps the dated Aster highlights without reproducing the upstream Mihomo history.
 
+## Unreleased | 2026-09-07 retained-memory regression fixes
+
+- **DNS compact cache:** `getMsgFromCache` expands a compact A/AAAA entry once and does not `cloneMsg` the result. Full-message cache hits are back to about 5 allocs / 264 B; `LookupIPv4CacheHit` stays 88 B / 3 allocs.
+- **Large allocator:** 16–128 KiB slabs use `sync.Pool` again, with an atomic occupancy cap. Get/Put no longer go through a channel; excess `Put`s are still dropped.
+- **Idle relay buffers:** the fallback `copyConn` path starts at 4 KiB and grows on full reads. 256 idle `net.Pipe` pairs measured about 12 KiB heap/conn (previously about 68 KiB with a fixed 32 KiB slab). Chunked protocol `ReadBuffer` implementations keep `RelayBufferSize`. splice / readWaiter are unchanged. The 2026-09-05 / 2026-09-07 process RSS tables were not rerun.
+
 ## Unreleased | 2026-09-06 idle memory scavenge (opt-in)
 
 - **Idle memory scavenge:** Added `experimental.idle-memory-scavenge` (default `false`) and `experimental.idle-memory-scavenge-idle` (seconds, default 300). When enabled, Aster runs one `runtime.GC()` after every connection tracker has closed and the idle period has elapsed. Dead objects are left for the background scavenger; `debug.FreeOSMemory()` is not used. Each busy period runs at most once; process start with no connections does not trigger it. Go still has a short STW, but cleanup does not stall new allocations by returning every idle page immediately. Plan item P0-0 is decided as this opt-in.

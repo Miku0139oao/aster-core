@@ -669,6 +669,35 @@ func TestACacheStoresCompactIPs(t *testing.T) {
 	}
 }
 
+func TestGetMsgFromCacheCompactAllocs(t *testing.T) {
+	cache := Config{}.newCache()
+	req := new(D.Msg)
+	req.SetQuestion("alloc.example.", D.TypeA)
+	resp := new(D.Msg)
+	resp.SetReply(req)
+	resp.Answer = []D.RR{&D.A{
+		Hdr: D.RR_Header{Name: "alloc.example.", Rrtype: D.TypeA, Class: D.ClassINET, Ttl: 300},
+		A:   net.IPv4(192, 0, 2, 13).To4(),
+	}}
+	putMsgToCache(cache, req.Question[0], resp)
+	q := req.Question[0]
+	msg, _, hit := getMsgFromCache(cache, q)
+	if !hit || msg == nil {
+		t.Fatal("warmup miss")
+	}
+
+	allocs := testing.AllocsPerRun(200, func() {
+		got, _, ok := getMsgFromCache(cache, q)
+		if !ok || got == nil {
+			panic("cache miss")
+		}
+	})
+	// expand() builds a unique Msg (about 5 allocs). A second cloneMsg was 10.
+	if allocs > 6 {
+		t.Fatalf("compact getMsgFromCache allocs = %.1f, want <= 6 (single expand)", allocs)
+	}
+}
+
 func TestCNAMEAnswerIsNotCompacted(t *testing.T) {
 	cache := Config{}.newCache()
 	req := new(D.Msg)

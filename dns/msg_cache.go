@@ -41,6 +41,21 @@ func (c *msgCache) GetWithExpire(key dnsCacheKey) (*D.Msg, time.Time, bool) {
 	return entry.expand(key), expire, true
 }
 
+// getForCaller returns a message the caller may mutate. Compact entries are
+// expanded into a fresh tree; full messages are cloned. Expanding already
+// allocates a unique Msg, so a second cloneMsg would double allocs on the
+// ExchangeContext / getMsgFromCache hit path.
+func (c *msgCache) getForCaller(key dnsCacheKey) (*D.Msg, time.Time, bool) {
+	entry, expire, hit := c.inner.GetWithExpire(key)
+	if !hit || entry == nil {
+		return nil, expire, hit
+	}
+	if entry.msg != nil {
+		return cloneMsg(entry.msg), expire, true
+	}
+	return entry.expand(key), expire, true
+}
+
 func (c *msgCache) SetWithExpire(key dnsCacheKey, value *D.Msg, expire time.Time) {
 	c.inner.SetWithExpire(key, encodeCacheEntry(key, value), expire)
 }
