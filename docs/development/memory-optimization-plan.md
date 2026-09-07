@@ -7,8 +7,8 @@
 
 | 項目 | 狀態 | 位置 |
 | --- | --- | --- |
-| 16 KiB–128 KiB 配置器 slab 改為有上限的 channel pool，連線爆量後不再無限保留 | 已完成，[PR #4](https://github.com/Miku0139oao/aster-core/pull/4) | `common/pool/alloc.go`、`common/pool/alloc_cap*.go` |
-| DNS cache 純 A/AAAA 回應改存 `[]netip.Addr`，只有 CNAME／SOA／附加區段才存完整 `*dns.Msg` | 已完成，[PR #4](https://github.com/Miku0139oao/aster-core/pull/4) | `dns/msg_cache.go`、`dns/resolver.go`、`dns/util.go` |
+| 16 KiB–128 KiB 配置器 slab 改為有上限的 `sync.Pool`（先前 channel 的 Get/Put 回退已修正） | 已完成，[PR #4](https://github.com/Miku0139oao/aster-core/pull/4) 與後續修正 | `common/pool/alloc.go`、`common/pool/alloc_cap*.go` |
+| DNS cache 純 A/AAAA 回應改存 `[]netip.Addr`；compact hit 只 expand 一次 | 已完成，[PR #4](https://github.com/Miku0139oao/aster-core/pull/4) 與後續修正 | `dns/msg_cache.go`、`dns/resolver.go`、`dns/util.go` |
 | UDP NAT 表上限（8192／低記憶體 2048） | 既有 | `component/nat/table.go` |
 | `bytes.Buffer` 超過 128 KiB 不回全域 pool | 既有 | `common/pool/buffer.go` |
 | 低記憶體 build tag `with_low_memory` 縮小 relay／UDP buffer | 既有 | `common/pool/buffer_low_memory.go` |
@@ -56,9 +56,9 @@ StackInuse: 544 -> 8544 KiB (8.0 KiB/conn)
   3. 因此「代理節點下行方向」這個最主要的使用情境，每條閒置連線至少持有 32 KiB sing buffer，再加上 `crypto/tls` 自身每條連線的讀寫 record buffer（約 16–34 KiB）。1,000 條走 TLS 代理的閒置連線就是 32–66 MiB。這與 `docs/reference/performance.md` 的 SOCKS→DIRECT 情境不同；該情境的 85–95 KiB/conn 來源尚未歸因（見下方第一個任務）。
   4. sing 的 `buf` pool 與 Aster 的 `common/pool` 一樣是無上限 `sync.Pool`；[PR #4](https://github.com/Miku0139oao/aster-core/pull/4) 只替 Aster 自己的 16 KiB+ 級距加了上限，sing 那份沒有。
 - **任務**：
-  1. **歸因**：在 Linux 建兩個 1,000 條閒置連線情境並抓 `inuse_space` heap profile：(i) SOCKS→DIRECT loopback echo（對應現有文件數字），(ii) SOCKS→loopback TLS 代理（trojan 或 vmess+tls 服務端）。把 top 5 符號與每條連線的 bytes 寫進 PR，確認 (i) 的 85–95 KiB 究竟是 goroutine stack、`BufferedConn` 的 bufio、tracker、sync.Pool 殘留還是 heap 碎片。**沒有這步不得宣稱任何項目「省了多少」。**
-  2. **備援路徑**（確定會有收益、改動範圍小）：把 `copyConn` 的固定 32 KiB 改成自適應：起始 4–8 KiB，連續 N 次 `readN == len(buffer)` 升一級（上限 `RelayBufferSize`），連續 M 次 `readN < len(buffer)/4` 降一級並歸還。`common/net/bufconn_unsafe.go` 已有類似的 bufio 放大邏輯可參考。
-  3. **sing (c) 分支**（主要收益，改動較大）：Aster 已擁有自己的 copy 迴圈，可把 `CopyExtendedWithPool` 的邏輯搬進 `common/net`，改為同樣的自適應大小，並在 `ReadBuffer` 阻塞前只持有小塊。必須維持 `N.NewReadWaitOptions` 的 front／rear headroom（VMess、Shadowsocks 等協定要靠它零複製加 header），所以小塊也要保留 headroom；`ReadBuffer` 對「容量比 MTU 小的 buffer」是否安全需逐協定確認（sing-shadowsocks、sing-vmess、AnyTLS、Hysteria2 的 `ReadBuffer` 實作）。
+  1. **歸因**：在 Linux 建兩個 1,000 條閒置連線情境並抓 `inuse_space` heap profile：(i) SOCKS→DIRECT loopback echo（對應現有文件數字），(ii) SOCKS→loopback TLS 代理（trojan 或 vmess+tls 服務端）。把 top 5 符號與每條連線的 bytes 寫進 PR，確認 (i) 的 85–95 KiB 究竟是 goroutine stack、`BufferedConn` 的 bufio、tracker、sync.Pool 殘留還是 heap 碎片。**沒有這步不得宣稱任何項目「省了多少」。仍未完成。**
+  2. **備援路徑（已完成）：** `copyConn` 從 4 KiB 起跳，連續 2 次滿讀升級、連續 4 次 `readN < len/4` 降級。256 對閒置 `net.Pipe` heap 約 12 KiB/conn（先前約 68 KiB）。見 `common/net/copy_adaptive.go`。
+  3. **sing (c) 分支（部分完成）：** 來源若是 generic byte stream（TLS／pipe／`ExtendedReaderWrapper`），`CopyExtendedWithPool` 同等路徑改為自適應並保留 headroom。VMess 等自訂 `ReadBuffer`（可能先讀 length 再要求整塊）仍用 `RelayBufferSize`，避免 `ErrShortBuffer` 已消耗 prefix。splice 與 `syscall.Conn` readWaiter 仍走 sing。整程序「1,000 條閒置 TLS 代理」尚未重跑。
   4. 保留現有的 `readCounters`／`writeCounters`、`ReportHandshakeFailure`、`closeWrite`、`ReadCached` 語意；splice 與 readWaiter 分支不要動。
 - **驗收標準**：
   - 歸因報告（任務 1）附在 PR 內，兩個情境都有 heap top 5 與 per-conn bytes。
