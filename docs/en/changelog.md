@@ -6,7 +6,7 @@ description: Aster Core changes since the Mihomo v1.19.29 baseline
 # Changelog
 
 > [!NOTE]
-> This is the Aster Core rolling snapshot changelog, current through `2026-08-24`. It covers only Aster-era changes after baseline commit `e26714a1` (Mihomo `v1.19.29`). Dates follow commit/review dates and do not represent release versions. The Unreleased section is not a downloadable release until it lands on `main` and Prerelease-main is refreshed.
+> This is the Aster Core rolling snapshot changelog, with its latest addendum dated `2026-09-07`. It covers only Aster-era changes after baseline commit `e26714a1` (Mihomo `v1.19.29`). Dates follow commit/review dates and do not represent release versions. The Unreleased section is not a downloadable release until it lands on `main` and Prerelease-main is refreshed.
 
 Aster Core does not have an official Aster `v*` release yet. GitHub's `Prerelease-main` is a continuously updated prerelease, so its contents may change with `main`.
 
@@ -25,6 +25,13 @@ For the full feature and compatibility overview, see [Aster vs. Mihomo](/en/refe
 ## Unreleased | 2026-09-06 idle memory scavenge (opt-in)
 
 - **Idle memory scavenge:** Added `experimental.idle-memory-scavenge` (default `false`) and `experimental.idle-memory-scavenge-idle` (seconds, default 300). When enabled, Aster runs one `runtime.GC()` after every connection tracker has closed and the idle period has elapsed. Dead objects are left for the background scavenger; `debug.FreeOSMemory()` is not used. Each busy period runs at most once; process start with no connections does not trigger it. Go still has a short STW, but cleanup does not stall new allocations by returning every idle page immediately. Plan item P0-0 is decided as this opt-in.
+
+## 2026-09-07 | PR #4 memory changes and Linux verification
+
+- `c5f553dc` merged [PR #4](https://github.com/Miku0139oao/aster-core/pull/4): bounded pools for Aster's 16–128 KiB allocator slabs, and compact address storage for eligible A/AAAA-only DNS cache entries.
+- Windows and Linux normal/low-memory full tests and builds passed, together with changed-package race tests. The new [memory optimization handoff plan](/en/development/memory-optimization-plan) describes future work, not additional completed optimizations.
+- Seven-round Linux WSL2 A/B: median RSS with 4,096 DNS cache entries fell 2.5%, with overlapping ranges; 1,000 TCP connections did not use less RAM. Large-pool operations and full DNS-message cache hits became slower. See [performance validation](/en/reference/performance) for all results, limitations, and raw evidence rather than a universal speedup claim.
+- This verifies the core commit and test results, not whether the current `Prerelease-main` assets already contain the same SHA.
 
 ## Unreleased | 2026-08-24 performance, memory, and reliability review
 

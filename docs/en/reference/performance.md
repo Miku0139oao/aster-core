@@ -16,7 +16,7 @@ Aster does not magically make your network faster. It removes a lot of repeated 
 > **The closest “actually moving data” number is the TCP improvement of about 2%.** 5.4× and 101× are tiny core steps that run many times. They do not mean download speed becomes 5.4× or 101×.
 
 > [!NOTE]
-> The latest 2026-09-05 results compare **Aster before and after optimization**, not Aster against Mihomo. Median process working set fell 23.9% with 100k GeoSite domains, but idle and TCP workloads did not show consistent RAM savings. CPU/allocation gains are not WAN or download-speed multipliers.
+> The latest **2026-09-07 Linux WSL2 A/B** compares Aster before and after PR #4, not Aster against Mihomo. Median RSS with 4,096 DNS cache entries fell 2.5%, with overlapping ranges; 1,000 TCP connections did not use less RAM. Large-pool operations and full DNS-message cache hits became slower. The results below include these costs, not a download-speed claim.
 
 ## What actually changed?
 
@@ -45,6 +45,68 @@ If debug logging is off and no dashboard is listening, Aster returns before form
 Upload, download, and connection counts use cheap incremental stats. Each traffic update only changes the numbers. It no longer rescans every active connection to get a total.
 
 ## Full test data
+
+## 2026-09-07 PR #4: Linux regression and memory A/B
+
+Baseline `be6d7912` → current core `c5f553dc` (PR #4: bounded allocator slabs and compact A/AAAA cache). This is **Aster versus Aster**, not Mihomo, and does not mean the subsequent memory optimization plan has been implemented.
+
+### Environment and method
+
+- Arch Linux under WSL2, kernel `6.6.114.1-microsoft-standard-WSL2`; Ryzen 9 5900X, 24 logical CPUs, approximately 31.3 GiB available to WSL. This is not OpenWrt or an isolated, fixed-frequency physical Linux host.
+- Both revisions use Linux `go1.26.5-X:nodwarf5`, `GOAMD64=v1`, `CGO_ENABLED=0`, and `-trimpath -ldflags='-s -w'`. Whole-process `GOMAXPROCS=2`; microbenchmarks use 1. No GOGC/GOMEMLIMIT settings or forced GC.
+- Four scenarios, seven rounds each, fresh processes, alternating before/after order: **56 complete core processes**. Each scenario has identical configuration SHA256 hashes across revisions.
+- Rule mode, `MATCH,DIRECT`, TUN off, loopback SOCKS/controller. DNS and IPv6 are off except in the DNS scenario. Debug is enabled for the controller, without a log WebSocket subscriber.
+- After establishing the workload, wait 15 seconds and sample every 250 ms for three seconds. Report the median of seven per-process medians and the complete range. Read `VmRSS`, `VmHWM`, and `VmSwap` from `/proc/<pid>/status`; every sampled swap value is zero. These are not Windows working-set measurements and **exclude some kernel socket/splice-pipe memory**.
+- TCP uses SOCKS to an external Python loopback echo server. Every connection verifies echo and controller counts, then transfers `128 × 4096` bytes in each direction, with at most 16 workers. After closing all connections and confirming a zero controller count, wait 60 seconds. Clients bind `127.0.0.2` to avoid unrelated local TCP four-tuples sharing a source AddrPort and triggering loop detection.
+- DNS uses LRU capacity 8192 and 4096 distinct names, half A and half AAAA, TTL 3600. Every process verifies exactly 4096 upstream queries during priming and zero on a second pass. TTLs and cache capacity are not reduced to improve results.
+
+### Complete-process RSS
+
+MiB; parentheses show the complete seven-run range. Raw data also includes each phase's VmHWM and 12 samples.
+
+| Scenario | Before RSS (range) | After RSS (range) | Median change |
+| --- | ---: | ---: | ---: |
+| Idle | 35.11 (34.30–38.80) | 34.82 (34.13–38.80) | −0.8% |
+| Hold 100 TCP connections | 36.05 (35.76–36.34) | 35.71 (35.42–36.05) | −1.0% |
+| 100 TCP connections, 60 s after release | 36.28 (35.88–36.34) | 35.85 (35.42–36.19) | −1.2% |
+| Hold 1,000 TCP connections | 58.35 (57.32–61.21) | 60.93 (57.49–61.90) | **+4.4%** |
+| 1,000 TCP connections, 60 s after release | 59.42 (58.52–64.46) | 63.93 (58.69–65.01) | **+7.6%** |
+| 4,096 A/AAAA DNS cache entries | 44.19 (43.75–47.04) | 43.09 (42.63–45.90) | −2.5% |
+
+**Every before/after range overlaps.** DNS's median is approximately 1.10 MiB lower, not a guaranteed saving. Median RSS for 1,000 TCP connections increased. Neither revision returned to idle after release. Post-transfer, still-open TCP median RSS was unchanged from the held stage; see evidence for all ranges. This run does not establish that bounded pools return whole-process RAM to the OS within 60 seconds.
+
+### CPU/allocation costs: not a universal speedup
+
+Each case/sample starts a new `go test -c` binary process, with identical benchmark functions across revisions: two seconds per case, `-test.cpu=1`, seven interleaved rounds, **112 microbenchmark processes**. Medians below; all samples, ranges, and benchstat output are in the evidence archive.
+
+| Operation | Before → After | B/op; allocs/op: before → after |
+| --- | ---: | ---: |
+| Allocator 8 KiB Get/Put | 15.35 → 15.29 ns (not significant) | 0; 0 → 0; 0 |
+| Allocator 16 KiB Get/Put | 15.72 → 36.66 ns (+133.2%) | 0; 0 → 0; 0 |
+| Allocator 32 KiB Get/Put | 15.59 → 37.28 ns (+139.1%) | 0; 0 → 0; 0 |
+| Allocator 128 KiB Get/Put | 15.38 → 37.32 ns (+142.7%) | 0; 0 → 0; 0 |
+| DNS `GetMsgFromCacheHit` | 199.1 → 397.6 ns (+99.7%) | 252; 5 → 516; 10 |
+| DNS `ExchangeContextCacheHit` | 345.0 → 529.0 ns (+53.3%) | 252; 5 → 516; 10 |
+| DNS `LookupIPv4CacheHit` | 200.9 → 203.8 ns (not significant) | 88; 3 → 88; 3 |
+| Relay 32 KiB | 4.302 → 4.252 µs (not significant) | 0; 0 → 0; 0 |
+
+Large channel pools trade higher Get/Put costs for bounded retention. Full DNS-message reads expand compact entries; the measured time and allocation regressions are real costs of this revision. The five timing regressions above have benchstat `p=0.001`, without multiple-comparison correction. IPv4 lookup has `p=0.805`, relay `p=0.902`; neither is claimed faster. This reports the merged code **without silently changing the core or hiding regressions**. Later independent fixes removed the extra compact-hit clone, restored a capped `sync.Pool` for large slabs, and shrank the fallback `copyConn` idle buffer; see the changelog. **Do not rewrite this table.**
+
+### Heap diagnostic limitations
+
+Six additional diagnostic processes capture before/after `inuse_space` for idle, 1,000 TCP connections, and DNS using `/debug/pprof/heap?gc=0`. Profiles are collected outside the RSS cohort to avoid contaminating later measurement phases.
+
+- DNS before flat top three: protobuf `RegisterFile.func2`, 514.38 KiB; regexp compiler, 513.50 KiB; `dns.cloneMsg`, 512.07 KiB. After: gopacket initialization, 525.43 KiB; protobuf type registry, 513.12 KiB; `dns.compactIPs`, 512.04 KiB.
+- TCP before has only two nonzero flat entries: regexp2 initialization, 518.65 KiB, and DNS map initialization, 512.88 KiB. After: `regexp.onePassCopy`, 521.05 KiB, and `sync.OnceValue`, 512.01 KiB. **There is no third nonzero entry to report, and no defensible per-connection heap-byte estimate.**
+- With natural GC and default sampling, heap profiles may lag current allocations. The TCP profiles still primarily describe initialization, so **they do not satisfy the plan's P0-1 attribution acceptance criteria**. Raw profiles/top output are retained rather than forcing GC for cleaner-looking numbers.
+
+### Verification and evidence
+
+- Windows Go 1.26.3: complete normal/`with_low_memory` tests and builds, pool/DNS race tests in both modes, `go vet ./...`, changed-Go-file gofmt checks, and golangci-lint (zero issues) passed.
+- Linux Go 1.26.5: `go test -p=4 -count=1 -timeout=10m ./...` and the complete low-memory suite passed, as did pool/DNS race tests in both modes, `go vet ./...`, and both builds. The initial three-minute timeout is retained; `listener/inbound` took 209.051 seconds on retry, with no tests changed or skipped to pass.
+- Early probes encountered loopback source-port collisions and AAAA suppression by the global IPv6 setting. The **harness** was corrected and affected scenarios rerun. Failed probes are retained in `pilot/`, not mixed into the final 56 processes.
+- [Download evidence, harnesses, benchstat, and reproduction instructions](/benchmarks/2026-09-07-pr4/evidence.zip). No executables. The core was not modified; documentation commits do not change the measured core hashes.
+- Linux TLS-proxy/WAN, OpenWrt, UDP queue pressure, low-memory performance, and full-process allocator-burst retention A/B were not measured. This is not acceptance of every subsequent optimization-plan item.
 
 ## 2026-09-05 process memory and core-cost A/B
 

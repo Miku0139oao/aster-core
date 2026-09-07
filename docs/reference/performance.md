@@ -16,7 +16,7 @@ Aster 沒有用魔法把你的網路變快，而是把代理核心內大量重�
 > **最接近「實際搬資料」的是 TCP 的約 2% 改善。** 5.4 倍和 101 倍只代表核心裡某個很小、但會執行非常多次的步驟，不代表下載速度會直接變成 5.4 倍或 101 倍。
 
 > [!NOTE]
-> 2026-09-05 的最新結果是 **Aster 優化前後**比較，不是 Aster 對 Mihomo：10 萬條 GeoSite 情境的程序 working set 中位數降低 23.9%，但空載與 TCP 連線情境沒有穩定省 RAM。CPU／配置改善也不能改寫成 WAN 或下載速度倍數。
+> 最新的 **2026-09-07 Linux WSL2 A/B** 比較 Aster PR #4 前後，不是 Aster 對 Mihomo：4,096 筆 DNS 快取的 RSS 中位數降低 2.5%，但前後範圍重疊，1,000 條 TCP 沒有省 RAM。大型 pool 操作與完整 DNS 訊息快取命中反而較慢。下方保留全部結果與代價，不把它改寫成下載速度提升。
 
 ## 到底改了什麼？
 
@@ -45,6 +45,68 @@ Padding 規則在載入設定時就先解析好。真正傳資料時，Aster 只
 上傳、下載與連線數改用便宜的增量統計。每次有流量時只更新數字，不再為了得到總數反覆掃描所有活動連線。
 
 ## 以下是完整測試數據
+
+## 2026-09-07 PR #4：Linux 回歸驗證與記憶體 A/B
+
+比較更新前 `be6d7912` → 最新核心 `c5f553dc`（PR #4：bounded allocator slabs、compact A/AAAA cache）。這是 **Aster 對 Aster**，不是 Mihomo 比較，也不是後續記憶體規劃已實作完成。
+
+### 環境與方法
+
+- Arch Linux／WSL2，kernel `6.6.114.1-microsoft-standard-WSL2`；Ryzen 9 5900X、24 logical CPUs、WSL 可用約 31.3 GiB RAM。不是 OpenWrt，也不是隔離／固定頻率的實體 Linux 測試機。
+- Linux 工具鏈為 `go1.26.5-X:nodwarf5`；兩版相同，`GOAMD64=v1`、`CGO_ENABLED=0`、`-trimpath -ldflags='-s -w'`。整程序 `GOMAXPROCS=2`，microbenchmark 為 1。沒有設定 GOGC／GOMEMLIMIT，沒有強制 GC。
+- 四個情境各七輪，每輪使用新程序，before／after 交錯並輪替先後，共 **56 個完整核心程序**。每情境前後 YAML SHA256 相同。
+- Rule + `MATCH,DIRECT`、TUN 關閉、loopback SOCKS／controller。除 DNS 情境外 DNS 與 IPv6 關閉。controller 開 debug，但沒有連接 log WebSocket。
+- workload 建立後等待 15 秒，以 250 ms 間隔採樣三秒；每程序取中位數，再報七程序中位數及完整範圍。讀取 `/proc/<pid>/status` 的 `VmRSS`／`VmHWM`／`VmSwap`；所有採樣的 swap 均為 0。這些不是 Windows working set，也**不包含所有 kernel socket／splice pipe 記憶體**。
+- TCP 經 SOCKS 到獨立 Python loopback echo，先驗證每條 echo 與 controller 連線數；每條再上下行各 `128 × 4096` bytes、最多 16 個 worker。關閉並確認 controller 歸零後等待 60 秒。client 綁 `127.0.0.2`，避免本機不同 TCP 四元組的 source AddrPort 重複而觸發 loop detector。
+- DNS 使用 LRU、容量 8192，注入 4096 個不同名稱（A／AAAA 各半、TTL 3600）後重查一次。每個程序確認第一次恰有 4096 次 loopback upstream 查詢，第二次為 0；未靠縮短 TTL 或降低容量換數字。
+
+### 完整程序 RSS
+
+單位 MiB；括號為七輪完整範圍。原始資料另含各階段 VmHWM 與 12 個採樣點。
+
+| 情境 | Before RSS（範圍） | After RSS（範圍） | 中位數變化 |
+| --- | ---: | ---: | ---: |
+| 空載 | 35.11（34.30–38.80） | 34.82（34.13–38.80） | −0.8% |
+| 持有 100 條 TCP | 36.05（35.76–36.34） | 35.71（35.42–36.05） | −1.0% |
+| 100 條 TCP 釋放後 60 秒 | 36.28（35.88–36.34） | 35.85（35.42–36.19） | −1.2% |
+| 持有 1,000 條 TCP | 58.35（57.32–61.21） | 60.93（57.49–61.90） | **+4.4%** |
+| 1,000 條 TCP 釋放後 60 秒 | 59.42（58.52–64.46） | 63.93（58.69–65.01） | **+7.6%** |
+| 4,096 筆 A／AAAA DNS cache | 44.19（43.75–47.04） | 43.09（42.63–45.90） | −2.5% |
+
+**所有前後範圍均重疊。** DNS 中位數少約 1.10 MiB，但不能承諾固定省 RAM；TCP 1,000 條的中位數反而上升。兩版釋放後均未回到空載。流量完成且仍持有 TCP 時，RSS 中位數與持有階段相同，完整範圍見 evidence。這輪沒有證明 bounded pool 讓整程序在 60 秒內把 RAM 還給 OS。
+
+### CPU／配置代價：不是全面加速
+
+每 case／sample 都由 `go test -c` 的 binary 啟動新程序，兩版 benchmark 函式相同；每項 2 秒、`-test.cpu=1`、七輪交錯，共 **112 個 microbenchmark 程序**。表格為中位數；完整 samples、範圍與 benchstat 在證據包。
+
+| 工作 | Before → After | B/op；allocs/op：前 → 後 |
+| --- | ---: | ---: |
+| allocator 8 KiB Get/Put | 15.35 → 15.29 ns（未顯著） | 0；0 → 0；0 |
+| allocator 16 KiB Get/Put | 15.72 → 36.66 ns（+133.2%） | 0；0 → 0；0 |
+| allocator 32 KiB Get/Put | 15.59 → 37.28 ns（+139.1%） | 0；0 → 0；0 |
+| allocator 128 KiB Get/Put | 15.38 → 37.32 ns（+142.7%） | 0；0 → 0；0 |
+| DNS `GetMsgFromCacheHit` | 199.1 → 397.6 ns（+99.7%） | 252；5 → 516；10 |
+| DNS `ExchangeContextCacheHit` | 345.0 → 529.0 ns（+53.3%） | 252；5 → 516；10 |
+| DNS `LookupIPv4CacheHit` | 200.9 → 203.8 ns（未顯著） | 88；3 → 88；3 |
+| relay 32 KiB | 4.302 → 4.252 µs（未顯著） | 0；0 → 0；0 |
+
+大型 channel pool 用較高的 Get/Put 成本換容量上限；完整 DNS 訊息讀取需要重新展開 compact entry，這輪量到明確的時間與配置回退。上述五個時間回退的 benchstat `p=0.001`（未作多重比較校正）；IPv4 lookup `p=0.805`、relay `p=0.902`，不宣稱這兩者變快。這是已合併版本的實測報告，**沒有偷偷變更核心或掩蓋回退**。後續獨立修正已拿掉 compact hit 的第二次 clone、把大型 slab 改回有上限的 `sync.Pool`，並縮小備援 `copyConn` 閒置 buffer；那些結果見 changelog，**不回寫本表**。
+
+### Heap 診斷的限制
+
+另開六個診斷程序，對空載／TCP 1,000／DNS 各取前後 `inuse_space`，呼叫 `/debug/pprof/heap?gc=0`；不在 RSS cohort 內抓 profile，避免診斷配置污染後續階段。
+
+- DNS before 的 flat top 3：protobuf `RegisterFile.func2` 514.38 KiB、regexp compiler 513.50 KiB、`dns.cloneMsg` 512.07 KiB；after：gopacket init 525.43 KiB、protobuf type registry 513.12 KiB、`dns.compactIPs` 512.04 KiB。
+- TCP before 只有兩個非零 flat 項：regexp2 init 518.65 KiB、DNS map init 512.88 KiB；after 為 `regexp.onePassCopy` 521.05 KiB、`sync.OnceValue` 512.01 KiB。**沒有第三個非零項可報，也不能據此算每條 TCP 的 heap bytes。**
+- 自然 GC 與預設抽樣下，heap profile 可能落後當下配置；此輪 TCP profile 主要仍是初始化資料，**不足以完成規劃書 P0-1 的歸因驗收**。原始 profile／top 輸出保留，不以強制 GC 美化結果。
+
+### 驗證與證據
+
+- Windows Go 1.26.3：一般／`with_low_memory` 全套測試與建置、pool/DNS 兩模式 race、`go vet ./...`、變更 Go 檔案 gofmt 與 golangci-lint（0 issues）通過。
+- Linux Go 1.26.5：`go test -p=4 -count=1 -timeout=10m ./...` 及 `with_low_memory` 全套測試通過；pool/DNS 兩模式 race、`go vet ./...`、一般／低記憶體建置通過。首次 3 分鐘 timeout 失敗保留；重跑 `listener/inbound` 花 209.051 秒，未修改／略過測試。
+- 早期探針遇到 loopback source-port 衝突，以及 DNS AAAA 被全域 IPv6 開關攔截；修正 **harness** 後重跑受影響情境。失敗探針不混進最終 56 個程序，保留在 `pilot/`。
+- [下載本輪 evidence、harness、benchstat 與重跑說明](/benchmarks/2026-09-07-pr4/evidence.zip)。不含執行檔。核心未改動，文件提交不改寫實測核心 hash。
+- 未測 Linux TLS 代理／WAN、OpenWrt、UDP queue 壓力、低記憶體模式效能或 allocator burst 後回收上限的整程序 A/B；這不是後續優化規劃的全部驗收。
 
 ## 2026-09-05 程序記憶體與核心成本 A/B
 
