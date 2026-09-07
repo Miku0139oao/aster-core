@@ -54,6 +54,12 @@ type Manager struct {
 	principalMu   sync.RWMutex
 	principals    map[Principal]int
 	blipMu        sync.Mutex
+
+	scavengeEnabled atomic.Bool
+	scavengeIdleNs  atomic.Int64
+	idleSinceNs     atomic.Int64
+	scavenged       atomic.Bool
+	collect         func()
 }
 
 type Principal struct {
@@ -74,6 +80,7 @@ func (m *Manager) Join(c Tracker) {
 		return
 	}
 	m.updatePrincipalConnections(c, 1)
+	m.markBusy()
 }
 
 func (m *Manager) Leave(c Tracker) {
@@ -87,6 +94,7 @@ func (m *Manager) Leave(c Tracker) {
 	}
 	m.reapOnce.Delete(info.UUID)
 	m.updatePrincipalConnections(stored, -1)
+	m.markIdleIfEmpty()
 }
 
 func (m *Manager) updatePrincipalConnections(c Tracker, delta int) {
@@ -247,6 +255,7 @@ func (m *Manager) handle() {
 			m.reapIdleZeroByteTCP(now)
 			nextReap = now.Add(zeroByteReapInterval)
 		}
+		m.maybeIdleScavengeAsync(now)
 	}
 }
 

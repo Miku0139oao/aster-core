@@ -16,6 +16,16 @@ Aster Core 目前尚未發布正式的 Aster `v*` 版本。GitHub 上的 `Prerel
 
 完整的功能差異與相容性說明，請看[Aster 與 Mihomo 的差異](/reference/mihomo-differences)；本頁只整理有日期的 Aster 變更重點。
 
+## 未發布｜2026-09-07 記憶體回退修正
+
+- **DNS compact cache：** `getMsgFromCache` 對精簡 A／AAAA 只 `expand` 一次，不再接著 `cloneMsg`。完整訊息 cache hit 回到約 5 allocs／264 B；`LookupIPv4CacheHit` 仍是 88 B／3 allocs。
+- **大型 allocator：** 16–128 KiB 改回 `sync.Pool`，另以 atomic 計數限制保留量。Get/Put 不再走 channel；超額 `Put` 仍丟棄。
+- **Relay 閒置 buffer：** 備援 `copyConn` 從 4 KiB 起跳，滿讀升級、小讀降級。256 對閒置 `net.Pipe` heap 約 12 KiB/conn（先前固定 32 KiB 時約 68 KiB/conn）。VMess 等 chunked `ReadBuffer` 仍用 `RelayBufferSize`，避免 length prefix 讀完後 buffer 不夠。splice／readWaiter 未改。未重跑 2026-09-05／2026-09-07 整程序 RSS 表。
+
+## 未發布｜2026-09-06 閒置記憶體回收（opt-in）
+
+- **Idle memory scavenge：** 新增 `experimental.idle-memory-scavenge`（預設 `false`）與 `experimental.idle-memory-scavenge-idle`（秒，預設 300）。開啟後，所有連線 tracker 關閉並閒置期滿，會跑一次 `runtime.GC()`；死物件交給背景 scavenger 慢慢還給 OS，不呼叫 `debug.FreeOSMemory()`。每個忙碌週期最多一次，啟動時空載不會觸發。Go 仍有極短 STW，但整理當下不會為了立刻還頁而卡住新配置。規劃書 P0-0 已裁決採用此 opt-in。
+
 ## 2026-09-07｜PR #4 記憶體調整與 Linux 驗證
 
 - `c5f553dc` 已合併 [PR #4](https://github.com/Miku0139oao/aster-core/pull/4)：Aster 的 16–128 KiB allocator slabs 改為有上限的 pool，符合條件的純 A／AAAA DNS cache 改存精簡地址資料。

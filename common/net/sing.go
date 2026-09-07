@@ -1,13 +1,11 @@
 package net
 
 import (
-	"errors"
 	"io"
 	"net"
 	"syscall"
 
 	"github.com/Miku0139oao/aster-core/common/net/deadline"
-	"github.com/Miku0139oao/aster-core/common/pool"
 
 	"github.com/metacubex/sing/common"
 	"github.com/metacubex/sing/common/bufio"
@@ -93,42 +91,10 @@ func copyConn(destination io.Writer, source io.Reader) (n int64, err error) {
 	_, sourceSyscall := source.(syscall.Conn)
 	_, destinationSyscall := destination.(syscall.Conn)
 	if sourceExtended || destinationExtended || sourceCached || sourceReplaceable || destinationReplaceable || (sourceSyscall && destinationSyscall) {
-		return bufio.Copy(originDestination, originSource)
+		return copyFeatureAware(originDestination, originSource)
 	}
 
-	buffer := pool.Get(pool.RelayBufferSize)
-	defer func() { _ = pool.Put(buffer) }()
-	firstWrite := true
-	for {
-		readN, readErr := source.Read(buffer)
-		if readN > 0 {
-			writeN, writeErr := destination.Write(buffer[:readN])
-			if writeN != readN && writeErr == nil {
-				writeErr = io.ErrShortWrite
-			}
-			transferred := int64(writeN)
-			n += transferred
-			for _, counter := range readCounters {
-				counter(transferred)
-			}
-			for _, counter := range writeCounters {
-				counter(transferred)
-			}
-			if writeErr != nil {
-				if firstWrite {
-					writeErr = network.ReportHandshakeFailure(originSource, writeErr)
-				}
-				return n, writeErr
-			}
-			firstWrite = false
-		}
-		if readErr != nil {
-			if errors.Is(readErr, io.EOF) {
-				return n, nil
-			}
-			return n, readErr
-		}
-	}
+	return copyAdaptive(destination, source, originSource, readCounters, writeCounters)
 }
 
 // Relay copies between left and right bidirectionally.

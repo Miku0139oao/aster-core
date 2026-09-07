@@ -57,6 +57,23 @@ rules:
 
 and make sure `FINAL` is an existing proxy/group name.
 
+## Experimental
+
+These fields are off by default. They change runtime behaviour, not proxy semantics.
+
+```yaml
+experimental:
+  idle-memory-scavenge: false
+  idle-memory-scavenge-idle: 300
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `idle-memory-scavenge` | `false` | After every connection tracker has closed and the idle period has elapsed, run one `runtime.GC()`. Dead objects become idle spans and Go’s background scavenger returns them to the OS. This does **not** call `debug.FreeOSMemory()`, which would return every idle page immediately. A later connection restarts the idle clock; each busy period runs at most once. Process start with no prior connections does not trigger it. |
+| `idle-memory-scavenge-idle` | `300` | Seconds to wait after the last tracker closes. `0` or omitted uses 300. Must be ≥ 0. |
+
+This is not GOGC/GOMEMLIMIT tuning and not a periodic GC. It stays off by default. Go cannot GC with zero stop-the-world pause; the remaining pause is the short GC STW, not a multi-millisecond forced return-to-OS. RSS then falls in the background. `PUT /debug/gc` still returns memory to the OS immediately.
+
 ## Controller
 
 ```yaml

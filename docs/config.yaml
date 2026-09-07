@@ -115,6 +115,13 @@ experimental:
   # This equivalent to the environment variable QUIC_GO_DISABLE_GSO=1.
   #quic-go-disable-gso: true
 
+  # After every tracker has closed, wait this many seconds then run one GC.
+  # Unused pages return to the OS in the background (no debug.FreeOSMemory).
+  # Off by default. Go still has a short STW pause; this avoids a multi-ms
+  # allocation stall from returning every idle span immediately.
+  # idle-memory-scavenge: false
+  # idle-memory-scavenge-idle: 300
+
 # 类似于 /etc/hosts, 仅支持配置单个 IP
 hosts:
 # '*.mihomo.dev': 127.0.0.1

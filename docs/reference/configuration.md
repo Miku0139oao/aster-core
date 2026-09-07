@@ -57,6 +57,23 @@ rules:
 
 並確保 `FINAL` 是存在的 proxy/group 名稱。
 
+## Experimental
+
+這些欄位預設關閉，改變的是 runtime 行為而不是代理語意。
+
+```yaml
+experimental:
+  idle-memory-scavenge: false
+  idle-memory-scavenge-idle: 300
+```
+
+| 欄位 | 預設 | 說明 |
+| --- | --- | --- |
+| `idle-memory-scavenge` | `false` | 所有連線 tracker 關閉並持續閒置後，跑一次 `runtime.GC()`。死掉的物件會先變成 idle span，再由 Go 背景 scavenger 慢慢還給 OS，**不會**呼叫 `debug.FreeOSMemory()` 一次把所有頁面還完。連線再出現後會重新計時，每個忙碌週期最多一次。啟動時若從未有過連線，不會觸發。 |
+| `idle-memory-scavenge-idle` | `300` | 最後一條連線關閉後要等待的秒數。`0` 或省略時使用 300 秒。必須 ≥ 0。 |
+
+這不是 GOGC／GOMEMLIMIT 調參，也不是定時 GC。預設維持關閉。Go 的垃圾回收**做不到完全不停機**，仍會有極短的 stop-the-world；這次改成只做 GC、不強制立刻還頁，避免整理當下新連線卡好幾毫秒。RSS 回落會比「立刻還」慢一些。若要一次把記憶體還給系統，仍可用手動 `PUT /debug/gc`。
+
 ## Controller
 
 ```yaml

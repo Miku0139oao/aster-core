@@ -4,18 +4,19 @@
 > 接手時請依優先序逐項開獨立 PR，不要把多個項目混在一個 PR 內。
 
 ::: warning 2026-09-07 實測補充
-PR #4 已補 Windows／Linux 驗證與七輪 WSL2 A/B，見[效能報告](/reference/performance)。4,096 筆 DNS cache 的 RSS 中位數 −2.5%，但前後範圍重疊；1,000 條 TCP 未省 RAM。大型 pool Get/Put 與完整 DNS 訊息快取命中有明確時間回退，後者配置量由 252 B／5 allocs 增至 516 B／10 allocs。自然 GC 下的 TCP heap profile 尚不足以完成 P0-1 歸因，以下工作不可標成已驗收。
+PR #4 已補 Windows／Linux 驗證與七輪 WSL2 A/B，見[效能報告](/reference/performance)。4,096 筆 DNS cache 的 RSS 中位數 −2.5%，但前後範圍重疊；1,000 條 TCP 未省 RAM。大型 pool Get/Put 與完整 DNS 訊息快取命中當時有明確時間回退（252 B／5 allocs → 516 B／10 allocs）；後續獨立修正已拿掉 compact hit 的第二次 clone，並把大型 slab 改回有上限的 `sync.Pool`。自然 GC 下的 TCP heap profile 尚不足以完成 P0-1 歸因，以下工作不可把整程序 RSS 標成已驗收。
 :::
 
 ## 0. 現況與已完成事項
 
 | 項目 | 狀態 | 位置 |
 | --- | --- | --- |
-| 16 KiB–128 KiB 配置器 slab 改為有上限的 channel pool，連線爆量後不再無限保留 | 已完成，[PR #4](https://github.com/Miku0139oao/aster-core/pull/4) | `common/pool/alloc.go`、`common/pool/alloc_cap*.go` |
-| DNS cache 純 A/AAAA 回應改存 `[]netip.Addr`，只有 CNAME／SOA／附加區段才存完整 `*dns.Msg` | 已完成，[PR #4](https://github.com/Miku0139oao/aster-core/pull/4) | `dns/msg_cache.go`、`dns/resolver.go`、`dns/util.go` |
+| 16 KiB–128 KiB 配置器 slab 改為有上限的 `sync.Pool`（先前 channel 的 Get/Put 回退已修正） | 已完成，[PR #4](https://github.com/Miku0139oao/aster-core/pull/4) 與後續修正 | `common/pool/alloc.go`、`common/pool/alloc_cap*.go` |
+| DNS cache 純 A/AAAA 回應改存 `[]netip.Addr`；compact hit 只 expand 一次 | 已完成，[PR #4](https://github.com/Miku0139oao/aster-core/pull/4) 與後續修正 | `dns/msg_cache.go`、`dns/resolver.go`、`dns/util.go` |
 | UDP NAT 表上限（8192／低記憶體 2048） | 既有 | `component/nat/table.go` |
 | `bytes.Buffer` 超過 128 KiB 不回全域 pool | 既有 | `common/pool/buffer.go` |
 | 低記憶體 build tag `with_low_memory` 縮小 relay／UDP buffer | 既有 | `common/pool/buffer_low_memory.go` |
+| 閒置後 opt-in `runtime.GC()`（P0-0 (B)，預設關閉；不強制 FreeOSMemory） | 已完成 | `tunnel/statistic/scavenge.go`、`experimental.idle-memory-scavenge` |
 
 `docs/reference/performance.md` 的 2026-09-05 整程序 A/B 已指出目前最大的缺口：
 
@@ -37,18 +38,18 @@ StackInuse: 544 -> 8544 KiB (8.0 KiB/conn)
 1. **整程序情境**：沿用 `docs/reference/performance.md` 的最小設定（Rule 模式 + `MATCH,DIRECT`、DNS／TUN 關閉、loopback SOCKS），情境至少包含：空載、持有 100／1,000 條 TCP、釋放後 60 秒、1,000 個 UDP flow 各 queue 若干封包。每情境七輪、新程序、前後交錯。Linux 取 `/proc/<pid>/status` 的 `VmRSS`／`VmHWM`，Windows 取 working set 與 private bytes；兩者不可互換比較。
 2. **Heap 歸因**：用 `hub/route` 的 `/debug/pprof/heap`（需 `external-controller` 開 debug）在「持有 1,000 條 TCP」時抓 `inuse_space`，以 `go tool pprof -top` 確認 top 3 符號。這是驗收「錢花在哪」的依據，不是用來取代整程序數字。
 3. **Microbenchmark**：`go test -run '^$' -bench ... -benchmem -count=7 -cpu=1`，每個 case 用 `go test -c` 建 test binary、新程序執行，見 `docs/reference/performance.md` 的「如何重跑」。
-4. **禁止事項**：不設定 `GOGC`／`GOMEMLIMIT`、不呼叫 `debug.FreeOSMemory()` 或 `runtime.GC()` 來美化數字（`/debug/gc` 端點除外，它是既有的手動工具）。不能拿 B/op 的下降直接宣稱 RSS 下降。
+4. **禁止事項**：不設定 `GOGC`／`GOMEMLIMIT`、不為了美化數字而呼叫 `runtime.GC()`／`debug.FreeOSMemory()`。唯一例外：(1) 既有手動 `PUT /debug/gc`；(2) 預設關閉的 `experimental.idle-memory-scavenge`，且只跑一次 `runtime.GC()`，不強制 `FreeOSMemory`。不能拿 B/op 的下降直接宣稱 RSS 下降。
 
 ## 2. 工作項目
 
-### P0-0　決策項：閒置後 heap 不回落是 Go runtime 行為，需要使用者裁決
+### P0-0　決策項：閒置後 heap 不回落是 Go runtime 行為 — **已裁決 (B)，已實作**
 
-- **證據**：`docs/reference/performance.md` 的「1,000 條 TCP 釋放後 60 秒」working set 仍 122 MiB，高於持有 1,000 條時的 115 MiB。連線全部關閉後配置速率趨近 0，Go GC 不會被觸發，`sync.Pool`（Aster 與 sing 兩份）與已死物件所在的 span 都不會被回收，scavenger 也就沒有可歸還 OS 的 free span。
-- **現行約束**：專案文件明訂「不使用 GC 調參」。在此約束下，這個情境**無法**靠任何 pool 或資料結構改動改善，只能靠降低峰值（P0-1、P0-2）間接降低釋放後的殘留。
-- **請使用者選擇其一並記錄在本文件**：
-  - (A) 維持約束，接受釋放後不回落，文件如實標註。
-  - (B) 允許一個保守、可關閉的閒置回收器：例如連線數歸零且持續 N 分鐘沒有新連線、且 `HeapInuse` 低於 RSS 的一半時，呼叫一次 `debug.FreeOSMemory()`；預設關閉或只在 `with_low_memory` 開啟。這仍屬 GC 干預，需明確授權；`hub/route/server.go` 已有手動 `/debug/gc` 端點可作為行為參考。
-- 未取得裁決前，接手者一律採 (A)。
+- **裁決**：使用者接受並授權 opt-in 閒置回收器（2026-09-06）。
+- **實作**：`experimental.idle-memory-scavenge`（預設 `false`）+ `experimental.idle-memory-scavenge-idle`（秒，`0` 視為 300）。所有 tracker 關閉並閒置期滿後跑一次 `runtime.GC()`，把死物件變成 idle span，由背景 scavenger 還給 OS。**不**呼叫 `debug.FreeOSMemory()`，避免 heap lock 造成數毫秒的配置停頓。每個忙碌週期最多一次；啟動時空載不觸發。`handle()` 以 goroutine 呼叫。程式在 `tunnel/statistic/scavenge.go`。
+- **GC 安全性**：只回收不可達物件。Go 做不到零 STW；剩下的是一般 GC 的極短暫停，不是「立刻還完全部頁面」。若要立刻還給 OS，用手動 `PUT /debug/gc`。
+- **未採用**：HeapInuse < RSS/2 作為觸發條件。關閉連線後若尚未 GC，HeapInuse 仍高，該條件會剛好跳過需要回收的情境。
+- **未採用**：預設開啟或 `with_low_memory` 自動開啟。維持預設關閉。
+- **未重跑**：2026-09-05 七輪整程序 working-set A/B。
 
 ### P0-1　每條 TCP 連線的常駐成本：先歸因，再削減閒置時持有的 relay buffer
 
@@ -59,9 +60,9 @@ StackInuse: 544 -> 8544 KiB (8.0 KiB/conn)
   3. 因此「代理節點下行方向」這個最主要的使用情境，每條閒置連線至少持有 32 KiB sing buffer，再加上 `crypto/tls` 自身每條連線的讀寫 record buffer（約 16–34 KiB）。1,000 條走 TLS 代理的閒置連線就是 32–66 MiB。這與 `docs/reference/performance.md` 的 SOCKS→DIRECT 情境不同；該情境的 85–95 KiB/conn 來源尚未歸因（見下方第一個任務）。
   4. sing 的 `buf` pool 與 Aster 的 `common/pool` 一樣是無上限 `sync.Pool`；[PR #4](https://github.com/Miku0139oao/aster-core/pull/4) 只替 Aster 自己的 16 KiB+ 級距加了上限，sing 那份沒有。
 - **任務**：
-  1. **歸因**：在 Linux 建兩個 1,000 條閒置連線情境並抓 `inuse_space` heap profile：(i) SOCKS→DIRECT loopback echo（對應現有文件數字），(ii) SOCKS→loopback TLS 代理（trojan 或 vmess+tls 服務端）。把 top 5 符號與每條連線的 bytes 寫進 PR，確認 (i) 的 85–95 KiB 究竟是 goroutine stack、`BufferedConn` 的 bufio、tracker、sync.Pool 殘留還是 heap 碎片。**沒有這步不得宣稱任何項目「省了多少」。**
-  2. **備援路徑**（確定會有收益、改動範圍小）：把 `copyConn` 的固定 32 KiB 改成自適應：起始 4–8 KiB，連續 N 次 `readN == len(buffer)` 升一級（上限 `RelayBufferSize`），連續 M 次 `readN < len(buffer)/4` 降一級並歸還。`common/net/bufconn_unsafe.go` 已有類似的 bufio 放大邏輯可參考。
-  3. **sing (c) 分支**（主要收益，改動較大）：Aster 已擁有自己的 copy 迴圈，可把 `CopyExtendedWithPool` 的邏輯搬進 `common/net`，改為同樣的自適應大小，並在 `ReadBuffer` 阻塞前只持有小塊。必須維持 `N.NewReadWaitOptions` 的 front／rear headroom（VMess、Shadowsocks 等協定要靠它零複製加 header），所以小塊也要保留 headroom；`ReadBuffer` 對「容量比 MTU 小的 buffer」是否安全需逐協定確認（sing-shadowsocks、sing-vmess、AnyTLS、Hysteria2 的 `ReadBuffer` 實作）。
+  1. **歸因**：在 Linux 建兩個 1,000 條閒置連線情境並抓 `inuse_space` heap profile：(i) SOCKS→DIRECT loopback echo（對應現有文件數字），(ii) SOCKS→loopback TLS 代理（trojan 或 vmess+tls 服務端）。把 top 5 符號與每條連線的 bytes 寫進 PR，確認 (i) 的 85–95 KiB 究竟是 goroutine stack、`BufferedConn` 的 bufio、tracker、sync.Pool 殘留還是 heap 碎片。**沒有這步不得宣稱任何項目「省了多少」。仍未完成。**
+  2. **備援路徑（已完成）：** `copyConn` 從 4 KiB 起跳，連續 2 次滿讀升級、連續 4 次 `readN < len/4` 降級。256 對閒置 `net.Pipe` heap 約 12 KiB/conn（先前約 68 KiB）。見 `common/net/copy_adaptive.go`。
+  3. **sing (c) 分支（部分完成）：** 來源若是 generic byte stream（TLS／pipe／`ExtendedReaderWrapper`），`CopyExtendedWithPool` 同等路徑改為自適應並保留 headroom。VMess 等自訂 `ReadBuffer`（可能先讀 length 再要求整塊）仍用 `RelayBufferSize`，避免 `ErrShortBuffer` 已消耗 prefix。splice 與 `syscall.Conn` readWaiter 仍走 sing。整程序「1,000 條閒置 TLS 代理」尚未重跑。
   4. 保留現有的 `readCounters`／`writeCounters`、`ReportHandshakeFailure`、`closeWrite`、`ReadCached` 語意；splice 與 readWaiter 分支不要動。
 - **驗收標準**：
   - 歸因報告（任務 1）附在 PR 內，兩個情境都有 heap top 5 與 per-conn bytes。
@@ -140,7 +141,7 @@ StackInuse: 544 -> 8544 KiB (8.0 KiB/conn)
 
 ## 3. 約束（接手者不得違反）
 
-1. 不使用 `GOGC`／`GOMEMLIMIT`／`debug.SetMemoryLimit`／定時 `FreeOSMemory` 讓數字好看。
+1. 不使用 `GOGC`／`GOMEMLIMIT`／`debug.SetMemoryLimit`／忙碌時定時 `FreeOSMemory` 讓數字好看。P0-0 的 opt-in idle scavenge 只允許一次 `runtime.GC()`，且必須預設關閉。
 2. 不降低 queue／cache／NAT 上限、不縮短 TTL、不移除功能來換記憶體；`with_low_memory` 可以有更小的預設，一般 build 的預設要有數據支持才能改。
 3. 保留 stale DNS、fake-IP 反查、面板 JSON 欄位等對外語意。
 4. 每個項目獨立 PR，PR 描述必須附：改動前後整程序數字（含範圍）、heap top 3、相關 benchmark 前後值、`go test ./...`、`go vet`、`gofmt`、`golangci-lint` 結果。
@@ -149,7 +150,7 @@ StackInuse: 544 -> 8544 KiB (8.0 KiB/conn)
 ## 4. 建議執行順序與相依
 
 ```
-P0-0 使用者裁決（不阻塞其他項目，未裁決前採 A）
+P0-0 已裁決 (B)，idle scavenge 預設關閉 ── 不阻塞 P0-1
 P0-1.1 heap 歸因（DIRECT 與 TLS 代理兩情境）──> 決定 P0-1.2／P0-1.3 與 P2-7 是否值得做
 P0-1.2 備援路徑自適應 buffer ──┐
 P0-1.3 sing (c) 分支自適應    ──┼──> 重跑整程序 A/B，更新 docs/reference/performance.md

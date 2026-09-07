@@ -291,6 +291,15 @@ func updateExperimental(c *config.Experimental) {
 		_ = os.Setenv("QUIC_GO_DISABLE_ECN", strconv.FormatBool(true))
 	}
 	resolver.SetIP4PEnable(c.IP4PEnable)
+
+	idle := time.Duration(c.IdleMemoryScavengeIdle) * time.Second
+	statistic.DefaultManager.SetIdleMemoryScavenge(c.IdleMemoryScavenge, idle)
+	if c.IdleMemoryScavenge {
+		if idle <= 0 {
+			idle = statistic.DefaultIdleMemoryScavengeIdle
+		}
+		log.Infoln("Idle memory scavenge enabled (%s after the last connection closes)", idle)
+	}
 }
 
 func updateNTP(c *config.NTP) {

@@ -43,12 +43,12 @@ func TestAllocPutThenGet(t *testing.T) {
 
 func TestLargePoolDropsExcessSlabs(t *testing.T) {
 	alloc := newDefaultAllocator()
-	ch := alloc.large15
-	if cap(ch) < 2 {
-		t.Fatalf("32 KiB pool cap = %d", cap(ch))
+	maxN := int(alloc.large15.max)
+	if maxN < 2 {
+		t.Fatalf("32 KiB pool cap = %d", maxN)
 	}
 
-	n := cap(ch)*3 + 7
+	n := maxN*3 + 7
 	bufs := make([][]byte, n)
 	for i := range bufs {
 		bufs[i] = alloc.Get(1 << 15)
@@ -62,11 +62,10 @@ func TestLargePoolDropsExcessSlabs(t *testing.T) {
 		}
 		bufs[i] = nil
 	}
-	if got := len(ch); got != cap(ch) {
-		t.Fatalf("retained 32 KiB slabs = %d, want bounded cap %d", got, cap(ch))
+	if got := alloc.large15.retained(); int(got) != maxN {
+		t.Fatalf("retained 32 KiB slabs = %d, want bounded cap %d", got, maxN)
 	}
 
-	// The next Get must still succeed from the bounded pool.
 	got := alloc.Get(1 << 15)
 	if cap(got) != 1<<15 {
 		t.Fatalf("Get after overflow cap = %d", cap(got))
@@ -88,5 +87,35 @@ func TestLargePoolCapsStayWithinBudget(t *testing.T) {
 func BenchmarkMSB(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		msb(randv2.Int())
+	}
+}
+
+func BenchmarkAllocGetPut(b *testing.B) {
+	alloc := NewAllocator()
+	for _, size := range []int{1 << 13, 1 << 14, 1 << 15, 1 << 17} {
+		buf := alloc.Get(size)
+		_ = alloc.Put(buf)
+		b.Run(itoaSize(size), func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				got := alloc.Get(size)
+				_ = alloc.Put(got)
+			}
+		})
+	}
+}
+
+func itoaSize(size int) string {
+	switch size {
+	case 1 << 13:
+		return "8KiB"
+	case 1 << 14:
+		return "16KiB"
+	case 1 << 15:
+		return "32KiB"
+	case 1 << 17:
+		return "128KiB"
+	default:
+		return "other"
 	}
 }
