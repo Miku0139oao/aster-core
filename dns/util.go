@@ -279,11 +279,16 @@ func dropOPT(extra []D.RR) []D.RR {
 }
 
 // getMsgFromCache returns a cached dns message if it exists, otherwise returns nil.
-// the returned msg is a copy of the original msg, so it can be modified without affecting the original msg.
+// The returned msg is never the cache-owned object, so the caller may mutate TTL
+// and rdata. Compact A/AAAA entries are expanded once; full messages are cloned.
 func getMsgFromCache(c dnsCache, q D.Question) (*D.Msg, time.Time, bool) {
-	msg, expireTime, hit := c.GetWithExpire(cacheKey(q))
+	key := cacheKey(q)
+	if mc, ok := c.(*msgCache); ok {
+		return mc.getForCaller(key)
+	}
+	msg, expireTime, hit := c.GetWithExpire(key)
 	if msg != nil {
-		msg = cloneMsg(msg) // never modify the original msg
+		msg = cloneMsg(msg)
 	}
 	return msg, expireTime, hit
 }
