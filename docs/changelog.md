@@ -6,7 +6,7 @@ description: Aster Core 自 Mihomo v1.19.29 基準點以來的繁體中文變更
 # 更新紀錄
 
 > [!NOTE]
-> 本頁是 Aster Core 的 rolling snapshot changelog，整理至 `2026-08-24`。內容只涵蓋基準提交 `e26714a1`（Mihomo `v1.19.29`）之後的 Aster 時代變更；日期依提交／review 日期整理，不代表正式版本號。最上方的「未發布」項目在合併進 `main` 且 Prerelease-main 更新前，不應視為已下載版本。
+> 本頁是 Aster Core 的 rolling snapshot changelog，最新補充為 `2026-09-07`。內容只涵蓋基準提交 `e26714a1`（Mihomo `v1.19.29`）之後的 Aster 時代變更；日期依提交／review 日期整理，不代表正式版本號。最上方的「未發布」項目在合併進 `main` 且 Prerelease-main 更新前，不應視為已下載版本。
 
 Aster Core 目前尚未發布正式的 Aster `v*` 版本。GitHub 上的 `Prerelease-main` 是持續更新中的預發布版本，使用前請留意它可能隨 `main` 改變。
 
@@ -15,6 +15,13 @@ Aster Core 目前尚未發布正式的 Aster `v*` 版本。GitHub 上的 `Prerel
 - [English version](/en/changelog)
 
 完整的功能差異與相容性說明，請看[Aster 與 Mihomo 的差異](/reference/mihomo-differences)；本頁只整理有日期的 Aster 變更重點。
+
+## 2026-09-07｜PR #4 記憶體調整與 Linux 驗證
+
+- `c5f553dc` 已合併 [PR #4](https://github.com/Miku0139oao/aster-core/pull/4)：Aster 的 16–128 KiB allocator slabs 改為有上限的 pool，符合條件的純 A／AAAA DNS cache 改存精簡地址資料。
+- Windows 與 Linux 一般／低記憶體全套測試、變更範圍 race 與建置通過；新增[記憶體優化交接規劃](/development/memory-optimization-plan)，規劃中的其他優化尚未因此完成。
+- 七輪 Linux WSL2 A/B：4,096 筆 DNS cache 的 RSS 中位數 −2.5%，但前後範圍重疊；1,000 條 TCP 沒有省 RAM。大型 pool 操作與完整 DNS 訊息 cache hit 較慢，沒有宣稱全面加速。完整數據、限制與原始資料見[效能驗證](/reference/performance)。
+- 此處確認的是核心 commit 與測試結果，不保證目前 `Prerelease-main` 資產已更新到同一 SHA。
 
 ## 未發布｜2026-08-24 效能、記憶體與可靠性 review wave
 

@@ -3,6 +3,10 @@
 > 本文件是給接手 agent 的工作規劃。每一項都附上檔案位置、目前的證據、建議作法與驗收標準。
 > 接手時請依優先序逐項開獨立 PR，不要把多個項目混在一個 PR 內。
 
+::: warning 2026-09-07 實測補充
+PR #4 已補 Windows／Linux 驗證與七輪 WSL2 A/B，見[效能報告](/reference/performance)。4,096 筆 DNS cache 的 RSS 中位數 −2.5%，但前後範圍重疊；1,000 條 TCP 未省 RAM。大型 pool Get/Put 與完整 DNS 訊息快取命中有明確時間回退，後者配置量由 252 B／5 allocs 增至 516 B／10 allocs。自然 GC 下的 TCP heap profile 尚不足以完成 P0-1 歸因，以下工作不可標成已驗收。
+:::
+
 ## 0. 現況與已完成事項
 
 | 項目 | 狀態 | 位置 |
