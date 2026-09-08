@@ -129,16 +129,18 @@ func copyAdaptive(destination io.Writer, source io.Reader, originSource io.Reade
 
 func copyExtendedAdaptive(originSource io.Reader, destination network.ExtendedWriter, source network.ExtendedReader, readCounters, writeCounters []network.CountFunc) (n int64, err error) {
 	options := network.NewReadWaitOptions(source, destination)
-	payload := pool.RelayBufferSize
-	minPayload := payload
+	// Match sing's sizing when the writer declares an MTU (shadowaead:
+	// 16 KiB - 1). Larger payloads still work but fall back to the writer's
+	// chunk-and-copy slow path, so the MTU is the read ceiling.
 	maxPayload := pool.RelayBufferSize
-	if copySourceIsByteStream(source) && options.MTU == 0 {
+	if options.MTU > 0 {
+		maxPayload = options.MTU
+	}
+	payload := maxPayload
+	minPayload := maxPayload
+	if copySourceIsByteStream(source) && copyMinBuffer < maxPayload {
 		payload = copyMinBuffer
 		minPayload = copyMinBuffer
-		if payload > maxPayload {
-			payload = maxPayload
-			minPayload = maxPayload
-		}
 	}
 	var notFirstTime bool
 	var full, small int

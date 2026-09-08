@@ -21,6 +21,7 @@ For the full feature and compatibility overview, see [Aster vs. Mihomo](/en/refe
 - **DNS compact cache:** `getMsgFromCache` expands a compact A/AAAA entry once and does not `cloneMsg` the result. Full-message cache hits are back to about 5 allocs / 264 B; `LookupIPv4CacheHit` stays 88 B / 3 allocs.
 - **Large allocator:** 16–128 KiB slabs use `sync.Pool` again, with an atomic occupancy cap. Get/Put no longer go through a channel; excess `Put`s are still dropped.
 - **Idle relay buffers:** the fallback `copyConn` path starts at 4 KiB and grows on full reads. 256 idle `net.Pipe` pairs measured about 12 KiB heap/conn (previously about 68 KiB with a fixed 32 KiB slab). Chunked protocol `ReadBuffer` implementations keep `RelayBufferSize`. splice / readWaiter are unchanged. The 2026-09-05 / 2026-09-07 process RSS tables were not rerun.
+- **Relay honours the writer MTU (review fix):** after the item above merged, `copyExtendedAdaptive` read a fixed `RelayBufferSize` whenever the writer declared `WriterMTU()` (16 KiB − 1 for sing-shadowsocks2 AEAD streams). A payload above the MTU makes shadowaead `WriteBuffer` fall back to its chunk-and-copy slow path; sing sized the buffer to `MTU + headroom`. The payload ceiling is now `options.MTU`: byte-stream sources still start at 4 KiB and grow up to the MTU, chunked sources read exactly MTU. Only non-`syscall.Conn` sources (gVisor tun, TLS / mux / QUIC streams) toward a Shadowsocks outbound were affected; splice / readWaiter paths are unchanged.
 
 ## Unreleased | 2026-09-06 idle memory scavenge (opt-in)
 
