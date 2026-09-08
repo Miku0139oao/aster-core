@@ -21,6 +21,7 @@ Aster Core 目前尚未發布正式的 Aster `v*` 版本。GitHub 上的 `Prerel
 - **DNS compact cache：** `getMsgFromCache` 對精簡 A／AAAA 只 `expand` 一次，不再接著 `cloneMsg`。完整訊息 cache hit 回到約 5 allocs／264 B；`LookupIPv4CacheHit` 仍是 88 B／3 allocs。
 - **大型 allocator：** 16–128 KiB 改回 `sync.Pool`，另以 atomic 計數限制保留量。Get/Put 不再走 channel；超額 `Put` 仍丟棄。
 - **Relay 閒置 buffer：** 備援 `copyConn` 從 4 KiB 起跳，滿讀升級、小讀降級。256 對閒置 `net.Pipe` heap 約 12 KiB/conn（先前固定 32 KiB 時約 68 KiB/conn）。VMess 等 chunked `ReadBuffer` 仍用 `RelayBufferSize`，避免 length prefix 讀完後 buffer 不夠。splice／readWaiter 未改。未重跑 2026-09-05／2026-09-07 整程序 RSS 表。
+- **Relay 尊重 writer MTU（review 修正）：** 上一項合併後的 `copyExtendedAdaptive` 在 writer 宣告 `WriterMTU()` 時（sing-shadowsocks2 AEAD 串流為 16 KiB − 1）曾固定讀 `RelayBufferSize`，單筆 payload 超過 MTU 會讓 shadowaead `WriteBuffer` 退回逐塊複製的慢路徑；sing 原本以 `MTU + headroom` 配 buffer。現在 payload 上限改為 `options.MTU`，byte-stream 來源仍從 4 KiB 起跳、最多長到 MTU；chunked 來源固定用 MTU。只影響非 `syscall.Conn` 來源（gVisor tun、TLS／mux／QUIC stream）到 Shadowsocks 出口的方向；splice／readWaiter 路徑不變。
 
 ## 未發布｜2026-09-06 閒置記憶體回收（opt-in）
 
