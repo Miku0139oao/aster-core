@@ -3,6 +3,7 @@ package net
 import (
 	"errors"
 	"io"
+	"math/bits"
 	"syscall"
 
 	"github.com/Miku0139oao/aster-core/common/net/deadline"
@@ -15,6 +16,7 @@ import (
 
 const (
 	copyMinBuffer   = 4 << 10
+	copyMinPayload  = copyMinBuffer / 2
 	copyGrowAfter   = 2
 	copyShrinkAfter = 4
 )
@@ -112,7 +114,7 @@ func copyAdaptive(destination io.Writer, source io.Reader, originSource io.Reade
 				return n, writeErr
 			}
 			firstWrite = false
-			if next := nextCopySize(size, readN, maxSize, &full, &small); next != size {
+			if next := nextCopySize(size, size, readN, copyMinBuffer, maxSize, &full, &small); next != size {
 				_ = pool.Put(buffer)
 				size = next
 				buffer = pool.Get(size)
@@ -129,23 +131,12 @@ func copyAdaptive(destination io.Writer, source io.Reader, originSource io.Reade
 
 func copyExtendedAdaptive(originSource io.Reader, destination network.ExtendedWriter, source network.ExtendedReader, readCounters, writeCounters []network.CountFunc) (n int64, err error) {
 	options := network.NewReadWaitOptions(source, destination)
-	// Match sing's sizing when the writer declares an MTU (shadowaead:
-	// 16 KiB - 1). Larger payloads still work but fall back to the writer's
-	// chunk-and-copy slow path, so the MTU is the read ceiling.
-	maxPayload := pool.RelayBufferSize
-	if options.MTU > 0 {
-		maxPayload = options.MTU
-	}
-	payload := maxPayload
-	minPayload := maxPayload
-	if copySourceIsByteStream(source) && copyMinBuffer < maxPayload {
-		payload = copyMinBuffer
-		minPayload = copyMinBuffer
-	}
+	size, minSize, maxSize := adaptiveSizeRange(options, copySourceIsByteStream(source))
 	var notFirstTime bool
 	var full, small int
 	for {
-		buffer := newAdaptiveReadBuffer(options, payload)
+		buffer := newAdaptiveReadBuffer(options, size)
+		capacity := buffer.FreeLen()
 		err = source.ReadBuffer(buffer)
 		if err != nil {
 			buffer.Release()
@@ -173,26 +164,56 @@ func copyExtendedAdaptive(originSource io.Reader, destination network.ExtendedWr
 			counter(int64(dataLen))
 		}
 		notFirstTime = true
-		if minPayload == maxPayload {
+		if minSize == maxSize {
 			continue
 		}
-		if next := nextCopySize(payload, dataLen, maxPayload, &full, &small); next != payload {
-			if next < minPayload {
-				next = minPayload
-			}
-			payload = next
-		}
+		size = nextCopySize(size, capacity, dataLen, minSize, maxSize, &full, &small)
 	}
 }
 
-func newAdaptiveReadBuffer(options network.ReadWaitOptions, payload int) *buf.Buffer {
-	size := payload
+// adaptiveSizeRange returns the starting, minimum and maximum total buffer
+// size (headroom included) for copyExtendedAdaptive.
+//
+// sing sizes the buffer to MTU + headroom when the writer declares an MTU,
+// and to one whole BufferSize slab otherwise, carving the headroom out of
+// the slab. Both are kept here: adding headroom on top of a power-of-two
+// payload would push buf.NewSize into the next allocator class (4 KiB + 8
+// bytes occupies an 8 KiB slab, 32 KiB + 8 bytes a 64 KiB slab).
+//
+// Byte-stream sources start at copyMinBuffer and double on full reads up
+// to the maximum; chunked protocol readers always get the maximum.
+func adaptiveSizeRange(options network.ReadWaitOptions, byteStream bool) (size, minSize, maxSize int) {
+	headroom := 0
 	if options.FrontHeadroom > 0 {
-		size += options.FrontHeadroom
+		headroom += options.FrontHeadroom
 	}
 	if options.RearHeadroom > 0 {
-		size += options.RearHeadroom
+		headroom += options.RearHeadroom
 	}
+	if options.MTU > 0 {
+		maxSize = options.MTU + headroom
+	} else {
+		maxSize = pool.RelayBufferSize
+		if maxSize-headroom < copyMinPayload {
+			// Headroom leaves no usable room in a RelayBufferSize slab; fall
+			// back to payload + headroom rather than looping on empty reads.
+			maxSize = pool.RelayBufferSize + headroom
+		}
+	}
+	minSize = maxSize
+	if byteStream {
+		minSize = copyMinBuffer
+		for minSize-headroom < copyMinPayload && minSize*2 <= maxSize {
+			minSize *= 2
+		}
+		if minSize > maxSize {
+			minSize = maxSize
+		}
+	}
+	return minSize, minSize, maxSize
+}
+
+func newAdaptiveReadBuffer(options network.ReadWaitOptions, size int) *buf.Buffer {
 	buffer := buf.NewSize(size)
 	if options.FrontHeadroom > 0 {
 		buffer.Resize(options.FrontHeadroom, 0)
@@ -203,38 +224,44 @@ func newAdaptiveReadBuffer(options network.ReadWaitOptions, payload int) *buf.Bu
 	return buffer
 }
 
-func nextCopySize(cur, readN, maxSize int, full, small *int) int {
-	if cur <= 0 {
-		return copyMinBuffer
+// nextCopySize returns the next total buffer size. readN is judged against
+// capacity, the part of the buffer a read may fill (size minus headroom):
+// copyGrowAfter consecutive full reads double the size, copyShrinkAfter
+// consecutive reads under a quarter of capacity halve it.
+func nextCopySize(size, capacity, readN, minSize, maxSize int, full, small *int) int {
+	if size <= 0 {
+		return minSize
 	}
-	if readN == cur {
+	if readN == capacity {
 		*full++
 		*small = 0
-		if *full >= copyGrowAfter && cur < maxSize {
+		if *full >= copyGrowAfter && size < maxSize {
 			*full = 0
-			next := cur * 2
+			next := size * 2
 			if next > maxSize {
 				next = maxSize
 			}
 			return next
 		}
-		return cur
+		return size
 	}
 	*full = 0
-	if readN > 0 && readN < cur/4 {
+	if readN > 0 && readN < capacity/4 {
 		*small++
-		if *small >= copyShrinkAfter && cur > copyMinBuffer {
+		if *small >= copyShrinkAfter && size > minSize {
 			*small = 0
-			next := cur / 2
-			if next < copyMinBuffer {
-				next = copyMinBuffer
+			// maxSize may be MTU + headroom rather than a power of two;
+			// shrink back onto an allocator class.
+			next := 1 << (bits.Len(uint(size/2)) - 1)
+			if next < minSize {
+				next = minSize
 			}
 			return next
 		}
-		return cur
+		return size
 	}
 	*small = 0
-	return cur
+	return size
 }
 
 // copySourceIsByteStream reports whether ReadBuffer is a generic fill of

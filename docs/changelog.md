@@ -22,6 +22,7 @@ Aster Core 目前尚未發布正式的 Aster `v*` 版本。GitHub 上的 `Prerel
 - **大型 allocator：** 16–128 KiB 改回 `sync.Pool`，另以 atomic 計數限制保留量。Get/Put 不再走 channel；超額 `Put` 仍丟棄。
 - **Relay 閒置 buffer：** 備援 `copyConn` 從 4 KiB 起跳，滿讀升級、小讀降級。256 對閒置 `net.Pipe` heap 約 12 KiB/conn（先前固定 32 KiB 時約 68 KiB/conn）。VMess 等 chunked `ReadBuffer` 仍用 `RelayBufferSize`，避免 length prefix 讀完後 buffer 不夠。splice／readWaiter 未改。未重跑 2026-09-05／2026-09-07 整程序 RSS 表。
 - **Relay 尊重 writer MTU（review 修正）：** 上一項合併後的 `copyExtendedAdaptive` 在 writer 宣告 `WriterMTU()` 時（sing-shadowsocks2 AEAD 串流為 16 KiB − 1）曾固定讀 `RelayBufferSize`，單筆 payload 超過 MTU 會讓 shadowaead `WriteBuffer` 退回逐塊複製的慢路徑；sing 原本以 `MTU + headroom` 配 buffer。現在 payload 上限改為 `options.MTU`，byte-stream 來源仍從 4 KiB 起跳、最多長到 MTU；chunked 來源固定用 MTU。只影響非 `syscall.Conn` 來源（gVisor tun、TLS／mux／QUIC stream）到 Shadowsocks 出口的方向；splice／readWaiter 路徑不變。
+- **Relay headroom 不再撐大 slab（review 修正）：** `copyExtendedAdaptive` 先前把 buffer 配成 `payload + headroom`，`buf.NewSize` 進位到下一個 allocator class，所以 VLESS-vision／WebSocket／gRPC 這類宣告 headroom 但沒有 MTU 的目的端，閒置佔 8 KiB、滿速佔 64 KiB slab（sing 原本是一整塊 32 KiB 再從中切 headroom）。現在依 sing 的做法以 size class 為總量、headroom 在裡面切：byte-stream 來源從 4 KiB slab 起跳（headroom 大時從 8 KiB），上限 `RelayBufferSize`；MTU 目的端維持 `MTU + headroom`，縮小時回到 2 的冪次。實測 WebSocket-like slab 序列 `4096→8192→16384→32768`（修正前 `8192→…→65536`），vision-like（headroom 2424）`8192→…→32768`、滿速 payload 30344。`TestIdlePipeRelayHeapPerConn` 改用 Read 進入訊號取代 `time.Sleep`，數值不變（約 12.6 KiB/conn）。
 
 ## 未發布｜2026-09-06 閒置記憶體回收（opt-in）
 
