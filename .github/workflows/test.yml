@@ -117,6 +117,7 @@ jobs:
       - name: Targeted race tests
         run: >-
           go test -race -count=1
+          ./dns
           ./common/net
           ./component/aster
           ./hub/route
