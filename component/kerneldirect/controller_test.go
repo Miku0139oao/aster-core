@@ -1094,19 +1094,24 @@ func TestControllerCloseFencesClassifier(t *testing.T) {
 func TestControllerCloseUnblocksAcceptedPublish(t *testing.T) {
 	inSink := make(chan struct{})
 	block := make(chan struct{})
+	var sinkOnce sync.Once
 	c := Register(func(string, netip.Addr) bool { return true }, func(DecisionSets) {
-		select {
-		case inSink <- struct{}{}:
+		sinkOnce.Do(func() {
+			close(inSink)
 			<-block
-		default:
-		}
+		})
 	})
+	defer c.Close()
+	defer close(block)
 
 	observed := make(chan struct{})
 	go func() {
 		ObserveDNS("direct.example", []DNSAnswer{{Addr: netip.MustParseAddr("203.0.113.91"), TTL: time.Minute}})
 		close(observed)
 	}()
+	// Let the publisher start before the receiver waits. A nonblocking send
+	// could drop this notification and leave the sink unblocked.
+	runtime.Gosched()
 	select {
 	case <-inSink:
 	case <-time.After(2 * time.Second):
@@ -1128,7 +1133,6 @@ func TestControllerCloseUnblocksAcceptedPublish(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("ObserveDNS stayed blocked on the accepted publish after Close")
 	}
-	close(block)
 }
 
 func TestControllerRefreshWaitsForInFlightSink(t *testing.T) {

@@ -119,6 +119,7 @@ jobs:
           go test -race -count=1
           ./dns
           ./common/net
+          ./component/kerneldirect
           ./component/aster
           ./hub/route
           ./listener
