@@ -98,8 +98,12 @@ func (p *Pool) CloneFrom(o *Pool) {
 	p.mux.Lock()
 	defer p.mux.Unlock()
 	o.store.CloneTo(p.store)
-	p.offset = o.offset
-	p.cycle = o.cycle
+	// The allocation state only matches the cloned entries if both pools cover
+	// the same range; otherwise o.offset can land outside p's range and new
+	// allocations would be rejected by IsFakeIP.
+	if o.first == p.first && o.last == p.last {
+		p.offset, p.cycle = o.offset, o.cycle
+	}
 }
 
 func (p *Pool) get(host string) netip.Addr {

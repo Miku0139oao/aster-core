@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"strconv"
 	"strings"
 	"time"
@@ -458,6 +459,15 @@ func parseVlessAddr(metadata *C.Metadata, xudp bool) *vless.DstAddr {
 	}
 }
 
+// normalizeXHTTPHost brackets a bare IPv6 literal so it stays a valid Host
+// header and URL authority, matching how net/http expects IPv6 literals.
+func normalizeXHTTPHost(host string) string {
+	if ip, err := netip.ParseAddr(host); err == nil && ip.Is6() {
+		return "[" + host + "]"
+	}
+	return host
+}
+
 func NewVless(option VlessOption) (*Vless, error) {
 	var addons *vless.Addons
 	if len(option.Flow) >= 16 {
@@ -619,6 +629,7 @@ func NewVless(option VlessOption) (*Vless, error) {
 				requestHost = v.option.Server
 			}
 		}
+		requestHost = normalizeXHTTPHost(requestHost)
 
 		var hKeepAlivePeriod time.Duration
 
@@ -798,6 +809,7 @@ func NewVless(option VlessOption) (*Vless, error) {
 					downloadHost = downloadServer
 				}
 			}
+			downloadHost = normalizeXHTTPHost(downloadHost)
 
 			downloadHKeepAlivePeriod := hKeepAlivePeriod
 

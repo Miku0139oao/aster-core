@@ -247,6 +247,66 @@ func TestPool_ClonePreservesOffset(t *testing.T) {
 	assert.Equal(t, "bar.com", host)
 }
 
+// TestPool_CloneKeepsAllocationState covers the reload path where both pools
+// cover the same range: the new pool must continue allocating right after the
+// old one instead of overwriting the retained mappings from the start.
+func TestPool_CloneKeepsAllocationState(t *testing.T) {
+	ipnet := netip.MustParsePrefix("192.168.0.1/24")
+	pool, err := New(Options{
+		IPNet: ipnet,
+		Size:  10,
+	})
+	assert.Nil(t, err)
+
+	foo := pool.Lookup("foo.com")
+	bar := pool.Lookup("bar.com")
+
+	newPool, err := New(Options{
+		IPNet: ipnet,
+		Size:  10,
+	})
+	assert.Nil(t, err)
+	newPool.CloneFrom(pool)
+
+	// a fresh allocation must not overwrite the retained mappings
+	baz := newPool.Lookup("baz.com")
+	assert.NotEqual(t, foo, baz)
+	assert.NotEqual(t, bar, baz)
+	assert.Equal(t, foo, newPool.Lookup("foo.com"))
+	assert.Equal(t, bar, newPool.Lookup("bar.com"))
+	host, ok := newPool.LookBack(foo)
+	assert.True(t, ok)
+	assert.Equal(t, "foo.com", host)
+}
+
+// TestPool_CloneChangedRangeResetsAllocationState covers a reload that changes
+// the fake-ip range: carrying the old offset over would make new allocations
+// land outside the new pool, where IsFakeIP rejects them.
+func TestPool_CloneChangedRangeResetsAllocationState(t *testing.T) {
+	oldNet := netip.MustParsePrefix("10.99.0.0/24")
+	pool, err := New(Options{
+		IPNet: oldNet,
+		Size:  10,
+	})
+	assert.Nil(t, err)
+	for i := 0; i < 10; i++ {
+		assert.True(t, oldNet.Contains(pool.Lookup(fmt.Sprintf("old%d.com", i))))
+	}
+
+	newNet := netip.MustParsePrefix("198.18.0.0/16")
+	newPool, err := New(Options{
+		IPNet: newNet,
+		Size:  10,
+	})
+	assert.Nil(t, err)
+	newPool.CloneFrom(pool)
+
+	for i := 0; i < 50; i++ {
+		ip := newPool.Lookup(fmt.Sprintf("new%d.com", i))
+		assert.True(t, newNet.Contains(ip), "allocation %s escaped the new pool %s", ip, newNet)
+	}
+}
+
 func TestPool_Error(t *testing.T) {
 	ipnet := netip.MustParsePrefix("192.168.0.1/31")
 	_, err := New(Options{
