@@ -287,6 +287,7 @@ type RawTun struct {
 	Enable              bool       `yaml:"enable" json:"enable"`
 	Device              string     `yaml:"device" json:"device"`
 	Stack               C.TUNStack `yaml:"stack" json:"stack"`
+	DNSMode             string     `yaml:"dns-mode" json:"dns-mode"`
 	DNSHijack           []string   `yaml:"dns-hijack" json:"dns-hijack"`
 	AutoRoute           bool       `yaml:"auto-route" json:"auto-route"`
 	AutoDetectInterface bool       `yaml:"auto-detect-interface" json:"auto-detect-interface"`
@@ -340,7 +341,12 @@ type RawTun struct {
 	UDPTimeout                            int64          `yaml:"udp-timeout" json:"udp-timeout,omitempty"`
 	ICMPTimeout                           int64          `yaml:"icmp-timeout" json:"icmp-timeout,omitempty"`
 	DisableICMPForwarding                 bool           `yaml:"disable-icmp-forwarding" json:"disable-icmp-forwarding,omitempty"`
-	FileDescriptor                        int            `yaml:"file-descriptor" json:"file-descriptor"`
+	// congestion-controller only affects the mips stack. Values are validated by
+	// sing-tun when the stack is created (mipstack.AvailableCongestionControls),
+	// matching upstream mihomo; an unknown name fails TUN startup with
+	// "invalid TCP congestion control" instead of being silently ignored.
+	CongestionController string `yaml:"congestion-controller" json:"congestion-controller,omitempty"`
+	FileDescriptor       int    `yaml:"file-descriptor" json:"file-descriptor"`
 
 	Inet4RouteAddress        []netip.Prefix `yaml:"inet4-route-address" json:"inet4-route-address,omitempty"`
 	Inet6RouteAddress        []netip.Prefix `yaml:"inet6-route-address" json:"inet6-route-address,omitempty"`
@@ -350,6 +356,9 @@ type RawTun struct {
 	// darwin special config
 	RecvMsgX bool `yaml:"recvmsgx" json:"recvmsgx,omitempty"`
 	SendMsgX bool `yaml:"sendmsgx" json:"sendmsgx,omitempty"`
+
+	// gvisor special config (Non-public option; do not include it in the document.)
+	ProcessorsPerChannel int `yaml:"processors-per-channel" json:"processors-per-channel,omitempty"`
 }
 
 type RawTuicServer struct {
@@ -575,15 +584,19 @@ func DefaultRawConfig() *RawConfig {
 			Interval:      30,
 		},
 		Tun: RawTun{
-			Enable:              false,
-			Device:              "",
-			Stack:               C.TunGvisor,
-			DNSHijack:           []string{"0.0.0.0:53"}, // default hijack all dns query
-			AutoRoute:           true,
-			AutoDetectInterface: true,
-			Inet6Address:        []netip.Prefix{netip.MustParsePrefix("fdfe:dcba:9876::1/126")},
-			RecvMsgX:            true,
-			SendMsgX:            false, // In the current implementation, if enabled, the kernel may freeze during multi-thread downloads, so it is disabled by default.
+			Enable: false,
+			Device: "",
+			// Aster keeps gVisor as the default stack. Upstream mihomo flipped this
+			// default to mips (63bd52ec), but aster's release builds and all
+			// Kernel DIRECT testing are gVisor-based, so the flip is deliberately skipped.
+			Stack:                C.TunGvisor,
+			DNSHijack:            []string{"0.0.0.0:53"}, // default hijack all dns query
+			AutoRoute:            true,
+			AutoDetectInterface:  true,
+			Inet6Address:         []netip.Prefix{netip.MustParsePrefix("fdfe:dcba:9876::1/126")},
+			RecvMsgX:             true,
+			SendMsgX:             false, // In the current implementation, if enabled, the kernel may freeze during multi-thread downloads, so it is disabled by default.
+			ProcessorsPerChannel: 1,     // For most users, memory usage is more important than peak performance. Setting this to 1 can significantly reduce memory consumption.
 		},
 		TuicServer: RawTuicServer{
 			Enable:                false,
@@ -1829,7 +1842,24 @@ func ValidateKernelDirectTun(tun LC.Tun) error {
 	return nil
 }
 
+// ValidateTunDNSMode rejects unknown `tun.dns-mode` values. It is shared by
+// YAML parsing and PATCH /configs so both fail before a TUN listener is
+// started. The accepted values mirror sing-tun's DNSMode constants; the empty
+// value keeps sing-tun's legacy default (hijack when auto-route is enabled,
+// disabled otherwise, and always disabled on darwin).
+func ValidateTunDNSMode(dnsMode string) error {
+	switch dnsMode {
+	case "", "disabled", "native", "hijack":
+		return nil
+	default:
+		return fmt.Errorf("invalid tun dns-mode %q, expected one of \"\", \"disabled\", \"native\", \"hijack\"", dnsMode)
+	}
+}
+
 func parseTun(rawTun RawTun, dns *DNS, general *General) error {
+	if err := ValidateTunDNSMode(rawTun.DNSMode); err != nil {
+		return err
+	}
 	if err := ValidateKernelDirectTun(LC.Tun{
 		KernelDirect:                   rawTun.KernelDirect,
 		AutoRoute:                      rawTun.AutoRoute,
@@ -1859,6 +1889,7 @@ func parseTun(rawTun RawTun, dns *DNS, general *General) error {
 		Enable:              rawTun.Enable,
 		Device:              rawTun.Device,
 		Stack:               rawTun.Stack,
+		DNSMode:             rawTun.DNSMode,
 		DNSHijack:           rawTun.DNSHijack,
 		AutoRoute:           rawTun.AutoRoute,
 		AutoDetectInterface: rawTun.AutoDetectInterface,
@@ -1912,6 +1943,7 @@ func parseTun(rawTun RawTun, dns *DNS, general *General) error {
 		UDPTimeout:                            rawTun.UDPTimeout,
 		ICMPTimeout:                           rawTun.ICMPTimeout,
 		DisableICMPForwarding:                 rawTun.DisableICMPForwarding,
+		CongestionController:                  rawTun.CongestionController,
 		FileDescriptor:                        rawTun.FileDescriptor,
 
 		Inet4RouteAddress:        rawTun.Inet4RouteAddress,
@@ -1921,6 +1953,8 @@ func parseTun(rawTun RawTun, dns *DNS, general *General) error {
 
 		RecvMsgX: rawTun.RecvMsgX,
 		SendMsgX: rawTun.SendMsgX,
+
+		ProcessorsPerChannel: rawTun.ProcessorsPerChannel,
 	}
 
 	return nil

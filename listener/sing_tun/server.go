@@ -149,6 +149,23 @@ func checkTunName(tunName string) (ok bool) {
 	return true
 }
 
+// validateDNSMode rejects unknown `dns-mode` values before any interface work
+// starts. The empty value preserves sing-tun's DNSModeOrDefault() default:
+// "hijack" when auto-route is enabled, "disabled" otherwise (and always
+// "disabled" on darwin). sing-tun v0.4.28 gates the Linux system-DNS setup
+// (resolvectl registration) on that default, so an older config with
+// `auto-route: false` now needs an explicit "hijack" to keep the pre-v0.4.28
+// behaviour. "native" registers the address without the port-53 redirect;
+// "disabled" opts out entirely.
+func validateDNSMode(dnsMode string) error {
+	switch dnsMode {
+	case "", tun.DNSModeDisabled, tun.DNSModeNative, tun.DNSModeHijack:
+		return nil
+	default:
+		return fmt.Errorf("invalid dns-mode: %s", dnsMode)
+	}
+}
+
 // closeAllocatedListenerOnErr is deferred from New after Listener allocation.
 // allocated is captured by value so explicit `return nil, err` cannot nil the
 // Close receiver. On error the captured listener is closed and the named
@@ -338,6 +355,10 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 		excludeMACAddress = append(excludeMACAddress, addr)
 	}
 
+	if err := validateDNSMode(options.DNSMode); err != nil {
+		return nil, err
+	}
+
 	var dnsAdds []netip.AddrPort
 
 	for _, d := range options.DNSHijack {
@@ -454,6 +475,7 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 		GSO:                                   options.GSO,
 		Inet4Address:                          options.Inet4Address,
 		Inet6Address:                          options.Inet6Address,
+		DNSMode:                               options.DNSMode,
 		AutoRoute:                             options.AutoRoute,
 		IPRoute2TableIndex:                    tableIndex,
 		IPRoute2RuleIndex:                     ruleIndex,
@@ -482,6 +504,7 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 		InterfaceMonitor:                      defaultInterfaceMonitor,
 		EXP_RecvMsgX:                          options.RecvMsgX,
 		EXP_SendMsgX:                          options.SendMsgX,
+		EXP_ProcessorsPerChannel:              options.ProcessorsPerChannel,
 	}
 
 	if options.AutoRedirect {
@@ -567,6 +590,7 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 		Logger:                 log.SingLogger,
 		ForwarderBindInterface: forwarderBindInterface,
 		InterfaceFinder:        interfaceFinder,
+		TCPCongestionControl:   options.CongestionController,
 		EnforceBindInterface:   EnforceBindInterface,
 	}
 	l.tunIf = tunIf
@@ -648,8 +672,8 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 	if options.FileDescriptor != 0 {
 		tunName = fmt.Sprintf("%s(fd=%d)", tunName, options.FileDescriptor)
 	}
-	l.addrStr = fmt.Sprintf("%s(%s,%s), mtu: %d, auto route: %v, auto redir: %v, ip stack: %s",
-		tunName, tunOptions.Inet4Address, tunOptions.Inet6Address, tunMTU, options.AutoRoute, options.AutoRedirect, options.Stack)
+	l.addrStr = fmt.Sprintf("%s(%s,%s), mtu: %d, auto route: %v, auto redir: %v, ip stack: %s, dns mode: %s",
+		tunName, tunOptions.Inet4Address, tunOptions.Inet6Address, tunMTU, options.AutoRoute, options.AutoRedirect, options.Stack, options.DNSMode)
 	return
 }
 

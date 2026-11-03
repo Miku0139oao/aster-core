@@ -65,6 +65,7 @@ type tunSchema struct {
 	Enable              *bool       `yaml:"enable" json:"enable,omitempty"`
 	Device              *string     `yaml:"device" json:"device"`
 	Stack               *C.TUNStack `yaml:"stack" json:"stack"`
+	DNSMode             *string     `yaml:"dns-mode" json:"dns-mode,omitempty"`
 	DNSHijack           *[]string   `yaml:"dns-hijack" json:"dns-hijack"`
 	AutoRoute           *bool       `yaml:"auto-route" json:"auto-route"`
 	AutoDetectInterface *bool       `yaml:"auto-detect-interface" json:"auto-detect-interface"`
@@ -118,6 +119,7 @@ type tunSchema struct {
 	UDPTimeout                            *int64          `yaml:"udp-timeout" json:"udp-timeout,omitempty"`
 	ICMPTimeout                           *int64          `yaml:"icmp-timeout" json:"icmp-timeout,omitempty"`
 	DisableICMPForwarding                 *bool           `yaml:"disable-icmp-forwarding" json:"disable-icmp-forwarding,omitempty"`
+	CongestionController                  *string         `yaml:"congestion-controller" json:"congestion-controller,omitempty"`
 	FileDescriptor                        *int            `yaml:"file-descriptor" json:"file-descriptor"`
 
 	Inet4RouteAddress        *[]netip.Prefix `yaml:"inet4-route-address" json:"inet4-route-address,omitempty"`
@@ -128,6 +130,9 @@ type tunSchema struct {
 	// darwin special config
 	RecvMsgX *bool `yaml:"recvmsgx" json:"recvmsgx,omitempty"`
 	SendMsgX *bool `yaml:"sendmsgx" json:"sendmsgx,omitempty"`
+
+	// gvisor special config (Non-public option; do not include it in the document.)
+	ProcessorsPerChannel *int `yaml:"processors-per-channel" json:"processors-per-channel,omitempty"`
 }
 
 type tuicServerSchema struct {
@@ -168,6 +173,9 @@ func pointerOrDefaultTun(p *tunSchema, def LC.Tun) LC.Tun {
 		}
 		if p.Stack != nil {
 			def.Stack = *p.Stack
+		}
+		if p.DNSMode != nil {
+			def.DNSMode = *p.DNSMode
 		}
 		if p.DNSHijack != nil {
 			def.DNSHijack = *p.DNSHijack
@@ -343,6 +351,9 @@ func pointerOrDefaultTun(p *tunSchema, def LC.Tun) LC.Tun {
 		if p.DisableICMPForwarding != nil {
 			def.DisableICMPForwarding = *p.DisableICMPForwarding
 		}
+		if p.CongestionController != nil {
+			def.CongestionController = *p.CongestionController
+		}
 		if p.FileDescriptor != nil {
 			def.FileDescriptor = *p.FileDescriptor
 		}
@@ -351,6 +362,9 @@ func pointerOrDefaultTun(p *tunSchema, def LC.Tun) LC.Tun {
 		}
 		if p.SendMsgX != nil {
 			def.SendMsgX = *p.SendMsgX
+		}
+		if p.ProcessorsPerChannel != nil {
+			def.ProcessorsPerChannel = *p.ProcessorsPerChannel
 		}
 	}
 	return def
@@ -423,6 +437,9 @@ func patchConfigs(w http.ResponseWriter, r *http.Request) {
 	if err := listener.PatchTun(func(current LC.Tun) (LC.Tun, error) {
 		merged := pointerOrDefaultTun(general.Tun, current)
 		if general.Tun != nil {
+			if err := config.ValidateTunDNSMode(merged.DNSMode); err != nil {
+				return LC.Tun{}, &tunPatchValidationError{err: err}
+			}
 			if err := config.ValidateKernelDirectTun(merged); err != nil {
 				return LC.Tun{}, &tunPatchValidationError{err: err}
 			}

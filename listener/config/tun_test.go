@@ -3,6 +3,8 @@ package config
 import (
 	"net/netip"
 	"testing"
+
+	C "github.com/Miku0139oao/aster-core/constant"
 )
 
 func TestTunCloneDetachesAndSortCanonicalizesAllSlices(t *testing.T) {
@@ -49,5 +51,53 @@ func TestTunEqualChecksLoopbackAndPortFilters(t *testing.T) {
 				t.Fatalf("Tun.Equal ignored %s", name)
 			}
 		})
+	}
+}
+
+func TestTunEqualChecksDNSModeCongestionAndProcessors(t *testing.T) {
+	// dns-mode and processors-per-channel are reload-relevant: if Equal ignores
+	// them, a PATCH or a config reload silently keeps the old TUN listener.
+	// congestion-controller likewise only takes effect when the stack restarts.
+	base := Tun{
+		Enable:               true,
+		DNSMode:              "native",
+		CongestionController: "cubic",
+		ProcessorsPerChannel: 1,
+		Stack:                C.TunMips,
+	}
+	tests := map[string]func(*Tun){
+		"dns mode":               func(tun *Tun) { tun.DNSMode = "disabled" },
+		"dns mode to empty":      func(tun *Tun) { tun.DNSMode = "" },
+		"congestion controller":  func(tun *Tun) { tun.CongestionController = "bbr" },
+		"congestion to empty":    func(tun *Tun) { tun.CongestionController = "" },
+		"processors per channel": func(tun *Tun) { tun.ProcessorsPerChannel = 4 },
+		"stack mips to gvisor":   func(tun *Tun) { tun.Stack = C.TunGvisor },
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			changed := base.Clone()
+			mutate(&changed)
+			if base.Equal(changed) {
+				t.Fatalf("Tun.Equal ignored %s", name)
+			}
+		})
+	}
+
+	// A clone with no changes must still compare equal.
+	if !base.Equal(base.Clone()) {
+		t.Fatal("Tun.Equal reported a change for an identical clone")
+	}
+}
+
+func TestTunStackMipsRoundTrips(t *testing.T) {
+	if got := C.TunMips.String(); got != "Mips" {
+		t.Fatalf("TunMips.String() = %q, want %q", got, "Mips")
+	}
+	var stack C.TUNStack
+	if err := stack.UnmarshalText([]byte("mips")); err != nil {
+		t.Fatalf("stack: mips was rejected: %v", err)
+	}
+	if stack != C.TunMips {
+		t.Fatalf("stack: mips parsed to %v, want TunMips", stack)
 	}
 }
