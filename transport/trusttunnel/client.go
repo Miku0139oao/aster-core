@@ -199,18 +199,20 @@ func (c *Client) roundTrip(ctx context.Context, request *http.Request, conn *htt
 	gotConn := make(chan struct{}, 1)
 	var doneOnce sync.Once
 	signalDone := func() { doneOnce.Do(func() { close(gotConn) }) }
-	// boundCtx keeps the previous behaviour where a CONNECT that never gets a
-	// response could not outlive DefaultTCPTimeout. Without it the request
-	// context is only cancelled when the conn is closed, so a server that
-	// accepts the TCP connection and then stalls would leave the caller
-	// blocked in waitCreated forever.
-	boundCtx, boundCancel := context.WithTimeout(requestCtx, C.DefaultTCPTimeout)
-	addrCtx := httputils.NewAddrContext(&conn.NetAddr, boundCtx)
+	addrCtx := httputils.NewAddrContext(&conn.NetAddr, requestCtx)
 	streamCtx := httptrace.WithClientTrace(addrCtx, &httptrace.ClientTrace{
 		GotConn: func(info httptrace.GotConnInfo) {
 			signalDone()
 		},
 	})
+
+	// answered fires once the server has answered the CONNECT (any status) or
+	// the request failed. GotConn alone only proves the TCP connection is up;
+	// a server that answers 407/502 afterwards would otherwise leave us handing
+	// back a conn that fails on its first read, bypassing dialer fallback.
+	answered := make(chan struct{})
+	var answeredOnce sync.Once
+	signalAnswered := func() { answeredOnce.Do(func() { close(answered) }) }
 
 	var requestErr atomic2.TypedValue[error]
 	go func() {
@@ -222,6 +224,7 @@ func (c *Client) roundTrip(ctx context.Context, request *http.Request, conn *htt
 			_ = pipeReader.CloseWithError(err)
 			conn.setup(nil, err)
 			signalDone()
+			signalAnswered()
 		} else if response.StatusCode != http.StatusOK {
 			_ = response.Body.Close()
 			err = fmt.Errorf("unexpected status code: %d", response.StatusCode)
@@ -230,37 +233,35 @@ func (c *Client) roundTrip(ctx context.Context, request *http.Request, conn *htt
 			_ = pipeReader.CloseWithError(err)
 			conn.setup(nil, err)
 			signalDone()
+			signalAnswered()
 		} else {
 			c.resetHealthCheckTimer()
 			conn.setup(response.Body, nil)
 			signalDone()
+			signalAnswered()
 		}
 	}()
 
 	select {
 	case <-ctx.Done():
-		boundCancel()
 		return ctx.Err()
 	case <-gotConn:
-		// The CONNECT request itself is bounded; once it completes (response
-		// headers, non-200 or error) the goroutine has already run conn.setup,
-		// so release the timer while keeping the conn usable.
-		boundCancel()
-		if err := requestErr.Load(); err != nil {
-			return err
-		}
-		// GotConn fired before the server answered. A response that rejects the
-		// tunnel (407/502) has not reached us yet, so a conn returned here could
-		// still fail on first read instead of letting the dialer fall back.
-		// Wait for the setup result, but only within the same bound.
+		// Wait for the response, bounded by the caller's context and by the
+		// CONNECT timeout. Do not cancel requestCtx here: it is the pooled
+		// client's lifetime context, and cancelling it would poison every
+		// later request that reuses this client.
+		timer := time.NewTimer(C.DefaultTCPTimeout)
+		defer timer.Stop()
 		select {
-		case <-conn.created:
+		case <-answered:
 			return conn.waitCreated()
-		case <-boundCtx.Done():
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
 			if err := requestErr.Load(); err != nil {
 				return err
 			}
-			return boundCtx.Err()
+			return fmt.Errorf("trusttunnel: no CONNECT response within %s", C.DefaultTCPTimeout)
 		}
 	}
 }

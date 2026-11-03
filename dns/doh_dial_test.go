@@ -8,10 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/metacubex/http"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/metacubex/http"
 )
 
 // blockingDialer is a dial function that never returns on its own.  It only

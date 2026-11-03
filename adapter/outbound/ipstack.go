@@ -111,8 +111,10 @@ func newIPStack(option IPStackOption, localAddresses []netip.Prefix, mtu uint32)
 	}
 }
 
-var _ ipStack = (*mipstack.Stack)(nil)
-var _ ipStack = (wireguard.Device)(nil)
+var (
+	_ ipStack = (*mipstack.Stack)(nil)
+	_ ipStack = wireguard.Device(nil)
+)
 
 // ipStackFactory builds the selected userspace IP stack. It is a variable so
 // tests can assert when a stack is built; production code always ends up in

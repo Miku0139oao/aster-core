@@ -323,6 +323,25 @@ func (f *tcFastPath) open() error {
 	return nil
 }
 
+// loadMapPtr returns the two-slot LD_IMM64 sequence that loads a map pointer.
+//
+// asm.LoadMapPtr produces only the first half. Older cilium/ebpf versions
+// tolerated the missing second half because nothing validated it; v0.22
+// walks every element in Instructions.Marshal and rejects the zero-value
+// placeholder ("invalid opcode"). The kernel requires the second slot anyway
+// (it carries the high 32 bits of the immediate), so emit it explicitly.
+func loadMapPtr(dst asm.Register, fd int) asm.Instructions {
+	return asm.Instructions{
+		asm.LoadMapPtr(dst, fd),
+		asm.Instruction{OpCode: asm.LoadImmOp(asm.DWord)},
+	}
+}
+
+// appendLoadMapPtr appends both slots of a map-pointer load.
+func appendLoadMapPtr(insns asm.Instructions, dst asm.Register, fd int) asm.Instructions {
+	return append(insns, loadMapPtr(dst, fd)...)
+}
+
 func classifierInstructions(ipv4FD, ipv6FD, flowFD, generationFD, statsFD int, directMark, proxyMark uint32, proxyRedirectIfIndex int) asm.Instructions {
 	clearDecisionMask := int32(^(directMark | proxyMark))
 	return asm.Instructions{
@@ -423,11 +442,21 @@ func classifierInstructions(ipv4FD, ipv6FD, flowFD, generationFD, statsFD int, d
 
 		// A fixed 40-byte, fully initialized key stores family, protocol,
 		// source/destination addresses and source/destination ports.
-		asm.StoreImm(asm.RFP, -64, 0, asm.DWord).WithSymbol("ipv4_flow_init"),
-		asm.StoreImm(asm.RFP, -56, 0, asm.DWord),
-		asm.StoreImm(asm.RFP, -48, 0, asm.DWord),
-		asm.StoreImm(asm.RFP, -40, 0, asm.DWord),
-		asm.StoreImm(asm.RFP, -32, 0, asm.DWord),
+		//
+		// asm.StoreImm rejects DWord since cilium/ebpf v0.13 (it returns
+		// InvalidOpCode, which Instructions.Marshal then rejects), so zero the
+		// key with five 32-bit stores from a register instead.
+		asm.Mov.Imm(asm.R0, 0).WithSymbol("ipv4_flow_init"),
+		asm.StoreMem(asm.RFP, -64, asm.R0, asm.Word),
+		asm.StoreMem(asm.RFP, -60, asm.R0, asm.Word),
+		asm.StoreMem(asm.RFP, -56, asm.R0, asm.Word),
+		asm.StoreMem(asm.RFP, -52, asm.R0, asm.Word),
+		asm.StoreMem(asm.RFP, -48, asm.R0, asm.Word),
+		asm.StoreMem(asm.RFP, -44, asm.R0, asm.Word),
+		asm.StoreMem(asm.RFP, -40, asm.R0, asm.Word),
+		asm.StoreMem(asm.RFP, -36, asm.R0, asm.Word),
+		asm.StoreMem(asm.RFP, -32, asm.R0, asm.Word),
+		asm.StoreMem(asm.RFP, -28, asm.R0, asm.Word),
 		asm.StoreImm(asm.RFP, -64, 4, asm.Byte),
 		asm.StoreMem(asm.RFP, -63, asm.R7, asm.Byte),
 		asm.LoadMem(asm.R0, asm.R9, 12, asm.Word),
@@ -503,11 +532,19 @@ func classifierInstructions(ipv4FD, ipv6FD, flowFD, generationFD, statsFD int, d
 		asm.JEq.Imm(asm.R0, 0x80, "pass"),
 		asm.JEq.Imm(asm.R0, 0xc0, "pass"),
 
-		asm.StoreImm(asm.RFP, -64, 0, asm.DWord).WithSymbol("ipv6_flow_init"),
-		asm.StoreImm(asm.RFP, -56, 0, asm.DWord),
-		asm.StoreImm(asm.RFP, -48, 0, asm.DWord),
-		asm.StoreImm(asm.RFP, -40, 0, asm.DWord),
-		asm.StoreImm(asm.RFP, -32, 0, asm.DWord),
+		// See the ipv4_flow_init note above: StoreImm rejects DWord in current
+		// cilium/ebpf, so zero the key with 32-bit stores.
+		asm.Mov.Imm(asm.R0, 0).WithSymbol("ipv6_flow_init"),
+		asm.StoreMem(asm.RFP, -64, asm.R0, asm.Word),
+		asm.StoreMem(asm.RFP, -60, asm.R0, asm.Word),
+		asm.StoreMem(asm.RFP, -56, asm.R0, asm.Word),
+		asm.StoreMem(asm.RFP, -52, asm.R0, asm.Word),
+		asm.StoreMem(asm.RFP, -48, asm.R0, asm.Word),
+		asm.StoreMem(asm.RFP, -44, asm.R0, asm.Word),
+		asm.StoreMem(asm.RFP, -40, asm.R0, asm.Word),
+		asm.StoreMem(asm.RFP, -36, asm.R0, asm.Word),
+		asm.StoreMem(asm.RFP, -32, asm.R0, asm.Word),
+		asm.StoreMem(asm.RFP, -28, asm.R0, asm.Word),
 		asm.StoreImm(asm.RFP, -64, 6, asm.Byte),
 		asm.StoreMem(asm.RFP, -63, asm.R7, asm.Byte),
 		asm.LoadMem(asm.R0, asm.R9, 8, asm.Word),
