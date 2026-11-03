@@ -42,6 +42,13 @@ const (
 	// dohMaxConnsPerHost controls the maximum number of connections for
 	// each host.  Note, that setting it to 1 may cause issues with Go's http
 	// implementation, see https://github.com/AdguardTeam/dnsproxy/issues/278.
+	//
+	// This ceiling is kept below the net/http default of 0 (unlimited)
+	// because a DoH upstream only ever talks to a single host, so unbounded
+	// connection growth would be a leak.  The bound does not starve HTTP/2:
+	// "MaxConnsPerHost" counts open connections, and HTTP/2 multiplexes all
+	// concurrent queries onto one connection, so two connections are only
+	// reached by an H1 server or by a failed H2 connection being replaced.
 	dohMaxConnsPerHost = 2
 	dialTimeout        = 10 * time.Second
 
@@ -480,12 +487,17 @@ func (doh *dnsOverHTTPS) createClient(ctx context.Context) (*http.Client, error)
 // HTTP3 is enabled in the upstream options).  If this attempt is successful,
 // it returns an HTTP3 transport, otherwise it returns the H1/H2 transport.
 func (doh *dnsOverHTTPS) createTransport(ctx context.Context) (t http.RoundTripper, err error) {
+	// http.Transport dials in a context detached from the request, so a dial
+	// that the query has given up on must still end on its own; otherwise an
+	// abandoned dial keeps running until the OS TCP timeout and holds one of
+	// the dohMaxConnsPerHost slots.
 	transport := &http.Transport{
-		DisableCompression: true,
-		DialContext:        doh.dialer.DialContext,
-		IdleConnTimeout:    transportDefaultIdleConnTimeout,
-		MaxConnsPerHost:    dohMaxConnsPerHost,
-		MaxIdleConns:       dohMaxIdleConns,
+		DisableCompression:  true,
+		DialContext:         boundDialContext(dialTimeout, doh.dialer.DialContext),
+		IdleConnTimeout:     transportDefaultIdleConnTimeout,
+		TLSHandshakeTimeout: dialTimeout,
+		MaxConnsPerHost:     dohMaxConnsPerHost,
+		MaxIdleConns:        dohMaxIdleConns,
 	}
 
 	if doh.url.Scheme == "http" {
@@ -630,6 +642,35 @@ func (doh *dnsOverHTTPS) createTransportH3(
 	}
 
 	return &http3Transport{baseTransport: rt}, nil
+}
+
+// dohDialFunc is the signature of the dial function used by the H1/H2
+// transport.
+type dohDialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
+
+// boundDial runs dial with a timeout applied to ctx.  The bound covers
+// everything the dialer does, including bootstrap DNS resolution and, for
+// proxied DoH, the handshake with the proxy.  It is a separate function so the
+// bound can be exercised against a dial that never returns.
+func boundDial(
+	ctx context.Context,
+	timeout time.Duration,
+	dial dohDialFunc,
+	network string,
+	addr string,
+) (net.Conn, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	return dial(ctx, network, addr)
+}
+
+// boundDialContext returns a DialContext that applies timeout to the caller's
+// context.  Tests exercise it directly with a dial that never returns.
+func boundDialContext(timeout time.Duration, dial dohDialFunc) dohDialFunc {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		return boundDial(ctx, timeout, dial, network, addr)
+	}
 }
 
 func (doh *dnsOverHTTPS) dialQuic(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {

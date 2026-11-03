@@ -163,43 +163,40 @@ func validateDialerProxies(proxies map[string]C.Proxy) error {
 		}
 	}
 
-	// perform depth-first search to detect cycles for each proxy
+	// detect cycles in the dialer-proxy dependency graph
+	return validateDialerProxiesHasCycle(graph)
+}
+
+// validateDialerProxiesHasCycle detects a cycle in the dialer-proxy dependency
+// graph, where graph maps a proxy name to the name of its dialer-proxy.
+//
+// Every proxy has at most one dialer-proxy, so each chain is linear: walk it
+// once and remember the outcome.  Reaching a proxy that is on the current walk
+// means a cycle; reaching one an earlier walk already proved acyclic means this
+// chain is acyclic as well.  This keeps both time and memory linear in the
+// number of proxies instead of quadratic.
+func validateDialerProxiesHasCycle(graph map[string]string) error {
+	const (
+		onPath  uint8 = iota + 1 // currently being walked
+		acyclic                  // walk that passed through it found no cycle
+	)
+	state := make(map[string]uint8, len(graph))
+	path := make([]string, 0, len(graph))
 	for name := range graph {
-		visited := make(map[string]bool, len(graph))
-		path := make([]string, 0, len(graph))
-		if validateDialerProxiesHasCycle(name, graph, visited, path) {
-			return fmt.Errorf("proxy [%s] has circular dialer-proxy dependency", name)
+		path = path[:0]
+		for current, ok := name, true; ok && state[current] != acyclic; current, ok = graph[current] {
+			if state[current] == onPath {
+				return fmt.Errorf("proxy [%s] has circular dialer-proxy dependency", name)
+			}
+			state[current] = onPath
+			path = append(path, current)
+		}
+		for _, p := range path {
+			state[p] = acyclic
 		}
 	}
 
 	return nil
-}
-
-// validateDialerProxiesHasCycle performs DFS to detect if there's a cycle starting from current proxy
-func validateDialerProxiesHasCycle(current string, graph map[string]string, visited map[string]bool, path []string) bool {
-	// check if current is already in path (cycle detected)
-	for _, p := range path {
-		if p == current {
-			return true
-		}
-	}
-
-	// already visited and no cycle
-	if visited[current] {
-		return false
-	}
-
-	visited[current] = true
-	path = append(path, current)
-
-	// check dialer-proxy of current proxy
-	if dialerProxy, exists := graph[current]; exists {
-		if validateDialerProxiesHasCycle(dialerProxy, graph, visited, path) {
-			return true
-		}
-	}
-
-	return false
 }
 
 func verifyIP6() bool {
