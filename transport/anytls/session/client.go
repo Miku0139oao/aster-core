@@ -194,9 +194,12 @@ func (c *Client) idleCleanup() {
 
 func (c *Client) idleCleanupExpTime(expTime time.Time) {
 	activeCount := 0
-	sessionToClose := make([]*Session, 0, c.idleSession.Len())
 
 	c.idleSessionLock.Lock()
+	// Len() must be read under the lock: Insert/Remove mutate the list mutated
+	// concurrently by recycleSession and the session die hooks.
+	sessionToClose := make([]*Session, 0, c.idleSession.Len())
+
 	it := c.idleSession.Iterate()
 	for it.IsNotEnd() {
 		session := it.Value()

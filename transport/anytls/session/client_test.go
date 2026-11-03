@@ -75,6 +75,60 @@ func TestGetIdleSessionSkipsClosedSession(t *testing.T) {
 	require.True(t, client.idleSession.IsEmpty())
 }
 
+func TestIdleCleanupConcurrentWithRecycle(t *testing.T) {
+	// Regression: idleCleanupExpTime used to size its slice with
+	// c.idleSession.Len() before taking idleSessionLock, racing with the
+	// Insert/Remove calls made under that lock by recycleSession and the
+	// session die hooks. Run the cleanup concurrently with those mutations so
+	// `go test -race` catches any reintroduced out-of-lock access.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	client := NewClient(ctx, nil, nil, "", 0, 0, 0, false)
+	defer client.Close()
+
+	// Any session created before this time is considered active, so the
+	// cleanup below only ever observes the list and never closes a session.
+	expTime := time.Now().Add(time.Hour)
+
+	const inserts = 200
+	firstIteration := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		close(firstIteration)
+		for i := 0; i < inserts; i++ {
+			client.idleCleanupExpTime(expTime)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		<-firstIteration
+		for i := 0; i < inserts; i++ {
+			session := NewClientSession(discardConn{}, nil, "")
+			session.seq = uint64(i) + 1
+			client.recycleSession(session)
+
+			// Mutate the list under the lock as the production paths do. Use a
+			// key range that never collides with the real sessions, which are
+			// inserted at math.MaxUint64-session.seq.
+			client.idleSessionLock.Lock()
+			scratch := NewClientSession(discardConn{}, nil, "")
+			key := uint64(i)
+			client.idleSession.Insert(key, scratch)
+			client.idleSession.Remove(key)
+			client.idleSessionLock.Unlock()
+		}
+	}()
+	wg.Wait()
+
+	client.idleSessionLock.Lock()
+	length := client.idleSession.Len()
+	client.idleSessionLock.Unlock()
+	require.Equal(t, inserts, length)
+}
+
 func TestCreateSessionAbortsAfterClientClose(t *testing.T) {
 	dialStarted := make(chan struct{})
 	releaseDial := make(chan struct{})
