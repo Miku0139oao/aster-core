@@ -95,15 +95,25 @@ func TestVlessXHTTPDownloadSettingsBracketsIPv6Host(t *testing.T) {
 	defer clientConn.Close()
 	defer serverConn.Close()
 
-	requests := make(chan *http.Request, 1)
+	// Both the uplink and the download-settings transport connect through the
+	// same dialer, so the server may see the uplink request first. Serve several
+	// requests and pick the download one, which is the one carrying the
+	// download-settings host.
+	requests := make(chan string, 4)
 	go func() {
-		req, err := http.ReadRequest(bufio.NewReader(serverConn))
-		if err != nil {
-			close(requests)
-			return
+		reader := bufio.NewReader(serverConn)
+		for {
+			req, err := http.ReadRequest(reader)
+			if err != nil {
+				close(requests)
+				return
+			}
+			requests <- req.Host
+			if _, err := serverConn.Write([]byte("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")); err != nil {
+				close(requests)
+				return
+			}
 		}
-		requests <- req
-		_, _ = serverConn.Write([]byte("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"))
 	}()
 
 	downloadHost := "2001:db8::2"
@@ -149,15 +159,20 @@ func TestVlessXHTTPDownloadSettingsBracketsIPv6Host(t *testing.T) {
 	}
 	defer conn.Close()
 
-	select {
-	case req, ok := <-requests:
-		if !ok {
-			t.Fatal("server never received a request")
+	deadline := time.After(5 * time.Second)
+	var seen []string
+	for {
+		select {
+		case host, ok := <-requests:
+			if !ok {
+				t.Fatalf("server closed before a download request; saw %q", seen)
+			}
+			if host == "[2001:db8::2]" {
+				return
+			}
+			seen = append(seen, host)
+		case <-deadline:
+			t.Fatalf("no request carried the download-settings host; saw %q", seen)
 		}
-		if req.Host != "[2001:db8::2]" {
-			t.Fatalf("Host header = %q, want %q", req.Host, "[2001:db8::2]")
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for the xhttp request")
 	}
 }
