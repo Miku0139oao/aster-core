@@ -72,7 +72,11 @@ type DataChannel struct {
 	randOffset int
 }
 
-func NewDataChannel(keys *KeyMaterial, cipherName, authName string, peerID uint32) (*DataChannel, error) {
+// NewDataChannel creates a data channel for one OpenVPN key epoch. keyID is the
+// control channel's current key epoch (see ControlChannel.KeyID): OpenVPN labels
+// every data packet with the epoch it was derived under, and a server that has
+// just rekeyed silently drops packets that claim the previous epoch.
+func NewDataChannel(keys *KeyMaterial, cipherName, authName string, peerID uint32, keyID uint8) (*DataChannel, error) {
 	if keys == nil {
 		return nil, errors.New("nil openvpn key material")
 	}
@@ -91,8 +95,9 @@ func NewDataChannel(keys *KeyMaterial, cipherName, authName string, peerID uint3
 		d := &DataChannel{
 			sendAEAD: send,
 			recvAEAD: recv,
+			keyID:    keyID & KeyIDMask,
 			peerID:   peerID,
-			header:   dataHeader(peerID, 0),
+			header:   dataHeader(peerID, keyID),
 		}
 		copy(d.sendImplicitIV[4:], keys.SendHMACKey[:DataChannelIVSize-4])
 		copy(d.recvImplicitIV[4:], keys.RecvHMACKey[:DataChannelIVSize-4])
@@ -121,8 +126,9 @@ func NewDataChannel(keys *KeyMaterial, cipherName, authName string, peerID uint3
 		recvHMACKey: append([]byte(nil), keys.RecvHMACKey[:authSize]...),
 		authHash:    authHash,
 		authSize:    authSize,
+		keyID:       keyID & KeyIDMask,
 		peerID:      peerID,
-		header:      dataHeader(peerID, 0),
+		header:      dataHeader(peerID, keyID),
 	}
 	d.sendMACPool.New = func() any {
 		return hmac.New(d.authHash, d.sendHMACKey)
@@ -188,7 +194,10 @@ func (d *DataChannel) Encrypt(packet []byte) ([]byte, error) {
 		return nil, errors.New("nil openvpn data channel")
 	}
 
-	packetID := d.nextPacketID()
+	packetID, err := d.nextPacketID()
+	if err != nil {
+		return nil, err
+	}
 	if d.sendAEAD != nil {
 		return d.encryptAEAD(packet, packetID)
 	}
@@ -200,9 +209,7 @@ func (d *DataChannel) encryptAEAD(packet []byte, packetID uint32) ([]byte, error
 	var packetIDBytes [4]byte
 	binary.BigEndian.PutUint32(packetIDBytes[:], packetID)
 	nonce := d.nonce(packetID, d.sendImplicitIV)
-	ad := make([]byte, 0, len(header)+len(packetIDBytes))
-	ad = append(ad, header...)
-	ad = append(ad, packetIDBytes[:]...)
+	ad := aeadAdditionalData(header, packetIDBytes[:])
 	sealed := d.sendAEAD.Seal(nil, nonce[:], packet, ad)
 
 	out := make([]byte, 0, len(header)+4+DataChannelTagSize+len(packet))
@@ -268,9 +275,7 @@ func (d *DataChannel) decryptAEAD(packet []byte, headerSize int) ([]byte, error)
 	combined := make([]byte, 0, len(ciphertext)+DataChannelTagSize)
 	combined = append(combined, ciphertext...)
 	combined = append(combined, tag...)
-	ad := make([]byte, 0, len(header)+len(packetIDBytes))
-	ad = append(ad, header...)
-	ad = append(ad, packetIDBytes...)
+	ad := aeadAdditionalData(header, packetIDBytes)
 
 	nonce := d.nonce(packetID, d.recvImplicitIV)
 	plain, err := d.recvAEAD.Open(nil, nonce[:], combined, ad)
@@ -339,11 +344,24 @@ func dataPacketHeaderSize(packet []byte) (int, error) {
 	}
 }
 
-func (d *DataChannel) nextPacketID() uint32 {
+// dataPacketIDRekeyThreshold mirrors OpenVPN's packet_id_close_to_wrapping
+// threshold (0xFF000000): the send counter must never reach a value whose
+// successor would wrap, since a repeated packet ID would reuse a GCM nonce.
+const dataPacketIDRekeyThreshold = uint32(0xFF000000)
+
+var errDataPacketIDExhausted = errors.New("openvpn data packet id reached rekey threshold")
+
+func (d *DataChannel) nextPacketID() (uint32, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	// OpenVPN starts a soft reset once packet_id_close_to_wrapping reaches
+	// this threshold. Rather than let the 32-bit counter wrap and reuse GCM
+	// nonces, surface the condition so the caller can reconnect.
+	if d.sendPacketID >= dataPacketIDRekeyThreshold {
+		return 0, errDataPacketIDExhausted
+	}
 	d.sendPacketID++
-	return d.sendPacketID
+	return d.sendPacketID, nil
 }
 
 func (d *DataChannel) acceptPacketID(packetID uint32) error {
@@ -378,6 +396,23 @@ func (d *DataChannel) acceptPacketID(packetID uint32) error {
 	}
 	d.recvWindow |= mask
 	return nil
+}
+
+// aeadAdditionalData returns the AEAD additional data of a data channel packet.
+//
+// OpenVPN authenticates the opcode/peer-id header only for P_DATA_V2. For
+// P_DATA_V1 the additional data is the packet ID alone: in OpenVPN's
+// handle_data_channel_packet (ssl.c) ad_start is advanced past the opcode byte
+// for P_DATA_V1 but not for P_DATA_V2. Servers that only speak P_DATA_V1 (e.g.
+// SoftEther) reject packets whose additional data includes the opcode.
+func aeadAdditionalData(header, packetID []byte) []byte {
+	ad := make([]byte, 0, len(header)+len(packetID))
+	if len(header) > 0 {
+		if opcode, _ := parseOpcodeKeyID(header[0]); opcode == PDataV2 {
+			ad = append(ad, header...)
+		}
+	}
+	return append(ad, packetID...)
 }
 
 func dataHeader(peerID uint32, keyID uint8) []byte {
