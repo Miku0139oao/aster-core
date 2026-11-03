@@ -28,15 +28,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest, go-version: "1.20", gvisor: true }
-          - { os: ubuntu-latest, go-version: "1.21", gvisor: false }
-          - { os: ubuntu-latest, go-version: "1.22", gvisor: false }
-          - { os: ubuntu-latest, go-version: "1.23", gvisor: false }
-          - { os: ubuntu-latest, go-version: "1.24", gvisor: false }
-          - { os: ubuntu-latest, go-version: "1.25", gvisor: false }
-          - { os: ubuntu-latest, go-version: "1.26", gvisor: true }
-          - { os: windows-latest, go-version: "1.26", gvisor: false }
-          - { os: macos-latest, go-version: "1.26", gvisor: false }
+          - { os: ubuntu-latest, go-version: "1.27.3", gvisor: true }
+          - { os: windows-latest, go-version: "1.27.3", gvisor: false }
+          - { os: macos-latest, go-version: "1.27.3", gvisor: false }
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -79,13 +73,13 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
         with:
-          go-version: "1.26"
+          go-version: "1.27.3"
           cache-dependency-path: |
             go.sum
             test/go.sum
 
       - name: Install pinned golangci-lint
-        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
 
       - name: Lint
         run: golangci-lint run --timeout=10m
@@ -109,7 +103,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
         with:
-          go-version: "1.26"
+          go-version: "1.27.3"
 
       # -count=1 keeps a re-run from being served a cached pass. It matters more
       # here than elsewhere because races surface intermittently, so re-running

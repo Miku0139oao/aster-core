@@ -152,7 +152,7 @@ mkdir -p bin
 CGO_ENABLED=0 go build -tags with_gvisor -trimpath -o bin/aster-core .
 ```
 
-Go 1.20 or newer is required. Release builds use the `with_gvisor` tag; use the same tag when TUN or Tailscale support is required.
+Go 1.27.3 or newer is required. Release builds use the `with_gvisor` tag; use the same tag when TUN or Tailscale support is required.
 
 ### 2. Create a minimal configuration
 
@@ -473,7 +473,7 @@ CGO_ENABLED=1 SKIP_INTEROP_TEST=1 go test -race ./common/net ./component/aster .
 golangci-lint run --timeout=10m
 ```
 
-The CI matrix covers Go 1.20 through 1.26 on Linux and Go 1.26 on Windows and macOS. It also runs gVisor builds, targeted race tests, `govet`, `staticcheck`, `gci`, and `gofumpt`. The pinned lint version is `golangci-lint v2.12.2`. Unset `SKIP_INTEROP_TEST` to run the VMess interoperability test, which downloads and builds an external V2Ray test binary.
+The CI matrix covers Go 1.27.3 on Linux, Windows, and macOS. It also runs gVisor builds, targeted race tests, `govet`, `staticcheck`, `gci`, and `gofumpt`. The pinned lint version is `golangci-lint v2.15.0`. Unset `SKIP_INTEROP_TEST` to run the VMess interoperability test, which downloads and builds an external V2Ray test binary.
 
 The root command does not include the separate Go module under `test/`. That interoperability suite uses Docker:
 

@@ -30,11 +30,11 @@ func (l singLogger) ErrorContext(ctx context.Context, args ...any) {
 }
 
 func (l singLogger) FatalContext(ctx context.Context, args ...any) {
-	Fatalln(fmt.Sprint(args...))
+	Fatalln("%s", fmt.Sprint(args...))
 }
 
 func (l singLogger) PanicContext(ctx context.Context, args ...any) {
-	Fatalln(fmt.Sprint(args...))
+	Fatalln("%s", fmt.Sprint(args...))
 }
 
 func (l singLogger) Trace(args ...any) {
@@ -58,11 +58,11 @@ func (l singLogger) Error(args ...any) {
 }
 
 func (l singLogger) Fatal(args ...any) {
-	Fatalln(fmt.Sprint(args...))
+	Fatalln("%s", fmt.Sprint(args...))
 }
 
 func (l singLogger) Panic(args ...any) {
-	Fatalln(fmt.Sprint(args...))
+	Fatalln("%s", fmt.Sprint(args...))
 }
 
 type singInfoToDebugLogger struct {

@@ -21,7 +21,7 @@ import (
 	"github.com/Miku0139oao/aster-core/hub/executor"
 	"github.com/Miku0139oao/aster-core/transport/socks5"
 
-	"github.com/docker/docker/api/types"
+	dockerimage "github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
 	"github.com/stretchr/testify/assert"
@@ -86,7 +86,7 @@ func init() {
 	}
 	defer c.Close()
 
-	list, err := c.ImageList(context.Background(), types.ImageListOptions{All: true})
+	list, err := c.ImageList(context.Background(), dockerimage.ListOptions{All: true})
 	if err != nil {
 		panic(err)
 	}
@@ -120,7 +120,7 @@ func init() {
 		}
 
 		println("pulling image:", image)
-		imageStream, err := c.ImagePull(context.Background(), image, types.ImagePullOptions{})
+		imageStream, err := c.ImagePull(context.Background(), image, dockerimage.PullOptions{})
 		if err != nil {
 			panic(err)
 		}

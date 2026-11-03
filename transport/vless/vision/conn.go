@@ -171,7 +171,7 @@ func (vc *Conn) ReadBuffer(buffer *buf.Buffer) error {
 				vc.readFilterUUID.Store(false)
 				if !bytes.Equal(vc.userUUID[:], header[:uuid.Size]) {
 					err = fmt.Errorf("XTLS Vision server responded unknown UUID: %s", uuid.FromBytesOrNil(header[:uuid.Size]))
-					log.Errorln(err.Error())
+					log.Errorln("%v", err)
 					return err
 				}
 				header = header[uuid.Size:]
@@ -232,7 +232,7 @@ func (vc *Conn) ReadBuffer(buffer *buf.Buffer) error {
 		default:
 			err := fmt.Errorf("XTLS Vision read unknown command: %d", vc.lastCommand())
 			if log.Enabled(log.DEBUG) {
-				log.Debugln(err.Error())
+				log.Debugln("%v", err)
 			}
 			return err
 		}

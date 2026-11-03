@@ -2,7 +2,7 @@
 
 ## Go 版本
 
-`go.mod` 宣告最低 Go 1.20。CI 涵蓋 1.20–1.26，以確保舊版相容與新版本行為。
+`go.mod` 宣告最低 Go 1.27.3。CI 在 Linux、Windows、macOS 上皆使用 Go 1.27.3。
 
 ```sh
 go version
@@ -101,7 +101,7 @@ CGO_ENABLED=1 SKIP_INTEROP_TEST=1 go test -race \
 ## Lint 與 format
 
 ```sh
-go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
+go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
 golangci-lint run --timeout=10m
 ```
 

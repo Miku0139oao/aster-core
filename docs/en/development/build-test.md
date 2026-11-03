@@ -2,7 +2,7 @@
 
 ## Go version
 
-`go.mod` declares a minimum of Go 1.20. CI covers 1.20–1.26 so older compatibility and newer behavior are both checked.
+`go.mod` declares a minimum of Go 1.27.3. CI uses Go 1.27.3 on Linux, Windows, and macOS.
 
 ```sh
 go version
@@ -101,7 +101,7 @@ These packages cover high-concurrency data structures, Aster state/API, managed 
 ## Lint and format
 
 ```sh
-go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
+go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
 golangci-lint run --timeout=10m
 ```
 

@@ -152,7 +152,7 @@ mkdir -p bin
 CGO_ENABLED=0 go build -tags with_gvisor -trimpath -o bin/aster-core .
 ```
 
-最低需要 Go 1.20。正式發行使用 `with_gvisor` tag；需要 TUN 或 Tailscale 時，請使用相同 tag。
+最低需要 Go 1.27.3。正式發行使用 `with_gvisor` tag；需要 TUN 或 Tailscale 時，請使用相同 tag。
 
 ### 2. 建立最小設定
 

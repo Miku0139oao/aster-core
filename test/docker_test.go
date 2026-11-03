@@ -5,7 +5,6 @@ import (
 	"os"
 	"runtime"
 
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
 )
@@ -25,16 +24,16 @@ func startContainer(cfg *container.Config, hostCfg *container.HostConfig, name s
 		hostCfg.NetworkMode = "host"
 	}
 
-	container, err := c.ContainerCreate(context.Background(), cfg, hostCfg, nil, nil, name)
+	created, err := c.ContainerCreate(context.Background(), cfg, hostCfg, nil, nil, name)
 	if err != nil {
 		return "", err
 	}
 
-	if err = c.ContainerStart(context.Background(), container.ID, types.ContainerStartOptions{}); err != nil {
+	if err = c.ContainerStart(context.Background(), created.ID, container.StartOptions{}); err != nil {
 		return "", err
 	}
 
-	response, err := c.ContainerAttach(context.Background(), container.ID, types.ContainerAttachOptions{
+	response, err := c.ContainerAttach(context.Background(), created.ID, container.AttachOptions{
 		Stdout: true,
 		Stderr: true,
 		Logs:   true,
@@ -47,7 +46,7 @@ func startContainer(cfg *container.Config, hostCfg *container.HostConfig, name s
 		response.Reader.WriteTo(os.Stderr)
 	}()
 
-	return container.ID, nil
+	return created.ID, nil
 }
 
 func cleanContainer(id string) error {
@@ -57,6 +56,6 @@ func cleanContainer(id string) error {
 	}
 	defer c.Close()
 
-	removeOpts := types.ContainerRemoveOptions{Force: true}
+	removeOpts := container.RemoveOptions{Force: true}
 	return c.ContainerRemove(context.Background(), id, removeOpts)
 }
