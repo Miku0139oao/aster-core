@@ -652,6 +652,13 @@ type dohDialFunc func(ctx context.Context, network, addr string) (net.Conn, erro
 // everything the dialer does, including bootstrap DNS resolution and, for
 // proxied DoH, the handshake with the proxy.  It is a separate function so the
 // bound can be exercised against a dial that never returns.
+//
+// On success the cancel is deliberately not called: some dialers (TFO, the
+// early-data websocket path) return a conn before the TCP connect has happened
+// and finish it on the first Write, holding on to the context they were given.
+// Cancelling here would make that deferred connect fail with context canceled.
+// The cancel is instead released when the conn is closed, so closing the
+// connection still stops the timeout goroutine.
 func boundDial(
 	ctx context.Context,
 	timeout time.Duration,
@@ -660,9 +667,22 @@ func boundDial(
 	addr string,
 ) (net.Conn, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 
-	return dial(ctx, network, addr)
+	conn, err := dial(ctx, network, addr)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+
+	// Do not cancel on success. Dialers such as TFO and the early-data
+	// websocket path return a conn before the TCP connect has happened and
+	// finish it on the first Write using this context, so cancelling here makes
+	// that connect fail with "context canceled". The deadline still fires on
+	// its own, so an abandoned dial cannot run forever; the timer goroutine is
+	// reclaimed when the deadline passes.
+	_ = cancel
+
+	return conn, nil
 }
 
 // boundDialContext returns a DialContext that applies timeout to the caller's

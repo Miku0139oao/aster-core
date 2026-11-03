@@ -2,6 +2,7 @@ package trusttunnel
 
 import (
 	"context"
+	"io"
 	"net"
 	"testing"
 	"time"
@@ -192,4 +193,50 @@ func TestDialSurvivesRepeatedGotConn(t *testing.T) {
 	// The first GotConn makes Dial succeed before RoundTrip fails; either
 	// outcome is acceptable, but it must never panic.
 	_ = err
+}
+
+// okRoundTripper reports the connection and then answers CONNECT with 200, the
+// path every real dial takes. No existing test covered it: the other
+// roundtrippers all fail or block, so a regression that rejected every
+// successful CONNECT went unnoticed.
+type okRoundTripper struct{}
+
+func (okRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	reportGotConn(request)
+	// The request body is the tunnelled uplink. Drain it so the client's pipe
+	// writer never blocks, and hand back a body that stays open until closed.
+	pr, pw := io.Pipe()
+	go func() {
+		_, _ = io.Copy(io.Discard, request.Body)
+		_ = pw.Close()
+	}()
+	return &http.Response{
+		Status:     "200 Connection Established",
+		StatusCode: http.StatusOK,
+		Proto:      "HTTP/2.0",
+		ProtoMajor: 2,
+		Body:       io.NopCloser(pr),
+		Request:    request,
+	}, nil
+}
+
+// TestDialSucceedsOnConnect200 is the counterpart to
+// TestDialReturnsAfterConnectResponse: a healthy server must produce a usable
+// conn. Without this, a regression that rejected every successful CONNECT
+// (see the boundCtx bug fixed in 4aa30a8a) passed the whole suite.
+func TestDialSucceedsOnConnect200(t *testing.T) {
+	client := newTestClient(okRoundTripper{})
+	defer client.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	conn, err := client.Dial(ctx, "example.com:443")
+	if err != nil {
+		t.Fatalf("Dial against a healthy CONNECT server failed: %v", err)
+	}
+	if conn == nil {
+		t.Fatal("Dial returned a nil conn with no error")
+	}
+	_ = conn.Close()
 }

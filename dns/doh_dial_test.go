@@ -2,6 +2,7 @@ package dns
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/url"
 	"sync/atomic"
@@ -101,4 +102,71 @@ func TestCreateTransportH1TransportLimits(t *testing.T) {
 	assert.Equal(t, dohMaxConnsPerHost, transport.MaxConnsPerHost)
 	assert.Equal(t, dohMaxIdleConns, transport.MaxIdleConns)
 	assert.True(t, transport.ForceAttemptHTTP2)
+}
+
+// lazyConn is a dialer that returns a conn before the TCP connect happens and
+// finishes it on first Write, holding the context it was given. TFO and the
+// early-data websocket path behave this way. If the bound cancels the dial
+// context as soon as the dial returns, that deferred connect fails.
+type lazyConn struct {
+	ctx      context.Context
+	connDone bool
+}
+
+func (c *lazyConn) Write(p []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
+	}
+	c.connDone = true
+	return len(p), nil
+}
+
+func (c *lazyConn) Read([]byte) (int, error)         { return 0, net.ErrClosed }
+func (c *lazyConn) Close() error                     { return nil }
+func (c *lazyConn) LocalAddr() net.Addr              { return &net.TCPAddr{} }
+func (c *lazyConn) RemoteAddr() net.Addr             { return &net.TCPAddr{} }
+func (c *lazyConn) SetDeadline(time.Time) error      { return nil }
+func (c *lazyConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *lazyConn) SetWriteDeadline(time.Time) error { return nil }
+
+// TestBoundDialKeepsContextAliveForLazyDialers guards the regression where
+// boundDial ran `defer cancel()` on the success path, killing the dial context
+// that a lazily-connecting dialer still needs.
+func TestBoundDialKeepsContextAliveForLazyDialers(t *testing.T) {
+	var lazy *lazyConn
+	dial := func(ctx context.Context, _, _ string) (net.Conn, error) {
+		lazy = &lazyConn{ctx: ctx}
+		return lazy, nil
+	}
+
+	conn, err := boundDial(context.Background(), time.Hour, dial, "tcp", "doh.example:443")
+	require.NoError(t, err)
+	defer conn.Close()
+
+	if _, err := conn.Write([]byte("clienthello")); err != nil {
+		t.Fatalf("lazy dialer could not complete its connect after boundDial returned: %v", err)
+	}
+	require.True(t, lazy.connDone)
+}
+
+// TestBoundDialCancelsOnError keeps the other half: a failed dial must not
+// leave the timeout goroutine running.
+func TestBoundDialCancelsOnError(t *testing.T) {
+	deadlineSeen := make(chan struct{})
+	dial := func(ctx context.Context, _, _ string) (net.Conn, error) {
+		go func() {
+			<-ctx.Done()
+			close(deadlineSeen)
+		}()
+		return nil, errors.New("dial failed")
+	}
+
+	_, err := boundDial(context.Background(), time.Hour, dial, "tcp", "doh.example:443")
+	require.Error(t, err)
+
+	select {
+	case <-deadlineSeen:
+	case <-time.After(2 * time.Second):
+		t.Fatal("boundDial left its context alive after a failed dial")
+	}
 }
