@@ -39,9 +39,12 @@ type WireGuard struct {
 	*Base
 	bind      *wireguard.ClientBind
 	device    wireguardGoDevice
-	tunDevice wireguard.Device
+	tunDevice wireguardDevice
 	resolver  resolver.Resolver
 
+	runCtx        context.Context
+	runCancel     context.CancelFunc
+	deviceMutex   sync.Mutex
 	initOk        atomic.Bool
 	initMutex     sync.Mutex
 	initErr       error
@@ -65,6 +68,8 @@ type WireGuardOption struct {
 	MTU                 int    `proxy:"mtu,omitempty"`
 	UDP                 bool   `proxy:"udp,omitempty"`
 	PersistentKeepalive int    `proxy:"persistent-keepalive,omitempty"`
+
+	IPStack IPStackOption `proxy:"ip-stack,omitempty"`
 
 	AmneziaWGOption *AmneziaWGOption `proxy:"amnezia-wg-option,omitempty"`
 
@@ -140,16 +145,6 @@ func (w wgSingErrorHandler) NewError(ctx context.Context, err error) {
 	log.SingLogger.Error(fmt.Sprintf("[WG](%s) %s", w.name, err))
 }
 
-type wgNetDialer struct {
-	tunDevice wireguard.Device
-}
-
-var _ dialer.NetDialer = (*wgNetDialer)(nil)
-
-func (d wgNetDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
-	return d.tunDevice.DialContext(ctx, network, M.ParseSocksaddr(address).Unwrap())
-}
-
 func (option WireGuardPeerOption) Addr() M.Socksaddr {
 	return M.ParseSocksaddrHostPort(option.Server, uint16(option.Port))
 }
@@ -214,7 +209,8 @@ func NewWireGuard(option WireGuardOption) (*WireGuard, error) {
 			outbound.connectAddr = option.Addr()
 		}
 	}
-	outbound.bind = wireguard.NewClientBind(context.Background(), wgSingErrorHandler{outbound.Name()}, singDialer, isConnect, outbound.connectAddr.AddrPort(), reserved)
+	outbound.runCtx, outbound.runCancel = context.WithCancel(context.Background())
+	outbound.bind = wireguard.NewClientBind(outbound.runCtx, wgSingErrorHandler{outbound.Name()}, singDialer, isConnect, outbound.connectAddr.AddrPort(), reserved)
 
 	var err error
 	outbound.localPrefixes, err = option.Prefixes()
@@ -280,36 +276,23 @@ func NewWireGuard(option WireGuardOption) (*WireGuard, error) {
 		}
 		option.AmneziaWGOption.HeaderProtectionKey = hex.EncodeToString(bytes)
 	}
-	outbound.option = option
-
-	mtu := option.MTU
-	if mtu == 0 {
-		mtu = 1408
+	if option.MTU == 0 {
+		option.MTU = 1408
+	}
+	option.IPStack.normalize()
+	if err = option.IPStack.validate(); err != nil {
+		return nil, err
 	}
 	if len(outbound.localPrefixes) == 0 {
 		return nil, E.New("missing local address")
 	}
-	outbound.tunDevice, err = wireguard.NewStackDevice(outbound.localPrefixes, uint32(mtu))
-	if err != nil {
-		return nil, E.Cause(err, "create WireGuard device")
-	}
-	logger := &device.Logger{
-		Verbosef: func(format string, args ...interface{}) {
-			log.SingLogger.Debug(fmt.Sprintf("[WG](%s) %s", option.Name, fmt.Sprintf(format, args...)))
-		},
-		Errorf: func(format string, args ...interface{}) {
-			log.SingLogger.Error(fmt.Sprintf("[WG](%s) %s", option.Name, fmt.Sprintf(format, args...)))
-		},
-	}
+	// The stack and the wireguard-go device are created lazily in init0, on the
+	// first dial. Building them here would allocate the stack before the
+	// remaining option validation (DNS name servers) can still fail, leaking it
+	// across a config reload.
+	outbound.option = option
 	if option.AmneziaWGOption != nil {
 		outbound.bind.SetParseReserved(false) // AmneziaWG don't need parse reserved
-		if option.AmneziaWGOption.Version == 3 {
-			outbound.device = amneziav3.NewDevice(outbound.tunDevice, outbound.bind, logger, option.Workers)
-		} else {
-			outbound.device = amnezia.NewDevice(outbound.tunDevice, outbound.bind, logger, option.Workers)
-		}
-	} else {
-		outbound.device = device.NewDevice(outbound.tunDevice, outbound.bind, logger, option.Workers)
 	}
 
 	var has6 bool
@@ -359,7 +342,7 @@ func (w *WireGuard) init(ctx context.Context) error {
 	return nil
 }
 
-func (w *WireGuard) init0(ctx context.Context) error {
+func (w *WireGuard) init0(ctx context.Context) (err error) {
 	if w.initOk.Load() {
 		return nil
 	}
@@ -381,23 +364,71 @@ func (w *WireGuard) init0(ctx context.Context) error {
 		// let us can retry domain resolve in next time
 		return err
 	}
+	if err = ctx.Err(); err != nil {
+		return err
+	}
+
+	// Create the stack and device on first use and keep them for every later
+	// dial. Everything below closes the freshly built objects on failure so a
+	// reload never leaks a stack or a device worker pool.
+	stack, err := ipStackFactory(w.option.IPStack, w.localPrefixes, uint32(w.option.MTU))
+	if err != nil {
+		w.initErr = E.Cause(err, "create WireGuard stack")
+		return w.initErr
+	}
+	tunDevice, err := newWireguardDevice(stack)
+	if err != nil {
+		_ = stack.Close()
+		w.initErr = E.Cause(err, "create WireGuard device")
+		return w.initErr
+	}
+
+	logger := &device.Logger{
+		Verbosef: func(format string, args ...interface{}) {
+			log.SingLogger.Debug(fmt.Sprintf("[WG](%s) %s", w.option.Name, fmt.Sprintf(format, args...)))
+		},
+		Errorf: func(format string, args ...interface{}) {
+			log.SingLogger.Error(fmt.Sprintf("[WG](%s) %s", w.option.Name, fmt.Sprintf(format, args...)))
+		},
+	}
+	var wgDevice wireguardGoDevice
+	if w.option.AmneziaWGOption != nil {
+		if w.option.AmneziaWGOption.Version == 3 {
+			wgDevice = amneziav3.NewDevice(tunDevice, w.bind, logger, w.option.Workers)
+		} else {
+			wgDevice = amnezia.NewDevice(tunDevice, w.bind, logger, w.option.Workers)
+		}
+	} else {
+		wgDevice = device.NewDevice(tunDevice, w.bind, logger, w.option.Workers)
+	}
+	defer func() {
+		if err != nil {
+			wgDevice.Close()
+		}
+	}()
 
 	if debug.Enabled {
 		log.SingLogger.Trace(fmt.Sprintf("[WG](%s) created wireguard ipc conf: \n %s", w.option.Name, ipcConf))
 	}
-	err = w.device.IpcSet(ipcConf)
+	err = wgDevice.IpcSet(ipcConf)
 	if err != nil {
 		w.initErr = E.Cause(err, "setup wireguard")
 		return w.initErr
 	}
 	w.serverAddrTime.Store(time.Now())
 
-	err = w.tunDevice.Start()
+	err = tunDevice.Start()
 	if err != nil {
 		w.initErr = err
 		return w.initErr
 	}
 
+	w.deviceMutex.Lock()
+	defer w.deviceMutex.Unlock()
+	if err = w.runCtx.Err(); err != nil {
+		return err
+	}
+	w.device, w.tunDevice = wgDevice, tunDevice
 	w.initOk.Store(true)
 	return nil
 }
@@ -411,7 +442,11 @@ func (w *WireGuard) updateServerAddr(ctx context.Context) {
 				log.Warnln("[WG](%s)UpdateServerAddr failed to generate wireguard ipc conf: %s", w.option.Name, err)
 				return
 			}
-			err = w.device.IpcSet(ipcConf)
+			wgDevice, _ := w.devices()
+			if wgDevice == nil {
+				return
+			}
+			err = wgDevice.IpcSet(ipcConf)
 			if err != nil {
 				log.Warnln("[WG](%s)UpdateServerAddr failed to update wireguard ipc conf: %s", w.option.Name, err)
 				return
@@ -419,6 +454,14 @@ func (w *WireGuard) updateServerAddr(ctx context.Context) {
 			w.serverAddrTime.Store(time.Now())
 		}
 	}
+}
+
+// devices returns the initialized device pair under deviceMutex so it can be
+// read safely while Close (or a concurrent lazy init) runs.
+func (w *WireGuard) devices() (wireguardGoDevice, wireguardDevice) {
+	w.deviceMutex.Lock()
+	defer w.deviceMutex.Unlock()
+	return w.device, w.tunDevice
 }
 
 func (w *WireGuard) genIpcConf(ctx context.Context, updateOnly bool) (string, error) {
@@ -600,8 +643,12 @@ func (w *WireGuard) genIpcConf(ctx context.Context, updateOnly bool) (string, er
 
 // Close implements C.ProxyAdapter
 func (w *WireGuard) Close() error {
-	if w.device != nil {
-		w.device.Close()
+	w.runCancel()
+	w.deviceMutex.Lock()
+	wgDevice := w.device
+	w.deviceMutex.Unlock()
+	if wgDevice != nil {
+		wgDevice.Close()
 	}
 	return nil
 }
@@ -611,6 +658,7 @@ func (w *WireGuard) DialContext(ctx context.Context, metadata *C.Metadata) (_ C.
 	if err = w.init(ctx); err != nil {
 		return nil, err
 	}
+	_, tunDevice := w.devices()
 	if !metadata.Resolved() || w.resolver != nil {
 		r := resolver.DefaultResolver
 		if w.resolver != nil {
@@ -618,10 +666,10 @@ func (w *WireGuard) DialContext(ctx context.Context, metadata *C.Metadata) (_ C.
 		}
 		options := w.DialOptions()
 		options = append(options, dialer.WithResolver(r))
-		options = append(options, dialer.WithNetDialer(wgNetDialer{tunDevice: w.tunDevice}))
+		options = append(options, dialer.WithNetDialer(ipStackNetDialer{stack: tunDevice}))
 		conn, err = dialer.NewDialer(options...).DialContext(ctx, "tcp", metadata.RemoteAddress())
 	} else {
-		conn, err = w.tunDevice.DialContext(ctx, "tcp", M.SocksaddrFrom(metadata.DstIP, metadata.DstPort).Unwrap())
+		conn, err = tunDevice.DialTCP(ctx, "tcp", netip.AddrPort{}, metadata.AddrPort())
 	}
 	if err != nil {
 		return nil, err
@@ -640,7 +688,9 @@ func (w *WireGuard) ListenPacketContext(ctx context.Context, metadata *C.Metadat
 	if err = w.ResolveUDP(ctx, metadata); err != nil {
 		return nil, err
 	}
-	pc, err = w.tunDevice.ListenPacket(ctx, M.SocksaddrFrom(metadata.DstIP, metadata.DstPort).Unwrap())
+	_, tunDevice := w.devices()
+	// The ipStack contract guarantees that a generic UDP wildcard supports both address families.
+	pc, err = tunDevice.ListenUDP(ctx, "udp", netip.AddrPort{})
 	if err != nil {
 		return nil, err
 	}
