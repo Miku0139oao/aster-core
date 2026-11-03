@@ -358,6 +358,12 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 	if err := validateDNSMode(options.DNSMode); err != nil {
 		return nil, err
 	}
+	// gVisor sizes its per-channel processor slices with this value, so a
+	// negative count would panic during endpoint creation. Validate here as
+	// well: the listener/inbound path does not go through config.parseTun.
+	if options.ProcessorsPerChannel < 0 {
+		return nil, fmt.Errorf("invalid processors-per-channel %d: must not be negative", options.ProcessorsPerChannel)
+	}
 
 	var dnsAdds []netip.AddrPort
 

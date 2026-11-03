@@ -60,32 +60,31 @@ func newTestClient(rt http.RoundTripper) *Client {
 	return client
 }
 
-// TestDialReturnsWhenTCPConnectionEstablished guards the fix for Dial waiting
-// on the full HTTP CONNECT exchange: as soon as GotConn fires, Dial must return
-// the conn even though the RoundTrip has not completed yet.
-func TestDialReturnsWhenTCPConnectionEstablished(t *testing.T) {
+// TestDialReturnsAfterConnectResponse replaces the earlier "return as soon as
+// GotConn fires" expectation. Returning before the CONNECT response is known
+// would hand back a conn that a 407/502 server later fails on first read,
+// bypassing the dialer's fallback. Dial must therefore wait for the response,
+// and must still be bounded when the server never answers.
+func TestDialReturnsAfterConnectResponse(t *testing.T) {
 	client := newTestClient(blockingRoundTripper{})
 	defer client.Close()
 
-	type result struct {
-		conn net.Conn
-		err  error
-	}
-	resultCh := make(chan result, 1)
-	go func() {
-		conn, err := client.Dial(context.Background(), "example.com:443")
-		resultCh <- result{conn, err}
-	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
 
-	select {
-	case got := <-resultCh:
-		if got.err != nil {
-			t.Fatalf("Dial returned error: %v", got.err)
-		}
-		_ = got.conn.Close()
-	case <-time.After(time.Second):
-		t.Fatal("Dial did not return after the TCP connection was established")
+	start := time.Now()
+	conn, err := client.Dial(ctx, "example.com:443")
+	elapsed := time.Since(start)
+	if conn != nil {
+		_ = conn.Close()
 	}
+	if err == nil {
+		t.Fatal("Dial succeeded although the server never answered CONNECT")
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("Dial blocked for %s on a server that never answers CONNECT", elapsed)
+	}
+	t.Logf("Dial returned %v after %s", err, elapsed)
 }
 
 // TestDialAbortsWhenCallerContextCanceled ensures the caller ctx is propagated

@@ -263,3 +263,39 @@ func BenchmarkDecodeRealGeoSite(b *testing.B) {
 		}
 	}
 }
+
+// A crafted record length must not be turned into a huge allocation. The
+// length comes from a varint in the file, and the file itself is only ~40
+// bytes, so a multi-gigabyte value has to be rejected as invalid.
+func TestDecodeRejectsOversizedRecordLength(t *testing.T) {
+	filename := filepath.Join(t.TempDir(), "oversized.dat")
+	// 0x0A (field 1, length-delimited) + varint(max uint64) + inner tag + another
+	// varint(max uint64). protowire.ConsumeVarint needs ten continuation bytes
+	// for the maximum, so both lengths are ten bytes.
+	maxVarint := []byte{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01}
+	body := []byte{0x0A}
+	body = append(body, maxVarint...)
+	body = append(body, 0x0A)
+	body = append(body, maxVarint...)
+	if err := os.WriteFile(filename, body, 0o644); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	_, err := Decode(filename, "CN")
+	if !errors.Is(err, errInvalidGeodataFile) {
+		t.Fatalf("Decode error = %v, want %v", err, errInvalidGeodataFile)
+	}
+}
+
+// The inner name length is bounded by the file size as well.
+func TestDecodeRejectsOversizedNameLength(t *testing.T) {
+	filename := filepath.Join(t.TempDir(), "oversized-name.dat")
+	body := []byte{0x0A, 0x0F, 0x0A, 0xFE, 0xFF, 0xFF, 0xFF, 0x0F}
+	if err := os.WriteFile(filename, body, 0o644); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	if _, err := Decode(filename, "CN"); err == nil {
+		t.Fatal("Decode accepted an oversized name length")
+	}
+}

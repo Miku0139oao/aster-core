@@ -1856,8 +1856,22 @@ func ValidateTunDNSMode(dnsMode string) error {
 	}
 }
 
+// ValidateTunProcessorsPerChannel rejects a negative gVisor
+// processors-per-channel value. gVisor allocates its per-channel processor
+// slices with that count, so a negative value panics the process during TUN
+// creation. Zero keeps sing-tun's GOMAXPROCS-based default.
+func ValidateTunProcessorsPerChannel(n int) error {
+	if n < 0 {
+		return fmt.Errorf("invalid tun processors-per-channel %d, must not be negative", n)
+	}
+	return nil
+}
+
 func parseTun(rawTun RawTun, dns *DNS, general *General) error {
 	if err := ValidateTunDNSMode(rawTun.DNSMode); err != nil {
+		return err
+	}
+	if err := ValidateTunProcessorsPerChannel(rawTun.ProcessorsPerChannel); err != nil {
 		return err
 	}
 	if err := ValidateKernelDirectTun(LC.Tun{

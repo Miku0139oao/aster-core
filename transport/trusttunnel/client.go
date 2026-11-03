@@ -199,7 +199,13 @@ func (c *Client) roundTrip(ctx context.Context, request *http.Request, conn *htt
 	gotConn := make(chan struct{}, 1)
 	var doneOnce sync.Once
 	signalDone := func() { doneOnce.Do(func() { close(gotConn) }) }
-	addrCtx := httputils.NewAddrContext(&conn.NetAddr, requestCtx)
+	// boundCtx keeps the previous behaviour where a CONNECT that never gets a
+	// response could not outlive DefaultTCPTimeout. Without it the request
+	// context is only cancelled when the conn is closed, so a server that
+	// accepts the TCP connection and then stalls would leave the caller
+	// blocked in waitCreated forever.
+	boundCtx, boundCancel := context.WithTimeout(requestCtx, C.DefaultTCPTimeout)
+	addrCtx := httputils.NewAddrContext(&conn.NetAddr, boundCtx)
 	streamCtx := httptrace.WithClientTrace(addrCtx, &httptrace.ClientTrace{
 		GotConn: func(info httptrace.GotConnInfo) {
 			signalDone()
@@ -233,9 +239,29 @@ func (c *Client) roundTrip(ctx context.Context, request *http.Request, conn *htt
 
 	select {
 	case <-ctx.Done():
+		boundCancel()
 		return ctx.Err()
 	case <-gotConn:
-		return requestErr.Load()
+		// The CONNECT request itself is bounded; once it completes (response
+		// headers, non-200 or error) the goroutine has already run conn.setup,
+		// so release the timer while keeping the conn usable.
+		boundCancel()
+		if err := requestErr.Load(); err != nil {
+			return err
+		}
+		// GotConn fired before the server answered. A response that rejects the
+		// tunnel (407/502) has not reached us yet, so a conn returned here could
+		// still fail on first read instead of letting the dialer fall back.
+		// Wait for the setup result, but only within the same bound.
+		select {
+		case <-conn.created:
+			return conn.waitCreated()
+		case <-boundCtx.Done():
+			if err := requestErr.Load(); err != nil {
+				return err
+			}
+			return boundCtx.Err()
+		}
 	}
 }
 

@@ -20,6 +20,13 @@ var (
 )
 
 func emitBytes(f io.ReadSeeker, code string) ([]byte, error) {
+	fileSize, err := f.Seek(0, io.SeekEnd)
+	if err != nil {
+		return nil, errFailedToReadBytes
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return nil, errFailedToReadBytes
+	}
 	// Buffer the file reads so that the many small reads performed by the
 	// varint/name state machine below do not each turn into a syscall.
 	reader := bufio.NewReaderSize(f, 16*1024)
@@ -75,6 +82,13 @@ func emitBytes(f io.ReadSeeker, code string) ([]byte, error) {
 		codeLength, err := readLength()
 		if err != nil {
 			return nil, err
+		}
+		// The length is attacker-controlled varint data. Bound both the name and
+		// the record body by the actual file size before allocating, so a
+		// crafted header cannot request a multi-gigabyte allocation and abort
+		// the process. A real record can never exceed the file holding it.
+		if codeLength > uint64(fileSize) || length > uint64(fileSize) {
+			return nil, errInvalidGeodataFile
 		}
 		name := make([]byte, codeLength)
 		if _, err := io.ReadFull(reader, name); err != nil {

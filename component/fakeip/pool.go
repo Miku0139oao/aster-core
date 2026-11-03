@@ -103,6 +103,14 @@ func (p *Pool) CloneFrom(o *Pool) {
 	// allocations would be rejected by IsFakeIP.
 	if o.first == p.first && o.last == p.last {
 		p.offset, p.cycle = o.offset, o.cycle
+	} else {
+		// The address space changed, so the cloned host->ip entries no longer
+		// belong to this pool. Drop them and start allocating from the new
+		// first address: keeping them would make Lookup return an address that
+		// IsFakeIP rejects, and the TUN would treat it as a real destination.
+		p.store.FlushFakeIP()
+		p.offset = p.first.Prev()
+		p.cycle = false
 	}
 }
 
