@@ -162,16 +162,31 @@ func (t tunnel) HandleUDPPacket(packet C.UDPPacket, metadata *C.Metadata) {
 	udpInit.Do(initUDP)
 
 	packetAdapter := C.NewPacketAdapter(packet, metadata)
-	key := packetAdapter.Key()
-
-	hash := utils.MapHashComparable(key)
-	queueNo := uint(hash) % uint(len(udpQueues))
 
 	select {
-	case udpQueues[queueNo] <- packetAdapter:
+	case udpQueues[udpQueueIndex(packetAdapter.Key())] <- packetAdapter:
 	default:
 		packetAdapter.Drop()
 	}
+}
+
+// udpQueueIndex picks the worker shard for a flow.
+//
+// Hashing the whole UDPNatKey (two strings, two AddrPorts and more) costs about
+// 37 ns per packet. The AddrPort is the hot discriminator and is enough to
+// spread ordinary flows, so it is hashed alone when it is valid.
+//
+// The raw path (sing inbounds pass a customAddr with no AddrPort) must still
+// hash the whole key: hashing only the valid parts would collapse every such
+// flow onto one shard and serialise them behind a single worker.
+func udpQueueIndex(key C.UDPNatKey) uint {
+	var hash uint64
+	if key.AddrPort.IsValid() {
+		hash = utils.MapHashComparable(key.AddrPort)
+	} else {
+		hash = utils.MapHashComparable(key)
+	}
+	return uint(hash) % uint(len(udpQueues))
 }
 
 func (t tunnel) NatTable() C.NatTable {
