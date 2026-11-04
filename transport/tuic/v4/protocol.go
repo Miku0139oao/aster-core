@@ -228,14 +228,14 @@ func ReadPacketWithHead(head CommandHead, reader BufferedReader) (c Packet, err 
 		err = fmt.Errorf("error command type: %s", c.CommandHead.TYPE)
 		return
 	}
-	err = binary.Read(reader, binary.BigEndian, &c.ASSOC_ID)
-	if err != nil {
+	// A single fixed-size read instead of two binary.Read calls, each of which
+	// reflects on its argument and allocates. This runs per UDP datagram.
+	var header [6]byte
+	if _, err = io.ReadFull(reader, header[:]); err != nil {
 		return
 	}
-	err = binary.Read(reader, binary.BigEndian, &c.LEN)
-	if err != nil {
-		return
-	}
+	c.ASSOC_ID = binary.BigEndian.Uint32(header[0:4])
+	c.LEN = binary.BigEndian.Uint16(header[4:6])
 	c.ADDR, err = ReadAddress(reader)
 	if err != nil {
 		return
@@ -261,12 +261,12 @@ func (c Packet) WriteTo(writer BufferedWriter) (err error) {
 	if err != nil {
 		return
 	}
-	err = binary.Write(writer, binary.BigEndian, c.ASSOC_ID)
-	if err != nil {
-		return
-	}
-	err = binary.Write(writer, binary.BigEndian, c.LEN)
-	if err != nil {
+	// One stack header instead of two binary.Write calls: ASSOC_ID is 32-bit in
+	// v4, then LEN. See the v5 note for why this matters per datagram.
+	var header [6]byte
+	binary.BigEndian.PutUint32(header[0:4], c.ASSOC_ID)
+	binary.BigEndian.PutUint16(header[4:6], c.LEN)
+	if _, err = writer.Write(header[:]); err != nil {
 		return
 	}
 	err = c.ADDR.WriteTo(writer)
@@ -545,10 +545,9 @@ func (c Address) WriteTo(writer BufferedWriter) (err error) {
 	if err != nil {
 		return
 	}
-	err = binary.Write(writer, binary.BigEndian, c.PORT)
-	if err != nil {
-		return
-	}
+	var port [2]byte
+	binary.BigEndian.PutUint16(port[:], c.PORT)
+	_, err = writer.Write(port[:])
 	return
 }
 

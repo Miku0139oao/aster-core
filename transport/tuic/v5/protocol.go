@@ -247,26 +247,17 @@ func ReadPacketWithHead(head CommandHead, reader BufferedReader) (c Packet, err 
 		err = fmt.Errorf("error command type: %s", c.CommandHead.TYPE)
 		return
 	}
-	err = binary.Read(reader, binary.BigEndian, &c.ASSOC_ID)
-	if err != nil {
+	// A single fixed-size read instead of five binary.Read calls, each of which
+	// reflects on its argument and allocates. This runs per UDP datagram.
+	var header [8]byte
+	if _, err = io.ReadFull(reader, header[:]); err != nil {
 		return
 	}
-	err = binary.Read(reader, binary.BigEndian, &c.PKT_ID)
-	if err != nil {
-		return
-	}
-	err = binary.Read(reader, binary.BigEndian, &c.FRAG_TOTAL)
-	if err != nil {
-		return
-	}
-	err = binary.Read(reader, binary.BigEndian, &c.FRAG_ID)
-	if err != nil {
-		return
-	}
-	err = binary.Read(reader, binary.BigEndian, &c.SIZE)
-	if err != nil {
-		return
-	}
+	c.ASSOC_ID = binary.BigEndian.Uint16(header[0:2])
+	c.PKT_ID = binary.BigEndian.Uint16(header[2:4])
+	c.FRAG_TOTAL = header[4]
+	c.FRAG_ID = header[5]
+	c.SIZE = binary.BigEndian.Uint16(header[6:8])
 	c.ADDR, err = ReadAddress(reader)
 	if err != nil {
 		return
@@ -292,24 +283,16 @@ func (c Packet) WriteTo(writer BufferedWriter) (err error) {
 	if err != nil {
 		return
 	}
-	err = binary.Write(writer, binary.BigEndian, c.ASSOC_ID)
-	if err != nil {
-		return
-	}
-	err = binary.Write(writer, binary.BigEndian, c.PKT_ID)
-	if err != nil {
-		return
-	}
-	err = binary.Write(writer, binary.BigEndian, c.FRAG_TOTAL)
-	if err != nil {
-		return
-	}
-	err = binary.Write(writer, binary.BigEndian, c.FRAG_ID)
-	if err != nil {
-		return
-	}
-	err = binary.Write(writer, binary.BigEndian, c.SIZE)
-	if err != nil {
+	// One stack header instead of five binary.Write calls: encoding/binary.Write
+	// reflects on its argument and allocates a small buffer for each field, and
+	// this runs once per UDP datagram. The wire bytes are identical.
+	var header [8]byte
+	binary.BigEndian.PutUint16(header[0:2], c.ASSOC_ID)
+	binary.BigEndian.PutUint16(header[2:4], c.PKT_ID)
+	header[4] = c.FRAG_TOTAL
+	header[5] = c.FRAG_ID
+	binary.BigEndian.PutUint16(header[6:8], c.SIZE)
+	if _, err = writer.Write(header[:]); err != nil {
 		return
 	}
 	err = c.ADDR.WriteTo(writer)
@@ -531,10 +514,9 @@ func (c Address) WriteTo(writer BufferedWriter) (err error) {
 	if err != nil {
 		return
 	}
-	err = binary.Write(writer, binary.BigEndian, c.PORT)
-	if err != nil {
-		return
-	}
+	var port [2]byte
+	binary.BigEndian.PutUint16(port[:], c.PORT)
+	_, err = writer.Write(port[:])
 	return
 }
 
