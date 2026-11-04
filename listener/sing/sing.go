@@ -3,7 +3,6 @@ package sing
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net"
 	"net/netip"
 	"sync"
@@ -55,8 +54,13 @@ type BrutalOptions struct {
 
 type ListenerHandler struct {
 	ListenerConfig
-	handlerId  uuid.UUID
-	muxService *mux.Service
+	handlerId uuid.UUID
+	// handlerIdStr is handlerId pre-formatted. The per-datagram SNAT key used
+	// fmt.Sprintf("%s:%s", h.handlerId, key); with a uuid.UUID (a [16]byte array,
+	// not a string) the %s verb goes through reflection and allocates a string
+	// for the UUID on every datagram.
+	handlerIdStr string
+	muxService   *mux.Service
 }
 
 func UpstreamMetadata(metadata M.Metadata) M.Metadata {
@@ -77,6 +81,7 @@ func ConvertMetadata(metadata *C.Metadata) M.Metadata {
 func NewListenerHandler(lc ListenerConfig) (h *ListenerHandler, err error) {
 	h = &ListenerHandler{ListenerConfig: lc}
 	h.handlerId = utils.NewUUIDV4()
+	h.handlerIdStr = h.handlerId.String()
 	h.muxService, err = mux.NewService(mux.ServiceOptions{
 		NewStreamContext: func(ctx context.Context, conn net.Conn) context.Context {
 			return ctx
@@ -232,7 +237,7 @@ func (h *ListenerHandler) NewPacket(ctx context.Context, key netip.AddrPort, buf
 	assignUDPAddr(&cPacket.rawSrc, &cPacket.srcIP, metadata.Source)
 	cPacket.rAddr = &cPacket.rawSrc
 	if h.Type != C.TUN { // make the handler-related SNAT key for not TUN listener
-		connID := fmt.Sprintf("%s:%s", h.handlerId, key)
+		connID := h.handlerIdStr + ":" + key.String()
 		cPacket.rAddr = N.NewCustomAddr(h.Type.String(), connID, cPacket.rAddr) // for tunnel's handleUDPConn
 	}
 	if conn, ok := common.Cast[localAddr](handle.writer); ok { // tun does not have real inAddr
