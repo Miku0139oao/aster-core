@@ -390,6 +390,64 @@ func replaceTunLifecycleForTest(t *testing.T, config LC.Tun, current tunListener
 	})
 }
 
+func TestReCreateTunRejectsInvalidCongestionControllerWithoutClosingListener(t *testing.T) {
+	for _, method := range []string{"recreate", "patch"} {
+		for _, enabled := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/enabled=%t", method, enabled), func(t *testing.T) {
+				previousConfig := LC.Tun{Enable: true, Stack: C.TunGvisor, CongestionController: "not-a-controller"}
+				previousListener := &tunLifecycleTestListener{config: previousConfig}
+				factoryCalls := 0
+				replaceTunLifecycleForTest(t, previousConfig, previousListener, func(LC.Tun, C.Tunnel) (tunListener, error) {
+					factoryCalls++
+					return nil, errors.New("unexpected TUN creation")
+				})
+				requestedConfig := previousConfig
+				requestedConfig.Stack = C.TunMips
+				requestedConfig.Enable = enabled
+				var err error
+				if method == "recreate" {
+					err = ReCreateTun(requestedConfig, nil)
+				} else {
+					err = PatchTun(func(current LC.Tun) (LC.Tun, error) {
+						require.True(t, current.Equal(previousConfig))
+						current.Stack = C.TunMips
+						current.Enable = enabled
+						return current, nil
+					}, nil)
+				}
+				require.ErrorContains(t, err, "invalid tun congestion-controller")
+				require.Zero(t, previousListener.closeCalls)
+				require.Zero(t, factoryCalls)
+				require.Same(t, previousListener, tunLister)
+				require.True(t, LastTunConf.Equal(previousConfig))
+			})
+		}
+	}
+}
+
+func TestReCreateTunCongestionControllerPreservesValue(t *testing.T) {
+	for _, control := range []string{"", "BbR3"} {
+		t.Run("control="+control, func(t *testing.T) {
+			previousConfig := LC.Tun{Enable: true, Stack: C.TunMips, CongestionController: "cubic"}
+			previousListener := &tunLifecycleTestListener{config: previousConfig}
+			requestedConfig := previousConfig
+			requestedConfig.CongestionController = control
+			replacement := &tunLifecycleTestListener{config: requestedConfig}
+			factoryCalls := 0
+			replaceTunLifecycleForTest(t, previousConfig, previousListener, func(got LC.Tun, _ C.Tunnel) (tunListener, error) {
+				factoryCalls++
+				require.Equal(t, control, got.CongestionController)
+				return replacement, nil
+			})
+			require.NoError(t, ReCreateTun(requestedConfig, nil))
+			require.Equal(t, 1, factoryCalls)
+			require.Equal(t, 1, previousListener.closeCalls)
+			require.Same(t, replacement, tunLister)
+			require.Equal(t, control, LastTunConf.CongestionController)
+		})
+	}
+}
+
 func TestReCreateTunRetriesEnabledSameConfigWithoutListener(t *testing.T) {
 	config := LC.Tun{Enable: true, Device: "same-config"}
 	creationErr := errors.New("requested creation failed")

@@ -211,11 +211,8 @@ func New(config LC.TuicServer, lc C.InboundListenConfig, tunnel C.Tunnel, additi
 		sl.servers = append(sl.servers, server)
 
 		go func() {
-			err := server.Serve()
-			if err != nil {
-				if created.closed.Load() {
-					return
-				}
+			if err := server.Serve(); !created.closed.Load() {
+				log.Warnln("TUIC server closed: %v", err)
 			}
 		}()
 	}

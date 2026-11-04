@@ -75,6 +75,15 @@ func (c *ControlChannel) SendReset(ctx context.Context) error {
 	return err
 }
 
+// KeyID returns the current control-channel key epoch. Data packets must be
+// labeled with the epoch their keys were derived under, so the data channel
+// must be rebuilt with whatever this returns after a soft reset.
+func (c *ControlChannel) KeyID() uint8 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.keyID
+}
+
 // SendSoftReset sends a P_CONTROL_SOFT_RESET_V1 and rotates the key ID.
 // Called during TLS renegotiation (rekey) to transition to a new key epoch.
 // The old pending/recvPending maps are cleared because they belong to the

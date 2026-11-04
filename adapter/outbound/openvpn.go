@@ -18,8 +18,6 @@ import (
 	"github.com/Miku0139oao/aster-core/log"
 	ovpn "github.com/Miku0139oao/aster-core/transport/openvpn"
 
-	wireguard "github.com/metacubex/sing-wireguard"
-	M "github.com/metacubex/sing/common/metadata"
 	"golang.org/x/sync/semaphore"
 )
 
@@ -28,7 +26,7 @@ type OpenVPN struct {
 	option *OpenVPNOption
 	config *ovpn.ClientConfig
 
-	tunDevice wireguard.Device
+	tunDevice ipStack
 	client    *ovpn.Client
 	resolver  resolver.Resolver
 	dns       []dns.NameServer
@@ -67,6 +65,8 @@ type OpenVPNOption struct {
 	MTU                int               `proxy:"mtu,omitempty"`
 	UDP                bool              `proxy:"udp,omitempty"`
 
+	IPStack IPStackOption `proxy:"ip-stack,omitempty"`
+
 	RemoteDnsResolve bool     `proxy:"remote-dns-resolve,omitempty"`
 	Dns              []string `proxy:"dns,omitempty"`
 }
@@ -77,6 +77,10 @@ func NewOpenVPN(option OpenVPNOption) (*OpenVPN, error) {
 	}
 	if option.Port <= 0 || option.Port > 65535 {
 		return nil, errors.New("openvpn port must be between 1 and 65535")
+	}
+	option.IPStack.normalize()
+	if err := option.IPStack.validate(); err != nil {
+		return nil, err
 	}
 	cfg := &ovpn.ClientConfig{
 		RemoteHost:     option.Server,
@@ -146,10 +150,10 @@ func (o *OpenVPN) DialContext(ctx context.Context, metadata *C.Metadata) (_ C.Co
 		}
 		options := o.DialOptions()
 		options = append(options, dialer.WithResolver(r))
-		options = append(options, dialer.WithNetDialer(wgNetDialer{tunDevice: tunDevice}))
+		options = append(options, dialer.WithNetDialer(ipStackNetDialer{stack: tunDevice}))
 		conn, err = dialer.NewDialer(options...).DialContext(ctx, "tcp", metadata.RemoteAddress())
 	} else {
-		conn, err = tunDevice.DialContext(ctx, "tcp", M.SocksaddrFrom(metadata.DstIP, metadata.DstPort).Unwrap())
+		conn, err = tunDevice.DialTCP(ctx, "tcp", netip.AddrPort{}, metadata.AddrPort())
 	}
 	if err != nil {
 		return nil, err
@@ -169,7 +173,8 @@ func (o *OpenVPN) ListenPacketContext(ctx context.Context, metadata *C.Metadata)
 	if err = o.resolveUDP(ctx, metadata, r); err != nil {
 		return nil, err
 	}
-	pc, err = tunDevice.ListenPacket(ctx, M.SocksaddrFrom(metadata.DstIP, metadata.DstPort).Unwrap())
+	// The ipStack contract guarantees that a generic UDP wildcard supports both address families.
+	pc, err = tunDevice.ListenUDP(ctx, "udp", netip.AddrPort{})
 	if err != nil {
 		return nil, err
 	}
@@ -232,7 +237,7 @@ func (o *OpenVPN) Close() error {
 	return nil
 }
 
-func (o *OpenVPN) run(ctx context.Context) (wireguard.Device, resolver.Resolver, error) {
+func (o *OpenVPN) run(ctx context.Context) (ipStack, resolver.Resolver, error) {
 	runCtx, cancel := context.WithCancel(ctx)
 	stop := contextutils.AfterFunc(o.runCtx, cancel)
 	defer func() {
@@ -262,7 +267,7 @@ func (o *OpenVPN) run(ctx context.Context) (wireguard.Device, resolver.Resolver,
 
 	if o.option.HandshakeTimeout > 0 {
 		type runResult struct {
-			tunDevice wireguard.Device
+			tunDevice ipStack
 			resolver  resolver.Resolver
 			err       error
 		}
@@ -291,7 +296,7 @@ func (o *OpenVPN) run(ctx context.Context) (wireguard.Device, resolver.Resolver,
 	return o.startLocked(runCtx)
 }
 
-func (o *OpenVPN) startLocked(handshakeCtx context.Context) (wireguard.Device, resolver.Resolver, error) {
+func (o *OpenVPN) startLocked(handshakeCtx context.Context) (ipStack, resolver.Resolver, error) {
 	packetIO, err := o.openPacketIO(handshakeCtx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("connect OpenVPN server: %w", err)
@@ -312,7 +317,7 @@ func (o *OpenVPN) startLocked(handshakeCtx context.Context) (wireguard.Device, r
 	if mtu == 0 {
 		mtu = 1500
 	}
-	tunDevice, err := wireguard.NewStackDevice(push.Prefixes, uint32(mtu))
+	tunDevice, err := ipStackFactory(o.option.IPStack, push.Prefixes, uint32(mtu))
 	if err != nil {
 		_ = client.Close()
 		return nil, nil, fmt.Errorf("create OpenVPN stack device: %w", err)

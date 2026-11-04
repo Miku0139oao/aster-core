@@ -30,6 +30,7 @@ func Handle(conn net.Conn, tunnel C.Tunnel, request *mierumodel.Request, additio
 		return
 	}
 
+	user := conn.(mierucommon.UserContext).UserName()
 	// Handle the connection with tunnel.
 	switch request.Command {
 	case mieruconstant.Socks5ConnectCmd: // TCP
@@ -46,15 +47,18 @@ func Handle(conn net.Conn, tunnel C.Tunnel, request *mierumodel.Request, additio
 		}
 		inbound.ApplyAdditions(
 			metadata,
-			inbound.WithInName(conn.(mierucommon.UserContext).UserName()),
+			inbound.WithInName(user),
+			inbound.WithInUser(user),
 			inbound.WithSrcAddr(conn.RemoteAddr()),
 			inbound.WithInAddr(conn.LocalAddr()),
 		)
 		inbound.ApplyAdditions(metadata, additions...)
 		tunnel.HandleTCPConn(conn, metadata)
 	case mieruconstant.Socks5UDPAssociateCmd: // UDP
+		additions = append(additions, inbound.WithInUser(user))
 		pc := mierucommon.NewPacketOverStreamTunnel(conn)
 		ep := N.NewEnhancePacketConn(pc)
+		defer ep.Close()
 		for {
 			data, put, addr, err := ep.WaitReadFrom()
 			if err != nil {

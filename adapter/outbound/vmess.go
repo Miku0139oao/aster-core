@@ -388,11 +388,17 @@ func (v *Vmess) dialContext(ctx context.Context) (c net.Conn, err error) {
 	case "mekya":
 		return v.mekyaClient.Dial(ctx)
 	case "mkcp", "kcp":
-		rawConn, err := v.dialer.DialContext(ctx, "udp", v.addr)
+		var rawConn net.Conn
+		rawConn, err = v.dialer.DialContext(ctx, "udp", v.addr)
 		if err != nil {
 			return nil, err
 		}
-		return mkcp.Dial(ctx, rawConn, v.option.MKCPOpts.Build())
+		c, err = mkcp.Dial(ctx, rawConn, v.option.MKCPOpts.Build())
+		if err != nil {
+			_ = rawConn.Close()
+			return nil, err
+		}
+		return c, nil
 	default:
 	}
 	return v.dialer.DialContext(ctx, "tcp", v.addr)

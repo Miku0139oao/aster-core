@@ -140,7 +140,15 @@ profile: # 存储 select 选择记录
 # Tun 配置
 tun:
   enable: false
-  stack: system # gvisor/mixed
+  stack: system # gvisor/mixed/system/mips
+  # 系统 DNS 配置方式
+  # - disabled，不设置系统 DNS
+  # - native，将 tun 地址设为系统 DNS
+  # - hijack，在 native 基础上额外拦截发往其他网卡的 53 端口流量：Windows 需 strict-route，Linux 需 auto-redirect
+  # - 置空，和旧行为一致：Windows 和 Linux 在启用 auto-route 时默认 hijack，否则 disabled；macOS 默认 disabled
+  #   单独设置 dns-mode: hijack 可在 auto-route: false 时重新启用 Linux 的 resolvectl DNS 注册，
+  #   sing-tun v0.4.28 起 auto-route: false 的配置不再自动注册系统 DNS
+  # dns-mode: hijack
   dns-hijack:
     - 0.0.0.0:53 # 需要劫持的 DNS
   # auto-detect-interface: true # 自动识别出口网卡
@@ -152,6 +160,8 @@ tun:
   kernel-direct: false # Linux/OpenWrt：根据 Aster DNS、规则与已判定为 DIRECT 的 live flow（含 unwrap 后的选择器）动态让可安全判定的 DIRECT 目的地址绕过用户态。需要 auto-route、auto-redirect、nftables，且客户端 DNS 必须经过 Aster。不要在 userspace 丢 inbound SYN 来防自劫持。
   # strict-route: true # 将所有连接路由到 tun 来防止泄漏，但你的设备将无法其他设备被访问
   # disable-icmp-forwarding: true # 禁用 ICMP 转发，防止某些情况下的 ICMP 环回问题，ping 将不会显示真实的延迟
+  # congestion-controller: cubic # TCP 拥塞控制算法: cubic, reno, bbr, bbr3；仅在 stack 为 mips 时生效
+  # mips 下会在重启接口前验证名称；支持大小写，不接受首尾空格
   route-address-set: # 将指定规则集中的目标 IP CIDR 规则添加到防火墙, 不匹配的流量将绕过路由, 仅支持 Linux，且需要 nftables，`auto-route` 和 `auto-redirect` 已启用。
     - ruleset-1
     - ruleset-2
@@ -1300,6 +1310,9 @@ proxies: # socks5
     # 数组格式也是合法的
     # reserved: [209,98,59]
     # persistent-keepalive: 0
+    # ip-stack:
+    #   mode: auto # 可选：auto, gvisor, mips；auto 在编译了 gVisor 时使用 gVisor，否则使用 mihomo IP stack (MIPS)
+    #   congestion-controller: cubic # TCP 拥塞控制算法：cubic, reno, bbr, bbr3；gVisor 会忽略该项
     # 一个出站代理的标识。当值不为空时，将使用指定的 proxy 发出连接
     # dialer-proxy: "ss1"
     # remote-dns-resolve: true # 强制 dns 远程解析，默认值为 false
@@ -1423,6 +1436,9 @@ proxies: # socks5
     # handshake-timeout: 30 # 单位为秒；配置后握手时不受外层连接超时影响；默认值为 0，表示仅使用外层连接超时
     # mtu: 1500
     udp: true
+    # ip-stack:
+    #   mode: auto # 可选：auto, gvisor, mips；auto 在编译了 gVisor 时使用 gVisor，否则使用 mihomo IP stack (MIPS)
+    #   congestion-controller: cubic # TCP 拥塞控制算法：cubic, reno, bbr, bbr3；gVisor 会忽略该项
     # 一个出站代理的标识。当值不为空时，将使用指定的 proxy 发出连接
     # dialer-proxy: "ss1"
     # remote-dns-resolve: true # 强制 dns 远程解析，默认值为 false
@@ -1445,6 +1461,9 @@ proxies: # socks5
     # dns: [ 1.1.1.1, 8.8.8.8 ] # 仅在 remote-dns-resolve 为 true 时生效
     # congestion-controller: bbr # 默认不开启
     # handshake-timeout: 30 # 单位为秒；配置后握手时不受外层连接超时影响；默认值为 0，表示仅使用外层连接超时
+    # ip-stack:
+    #   mode: auto # 可选：auto, gvisor, mips；auto 在编译了 gVisor 时使用 gVisor，否则使用 mihomo IP stack (MIPS)
+    #   congestion-controller: cubic # TCP 拥塞控制算法：cubic, reno, bbr, bbr3；gVisor 会忽略该项
 
   # masque-h3-l4proxy
   - name: "masque-h3-l4proxy"
@@ -1479,6 +1498,9 @@ proxies: # socks5
     # remote-dns-resolve: true # 强制 dns 远程解析，默认值为 false
     # dns: [ 1.1.1.1, 8.8.8.8 ] # 仅在 remote-dns-resolve 为 true 时生效
     # handshake-timeout: 30 # 单位为秒；配置后握手时不受外层连接超时影响；默认值为 0，表示仅使用外层连接超时
+    # ip-stack:
+    #   mode: auto # 可选：auto, gvisor, mips；auto 在编译了 gVisor 时使用 gVisor，否则使用 mihomo IP stack (MIPS)
+    #   congestion-controller: cubic # TCP 拥塞控制算法：cubic, reno, bbr, bbr3；gVisor 会忽略该项
 
   # tuic
   - name: tuic
@@ -2723,7 +2745,8 @@ listeners:
     type: tun
     # rule: sub-rule-name1 # 默认使用 rules，如果未找到 sub-rule 则直接使用 rules
     # proxy: proxy # 如果不为空则直接将该入站流量交由指定 proxy 处理 (当 proxy 不为空时，这里的 proxy 名称必须合法，否则会出错)
-    stack: system # gvisor / mixed
+    stack: system # gvisor / mixed / system / mips
+    # dns-mode: hijack # disabled / native / hijack，为空时采用旧行为
     dns-hijack:
     - 0.0.0.0:53 # 需要劫持的 DNS
     # auto-detect-interface: false # 自动识别出口网卡
@@ -2765,6 +2788,8 @@ listeners:
     # exclude-package: # 排除被路由的 Android 应用包名
     # - com.android.captiveportallogin
     # disable-icmp-forwarding: true # 禁用 ICMP 转发，防止某些情况下的 ICMP 环回问题，ping 将不会显示真实的延迟
+    # congestion-controller: cubic # TCP 拥塞控制算法: cubic, reno, bbr, bbr3；仅在 stack 为 mips 时生效
+    # mips 下会在重启接口前验证名称；支持大小写，不接受首尾空格
 # 入口配置与 Listener 等价，传入流量将和 socks,mixed 等入口一样按照 mode 所指定的方式进行匹配处理
 # shadowsocks,vmess 入口配置（传入流量将和 socks,mixed 等入口一样按照 mode 所指定的方式进行匹配处理）
 # ss-config: ss://2022-blake3-aes-256-gcm:vlmpIPSyHH6f4S8WVPdRIHIlzmB+GIRfoH3aNJ/t9Gg=@:23456

@@ -150,6 +150,39 @@ func TestDomainSetUnicode(t *testing.T) {
 	assert.False(t, set.Has("日本語.example"))
 }
 
+func TestDomainSetForeach(t *testing.T) {
+	tree := trie.New[struct{}]()
+	for _, domain := range []string{".example.com", "+.example.org", "example.net"} {
+		assert.NoError(t, tree.Insert(domain, struct{}{}))
+	}
+	set := tree.NewDomainSet()
+	var keys []string
+	set.Foreach(func(key string) bool {
+		keys = append(keys, key)
+		return true
+	})
+	assert.ElementsMatch(t, []string{".example.com", ".example.org", "example.org", "example.net"}, keys)
+
+	rebuilt := trie.New[struct{}]()
+	for _, key := range keys {
+		assert.NoError(t, rebuilt.Insert(key, struct{}{}))
+	}
+	rebuiltSet := rebuilt.NewDomainSet()
+	assert.NotNil(t, rebuiltSet)
+	for _, set := range []*trie.DomainSet{set, rebuiltSet} {
+		for domain, expected := range map[string]bool{
+			"example.com":     false,
+			"www.example.com": true,
+			"example.org":     true,
+			"www.example.org": true,
+			"example.net":     true,
+			"www.example.net": false,
+		} {
+			assert.Equal(t, expected, set.Has(domain), domain)
+		}
+	}
+}
+
 func TestDomainSetOversizedKey(t *testing.T) {
 	tree := trie.New[struct{}]()
 	assert.NoError(t, tree.Insert("+.example.com", struct{}{}))

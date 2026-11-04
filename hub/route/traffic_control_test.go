@@ -10,8 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Miku0139oao/aster-core/component/dialer"
 	"github.com/Miku0139oao/aster-core/component/kerneldirect"
 	trafficControl "github.com/Miku0139oao/aster-core/component/trafficcontrol"
+	C "github.com/Miku0139oao/aster-core/constant"
 	"github.com/Miku0139oao/aster-core/listener"
 	LC "github.com/Miku0139oao/aster-core/listener/config"
 
@@ -365,4 +367,159 @@ func TestTrafficControlCSVExport(t *testing.T) {
 	require.Equal(t, "text/csv; charset=utf-8", response.Header().Get("Content-Type"))
 	require.Contains(t, response.Body.String(), "global:global,hour")
 	require.Contains(t, response.Body.String(), ",12,34,1,0")
+}
+
+func TestTunSchemaPatchRoundTripsDNSMode(t *testing.T) {
+	base := LC.Tun{Enable: true, AutoRoute: true, DNSMode: "", ProcessorsPerChannel: 1}
+
+	// Omitted dns-mode must preserve the current value rather than clearing it.
+	patched := pointerOrDefaultTun(&tunSchema{}, base)
+	require.Equal(t, "", patched.DNSMode)
+
+	// Each accepted value must survive the pointer schema round-trip.
+	for _, dnsMode := range []string{"disabled", "native", "hijack"} {
+		patched := pointerOrDefaultTun(&tunSchema{DNSMode: &dnsMode}, LC.Tun{Enable: true, DNSMode: "native"})
+		require.Equal(t, dnsMode, patched.DNSMode, "PATCH must apply dns-mode %q", dnsMode)
+	}
+
+	// An explicit empty string must be distinguishable from an omitted field.
+	empty := ""
+	patched = pointerOrDefaultTun(&tunSchema{DNSMode: &empty}, LC.Tun{Enable: true, DNSMode: "hijack"})
+	require.Equal(t, "", patched.DNSMode, "PATCH with an explicit empty dns-mode must reset to the legacy default")
+}
+
+func TestTunSchemaPatchRoundTripsCongestionController(t *testing.T) {
+	base := LC.Tun{Stack: C.TunMips, CongestionController: "cubic"}
+	patched := pointerOrDefaultTun(&tunSchema{}, base)
+	require.Equal(t, "cubic", patched.CongestionController, "omitted congestion-controller must not clear the current value")
+
+	for _, control := range []string{"bbr", "BbR3", ""} {
+		patched = pointerOrDefaultTun(&tunSchema{CongestionController: &control}, base)
+		require.Equal(t, control, patched.CongestionController)
+		require.NoError(t, LC.ValidateTunCongestionController(patched.Stack, patched.CongestionController))
+	}
+}
+
+func TestTunSchemaPatchRoundTripsProcessorsPerChannel(t *testing.T) {
+	base := LC.Tun{Enable: true, ProcessorsPerChannel: 1}
+
+	patched := pointerOrDefaultTun(&tunSchema{}, base)
+	require.Equal(t, 1, patched.ProcessorsPerChannel, "omitted processors-per-channel must keep the default of 1")
+
+	four := 4
+	patched = pointerOrDefaultTun(&tunSchema{ProcessorsPerChannel: &four}, base)
+	require.Equal(t, 4, patched.ProcessorsPerChannel)
+}
+
+func TestTunSchemaDecodesNewFieldsFromJSON(t *testing.T) {
+	var schema configSchema
+	body := `{"tun":{"dns-mode":"hijack","congestion-controller":"bbr3","processors-per-channel":2,"stack":"mips"}}`
+	require.NoError(t, json.Unmarshal([]byte(body), &schema))
+	require.NotNil(t, schema.Tun)
+	require.NotNil(t, schema.Tun.DNSMode)
+	require.Equal(t, "hijack", *schema.Tun.DNSMode)
+	require.NotNil(t, schema.Tun.CongestionController)
+	require.Equal(t, "bbr3", *schema.Tun.CongestionController)
+	require.NotNil(t, schema.Tun.ProcessorsPerChannel)
+	require.Equal(t, 2, *schema.Tun.ProcessorsPerChannel)
+	require.NotNil(t, schema.Tun.Stack)
+	require.Equal(t, C.TunMips, *schema.Tun.Stack)
+}
+
+func TestPatchConfigsRejectsUnknownTunDNSMode(t *testing.T) {
+	previous := listener.LastTunConf
+	t.Cleanup(func() { listener.LastTunConf = previous })
+	listener.LastTunConf = LC.Tun{Enable: true, AutoRoute: true, DNSMode: "native"}
+
+	request := httptest.NewRequest("PATCH", "http://controller/configs", strings.NewReader(`{"tun":{"dns-mode":"bogus"}}`))
+	response := httptest.NewRecorder()
+	patchConfigs(response, request)
+	require.Equal(t, 400, response.Code, "PATCH must reject an unknown dns-mode")
+	require.Contains(t, response.Body.String(), "invalid tun dns-mode")
+	require.Equal(t, "native", listener.LastTunConf.DNSMode, "failed PATCH must not persist dns-mode")
+}
+
+func TestPatchConfigsRejectsInvalidTunCongestionController(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		current LC.Tun
+		patch   string
+	}{
+		{
+			name:    "invalid name",
+			current: LC.Tun{Enable: true, Stack: C.TunMips, CongestionController: "cubic"},
+			patch:   `{"congestion-controller":"not-a-controller"}`,
+		},
+		{
+			name:    "switch to mips with inherited invalid name",
+			current: LC.Tun{Enable: true, Stack: C.TunGvisor, CongestionController: "not-a-controller"},
+			patch:   `{"stack":"mips"}`,
+		},
+		{
+			name:    "invalid name while disabled",
+			current: LC.Tun{Stack: C.TunMips, CongestionController: "cubic"},
+			patch:   `{"congestion-controller":"not-a-controller"}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			previousConfig := listener.LastTunConf
+			previousAllowLan := listener.AllowLan()
+			previousInterface := dialer.DefaultInterface.Load()
+			t.Cleanup(func() {
+				listener.LastTunConf = previousConfig
+				listener.SetAllowLan(previousAllowLan)
+				dialer.DefaultInterface.Store(previousInterface)
+			})
+			listener.LastTunConf = tc.current
+			listener.SetAllowLan(false)
+			dialer.DefaultInterface.Store("original-interface")
+
+			body := `{"allow-lan":true,"interface-name":"requested-interface","tun":` + tc.patch + `}`
+			request := httptest.NewRequest("PATCH", "http://controller/configs", strings.NewReader(body))
+			response := httptest.NewRecorder()
+			patchConfigs(response, request)
+
+			require.Equal(t, 400, response.Code)
+			require.Contains(t, response.Body.String(), "invalid tun congestion-controller")
+			require.True(t, listener.LastTunConf.Equal(tc.current), "failed PATCH must preserve the entire TUN config")
+			require.False(t, listener.AllowLan(), "failed PATCH must not commit unrelated settings")
+			require.Equal(t, "original-interface", dialer.DefaultInterface.Load())
+		})
+	}
+}
+
+func TestUpdateConfigsRejectsInvalidTunCongestionController(t *testing.T) {
+	for _, payload := range []string{
+		"tun:\n  enable: true\n  stack: mips\n  congestion-controller: not-a-controller\n",
+		"tun:\n  enable: false\n  stack: mips\n  congestion-controller: not-a-controller\n",
+		"listeners:\n  - name: test-tun\n    type: tun\n    stack: mips\n    congestion-controller: not-a-controller\n",
+	} {
+		t.Run(payload, func(t *testing.T) {
+			previousConfig := listener.LastTunConf
+			previousAllowLan := listener.AllowLan()
+			previousInterface := dialer.DefaultInterface.Load()
+			t.Cleanup(func() {
+				listener.LastTunConf = previousConfig
+				listener.SetAllowLan(previousAllowLan)
+				dialer.DefaultInterface.Store(previousInterface)
+			})
+			current := LC.Tun{Enable: true, Stack: C.TunGvisor, CongestionController: "cubic"}
+			listener.LastTunConf = current
+			listener.SetAllowLan(false)
+			dialer.DefaultInterface.Store("original-interface")
+			body, err := json.Marshal(map[string]string{
+				"payload": "allow-lan: true\ninterface-name: requested-interface\n" + payload,
+			})
+			require.NoError(t, err)
+			request := httptest.NewRequest("PUT", "http://controller/configs", strings.NewReader(string(body)))
+			response := httptest.NewRecorder()
+			updateConfigs(response, request)
+
+			require.Equal(t, 400, response.Code)
+			require.Contains(t, response.Body.String(), "invalid tun congestion-controller")
+			require.True(t, listener.LastTunConf.Equal(current), "failed PUT must not apply the parsed config")
+			require.False(t, listener.AllowLan())
+			require.Equal(t, "original-interface", dialer.DefaultInterface.Load())
+		})
+	}
 }

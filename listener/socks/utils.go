@@ -58,14 +58,32 @@ func fillSocksUDPMetadata(pkt *packet, target socks5.Addr, additions ...inbound.
 }
 
 func applySocksUDPDestination(metadata *C.Metadata, target socks5.Addr) {
+	// socks5.SplitAddr already rejects truncated addresses, so this guard is only
+	// a backstop for directly-constructed targets; it never fires for a well-formed
+	// address.
+	if len(target) < 2 {
+		return
+	}
+
 	switch target[0] {
 	case socks5.AtypDomainName:
-		metadata.Host = strings.TrimRight(string(target[2:2+target[1]]), ".")
-		metadata.DstPort = uint16((int(target[2+target[1]]) << 8) | int(target[2+target[1]+1]))
+		// Convert before arithmetic so long domain lengths cannot overflow a byte.
+		domainEnd := 2 + int(target[1])
+		if len(target) < domainEnd+2 {
+			break
+		}
+		metadata.Host = strings.TrimRight(string(target[2:domainEnd]), ".")
+		metadata.DstPort = uint16(target[domainEnd])<<8 | uint16(target[domainEnd+1])
 	case socks5.AtypIPv4:
+		if len(target) < 1+net.IPv4len+2 {
+			break
+		}
 		metadata.DstIP, _ = netip.AddrFromSlice(target[1 : 1+net.IPv4len])
 		metadata.DstPort = uint16((int(target[1+net.IPv4len]) << 8) | int(target[1+net.IPv4len+1]))
 	case socks5.AtypIPv6:
+		if len(target) < 1+net.IPv6len+2 {
+			break
+		}
 		metadata.DstIP, _ = netip.AddrFromSlice(target[1 : 1+net.IPv6len])
 		metadata.DstPort = uint16((int(target[1+net.IPv6len]) << 8) | int(target[1+net.IPv6len+1]))
 	}

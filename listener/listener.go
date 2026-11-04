@@ -534,6 +534,9 @@ func PatchTun(build func(LC.Tun) (LC.Tun, error), tunnel C.Tunnel) error {
 }
 
 func reCreateTunLocked(tunConf LC.Tun, tunnel C.Tunnel) error {
+	if err := LC.ValidateTunCongestionController(tunConf.Stack, tunConf.CongestionController); err != nil {
+		return err
+	}
 	tunConf.Sort()
 	if tunConf.Equal(LastTunConf) {
 		if tunLister != nil { // some default value in dialer maybe changed when config reload, reset at here

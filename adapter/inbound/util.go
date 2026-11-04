@@ -14,15 +14,34 @@ import (
 func parseSocksAddr(target socks5.Addr) *C.Metadata {
 	metadata := &C.Metadata{}
 
+	// A nil or truncated address is not a valid SOCKS request. socks5.ReadAddr
+	// always returns a well-formed one, but socks5.ParseAddr yields nil for hosts
+	// longer than 255 bytes, so treat a short target as an empty destination
+	// instead of panicking on target[0].
+	if len(target) < 2 {
+		return metadata
+	}
+
 	switch target[0] {
 	case socks5.AtypDomainName:
+		// Convert before arithmetic so long domain lengths cannot overflow a byte.
+		domainEnd := 2 + int(target[1])
+		if len(target) < domainEnd+2 {
+			break
+		}
 		// trim for FQDN
-		metadata.Host = strings.TrimRight(string(target[2:2+target[1]]), ".")
-		metadata.DstPort = uint16((int(target[2+target[1]]) << 8) | int(target[2+target[1]+1]))
+		metadata.Host = strings.TrimRight(string(target[2:domainEnd]), ".")
+		metadata.DstPort = uint16(target[domainEnd])<<8 | uint16(target[domainEnd+1])
 	case socks5.AtypIPv4:
+		if len(target) < 1+net.IPv4len+2 {
+			break
+		}
 		metadata.DstIP, _ = netip.AddrFromSlice(target[1 : 1+net.IPv4len])
 		metadata.DstPort = uint16((int(target[1+net.IPv4len]) << 8) | int(target[1+net.IPv4len+1]))
 	case socks5.AtypIPv6:
+		if len(target) < 1+net.IPv6len+2 {
+			break
+		}
 		metadata.DstIP, _ = netip.AddrFromSlice(target[1 : 1+net.IPv6len])
 		metadata.DstPort = uint16((int(target[1+net.IPv6len]) << 8) | int(target[1+net.IPv6len+1]))
 	}

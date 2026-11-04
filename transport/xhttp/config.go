@@ -478,7 +478,6 @@ func (c *Config) ExtractMetaFromRequest(req *http.Request, path string) (session
 	case PlacementPath:
 		if len(subpath) > pathPart {
 			seqStr = subpath[pathPart]
-			pathPart += 1
 		}
 	case PlacementQuery:
 		seqStr = req.URL.Query().Get(seqKey)

@@ -41,6 +41,7 @@ type cfbStream struct{ cipher.Block }
 
 func (b *cfbStream) IVSize() int                       { return b.BlockSize() }
 func (b *cfbStream) Decrypter(iv []byte) cipher.Stream { return cipher.NewCFBDecrypter(b.Block, iv) }
+
 func (b *cfbStream) Encrypter(iv []byte) cipher.Stream { return cipher.NewCFBEncrypter(b.Block, iv) }
 
 func AESCFB(key []byte) (Cipher, error) {

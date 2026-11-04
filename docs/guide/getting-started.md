@@ -6,7 +6,7 @@
 
 ## 系統需求
 
-- Go 1.20 或更新版本（從原始碼建置時）。
+- Go 1.27.3 或更新版本（從原始碼建置時）。
 - 一般 HTTP/SOCKS 使用不需要 root。
 - TUN、TProxy、Redir、iptables 或低連接埠可能需要 root、capabilities 或平台權限。
 - `with_gvisor` 是正式發行的標準 build tag。

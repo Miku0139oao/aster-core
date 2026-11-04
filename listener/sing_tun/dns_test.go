@@ -3,6 +3,8 @@ package sing_tun
 import (
 	"net/netip"
 	"testing"
+
+	tun "github.com/metacubex/sing-tun"
 )
 
 func typicalDNSHijackHandler() *ListenerHandler {
@@ -91,4 +93,17 @@ func BenchmarkShouldHijackDns(b *testing.B) {
 			hijackSink = h.ShouldHijackDns(hit)
 		}
 	})
+}
+
+func TestValidateDNSModeAcceptsKnownValues(t *testing.T) {
+	for _, dnsMode := range []string{"", tun.DNSModeDisabled, tun.DNSModeNative, tun.DNSModeHijack} {
+		if err := validateDNSMode(dnsMode); err != nil {
+			t.Fatalf("validateDNSMode(%q) returned %v", dnsMode, err)
+		}
+	}
+	for _, dnsMode := range []string{"bogus", "Hijack", "disabled "} {
+		if err := validateDNSMode(dnsMode); err == nil {
+			t.Fatalf("validateDNSMode(%q) must reject an unknown value", dnsMode)
+		}
+	}
 }

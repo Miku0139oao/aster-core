@@ -66,6 +66,9 @@ func ParseListener(mapping map[string]any) (C.InboundListener, error) {
 		tunOption := &IN.TunOption{
 			Stack:     C.TunGvisor,
 			DNSHijack: []string{"0.0.0.0:53"}, // default hijack all dns query
+			// Match DefaultRawConfig's gVisor memory default so a listener-style
+			// TUN does not silently fall back to GOMAXPROCS goroutines per channel.
+			ProcessorsPerChannel: 1,
 		}
 		err = decoder.Decode(mapping, tunOption)
 		if err != nil {

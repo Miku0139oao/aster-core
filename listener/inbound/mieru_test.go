@@ -76,6 +76,20 @@ func TestNewMieru(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "invalid - hostname listen",
+			args: args{
+				option: &inbound.MieruOption{
+					BaseOption: inbound.BaseOption{
+						Listen: "example.com",
+						Port:   "8080",
+					},
+					Transport: "TCP",
+					Users:     map[string]string{"user": "pass"},
+				},
+			},
+			wantErr: true,
+		},
+		{
 			name: "invalid - no port",
 			args: args{
 				option: &inbound.MieruOption{
@@ -204,6 +218,7 @@ func testInboundMieruTCP(t *testing.T, handshakeMode string) {
 	defer l.Close()
 	lc := mieruTestInboundListenConfig{
 		ListenFn: func(ctx context.Context, network, address string) (net.Listener, error) {
+			assert.Equal(t, l.Addr().String(), address)
 			return l, nil
 		},
 		ListenPacketFn: func(ctx context.Context, network, address string) (net.PacketConn, error) {
@@ -274,6 +289,7 @@ func testInboundMieruUDP(t *testing.T, handshakeMode string) {
 			panic("should not be called")
 		},
 		ListenPacketFn: func(ctx context.Context, network, address string) (net.PacketConn, error) {
+			assert.Equal(t, l.LocalAddr().String(), address)
 			return l, nil
 		},
 	}

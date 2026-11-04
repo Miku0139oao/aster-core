@@ -6,7 +6,7 @@ This page is a short launch reference. To go from a release, the first remote no
 
 ## Requirements
 
-- Go 1.20 or newer when building from source.
+- Go 1.27.3 or newer when building from source.
 - Ordinary HTTP/SOCKS use does not need root.
 - TUN, TProxy, Redir, iptables, or low ports may need root, capabilities, or platform privileges.
 - `with_gvisor` is the standard tag for official releases.

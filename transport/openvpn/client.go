@@ -74,7 +74,7 @@ func NewClient(config *ClientConfig, io PacketIO) (*Client, error) {
 		}
 	} else if len(config.TLSAuthKey) > 0 {
 		var err error
-		crypt, err = NewTLSAuth(config.TLSAuthKey, config.KeyDirection)
+		crypt, err = NewTLSAuth(config.TLSAuthKey, config.KeyDirection, config.Auth)
 		if err != nil {
 			return nil, err
 		}
@@ -194,7 +194,7 @@ func (c *Client) doKeyExchange(ctx context.Context) (*PushReply, error) {
 	keys.SendCipherKey = keys.SendCipherKey[:cipherKeyLen]
 	keys.RecvCipherKey = keys.RecvCipherKey[:cipherKeyLen]
 
-	newData, err := NewDataChannel(keys, negotiatedCipher, c.config.Auth, push.PeerID)
+	newData, err := NewDataChannel(keys, negotiatedCipher, c.config.Auth, push.PeerID, c.control.KeyID())
 	if err != nil {
 		return nil, err
 	}
