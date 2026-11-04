@@ -89,20 +89,32 @@ func (h *ResolverEnhancer) IsFakeBroadcastIP(ip netip.Addr) bool {
 }
 
 func (h *ResolverEnhancer) FindHostByIP(ip netip.Addr) (string, bool) {
-	if pool := h.fakeIPPool; pool != nil {
+	// Fast path: a pool can only hold a mapping for an address inside its own
+	// range, and Pool.ipnet is set once at construction and never mutated, so
+	// this read needs no lock. That matters because LookBack takes the pool
+	// mutex (and the LRU locks inside) and this runs on every UDP packet in
+	// fake-ip mode; asking a pool that cannot match serialised unrelated
+	// datagrams behind it. The check mirrors IsFakeIP above.
+	//
+	// The range gate only filters when both pools exist. With a single pool it
+	// is skipped entirely: a stale entry left by the old store can sit outside
+	// the current range (store-fake-ip persists across range changes) and must
+	// still resolve, exactly as before.
+	bothPools := h.fakeIPPool != nil && h.fakeIPPool6 != nil
+	for _, pool := range [...]*fakeip.Pool{h.fakeIPPool, h.fakeIPPool6} {
+		if pool == nil {
+			continue
+		}
+		if bothPools && !pool.IPNet().Contains(ip) {
+			continue
+		}
 		if host, existed := pool.LookBack(ip); existed {
 			return host, true
 		}
 	}
 
-	if pool6 := h.fakeIPPool6; pool6 != nil {
-		if host, existed := pool6.LookBack(ip); existed {
-			return host, true
-		}
-	}
-
 	if mapping := h.mapping; mapping != nil {
-		if host, existed := h.mapping.Get(ip); existed {
+		if host, existed := mapping.Get(ip); existed {
 			return host, true
 		}
 	}
