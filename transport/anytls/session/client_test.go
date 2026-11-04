@@ -123,10 +123,24 @@ func TestIdleCleanupConcurrentWithRecycle(t *testing.T) {
 	}()
 	wg.Wait()
 
+	// The cleanup is allowed to remove sessions (it keeps minIdleSession of the
+	// ones it judges active), so the count is not deterministic. What this test
+	// asserts is that concurrent Len/Insert/Remove under the lock does not
+	// corrupt the list: the walk above must complete, and the list must still be
+	// readable and consistent afterwards. With -race, an out-of-lock Len() is
+	// reported here.
 	client.idleSessionLock.Lock()
 	length := client.idleSession.Len()
+	iterations := 0
+	it := client.idleSession.Iterate()
+	for it.IsNotEnd() {
+		iterations++
+		it.MoveToNext()
+	}
 	client.idleSessionLock.Unlock()
-	require.Equal(t, inserts, length)
+	require.Equal(t, length, iterations, "list length disagrees with iteration after concurrent mutation")
+	require.LessOrEqual(t, length, inserts)
+	require.GreaterOrEqual(t, length, 0)
 }
 
 func TestCreateSessionAbortsAfterClientClose(t *testing.T) {
