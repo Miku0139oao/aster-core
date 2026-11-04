@@ -11,9 +11,20 @@ import (
 	"golang.org/x/exp/slices"
 )
 
-type contextKey string
+// Context keys are pointer-typed unique values rather than a string kind.
+// Converting a string-kind value into context.Value's `any` parameter makes the
+// compiler box it, which allocates on every lookup — and these are read once per
+// UDP datagram on the TUN/sing path. metacubex/sing's own auth package uses the
+// same pointer-key pattern.
+type (
+	additionsKey struct{}
+	inAddrKey    struct{}
+)
 
-var ctxKeyAdditions = contextKey("Additions")
+var (
+	ctxKeyAdditions = &additionsKey{}
+	ctxKeyInAddr    = &inAddrKey{}
+)
 
 func WithAdditions(ctx context.Context, additions ...inbound.Addition) context.Context {
 	return context.WithValue(ctx, ctxKeyAdditions, additions)
@@ -33,8 +44,6 @@ func getAdditions(ctx context.Context) (additions []inbound.Addition) {
 	}
 	return
 }
-
-var ctxKeyInAddr = contextKey("InAddr")
 
 func WithInAddr(ctx context.Context, inAddr net.Addr) context.Context {
 	return context.WithValue(ctx, ctxKeyInAddr, inAddr)
