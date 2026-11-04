@@ -402,13 +402,24 @@ func (c *serverPacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) 
 	return
 }
 
+// WriteTo sends a length-prefixed datagram in a single write.
+//
+// It used to write the 2-byte prefix and then the payload as two separate
+// Write calls. Over TLS (and QUIC or any framing transport) that is two
+// records, two AEAD seals and two syscalls per datagram. WritePacket above
+// already builds one buffer; do the same here.
 func (c *serverPacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
-	var header [2]byte
-	binary.BigEndian.PutUint16(header[:], uint16(len(p)))
-	if _, err = c.ExtendedConn.Write(header[:]); err != nil {
+	buffer := buf.NewSize(len(p) + 2)
+	defer buffer.Release()
+	buffer.Resize(2, 0) // reserve headroom for the length prefix
+	if _, err = buffer.Write(p); err != nil {
 		return
 	}
-	return c.ExtendedConn.Write(p)
+	binary.BigEndian.PutUint16(buffer.ExtendHeader(2), uint16(len(p)))
+	if err = c.ExtendedConn.WriteBuffer(buffer); err != nil {
+		return
+	}
+	return len(p), nil
 }
 
 func (c *serverPacketConn) ReadPacket(buffer *buf.Buffer) (destination M.Socksaddr, err error) {
