@@ -80,6 +80,13 @@ func (n NetWork) MarshalJSON() ([]byte, error) {
 	return json.Marshal(n.String())
 }
 
+// AppendText writes the JSON string without the intermediate []byte that
+// MarshalJSON allocates. /connections encodes one of these per connection per
+// WebSocket tick, so the allocation shows up in every snapshot.
+func (n NetWork) AppendText(b []byte) ([]byte, error) {
+	return strconv.AppendQuote(b, n.String()), nil
+}
+
 type Type int
 
 func (t Type) String() string {
@@ -184,6 +191,12 @@ func ParseType(t string) (*Type, error) {
 
 func (t Type) MarshalJSON() ([]byte, error) {
 	return json.Marshal(t.String())
+}
+
+// AppendText writes the JSON string without the intermediate []byte. See
+// NetWork.AppendText.
+func (t Type) AppendText(b []byte) ([]byte, error) {
+	return strconv.AppendQuote(b, t.String()), nil
 }
 
 // Metadata is used to store connection address
