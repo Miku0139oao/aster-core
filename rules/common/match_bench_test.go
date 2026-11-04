@@ -239,3 +239,39 @@ func BenchmarkProcessNameWildcardMatch(b *testing.B) {
 		_, _ = rule.Match(miss, helper)
 	}
 }
+
+// GEOSITE used to re-resolve its matcher on every evaluation: strings.Split,
+// parseAttrs and a shared singleflight mutex per rule per connection.
+func BenchmarkGeoSiteMatchCached(b *testing.B) {
+	r, err := NewGEOSITE("cn", "DIRECT")
+	if err != nil {
+		b.Skipf("geosite data unavailable: %v", err)
+	}
+	md := &C.Metadata{Host: "www.example.com"}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		r.Match(md, C.RuleMatchHelper{})
+	}
+}
+
+// A realistic rule list is a chain of GEOSITE rules, so the per-rule cost is
+// multiplied by the number of rules walked before a match.
+func BenchmarkGeoSiteChain20(b *testing.B) {
+	rules := make([]*GEOSITE, 20)
+	for i := range rules {
+		r, err := NewGEOSITE("cn", "DIRECT")
+		if err != nil {
+			b.Skipf("geosite data unavailable: %v", err)
+		}
+		rules[i] = r
+	}
+	md := &C.Metadata{Host: "www.example.com"}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for _, r := range rules {
+			r.Match(md, C.RuleMatchHelper{})
+		}
+	}
+}

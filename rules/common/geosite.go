@@ -2,6 +2,7 @@ package common
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/Miku0139oao/aster-core/component/geodata"
 	_ "github.com/Miku0139oao/aster-core/component/geodata/memconservative"
@@ -16,6 +17,16 @@ type GEOSITE struct {
 	country    string
 	adapter    string
 	recodeSize int
+
+	// matcher caches the resolved domain matcher. Re-resolving it on every
+	// evaluation meant doing strings.Split, parseAttrs and a singleflight mutex
+	// per rule per connection, which both allocated and serialised under load.
+	// The generation guards against a GeoSite database update replacing the
+	// underlying data.
+	matcherMu       sync.Mutex
+	matcher         router.DomainMatcher
+	matcherGen      uint64
+	matcherResolved bool
 }
 
 func (gs *GEOSITE) RuleType() C.RuleType {
@@ -31,11 +42,30 @@ func (gs *GEOSITE) MatchDomain(domain string) bool {
 	if len(domain) == 0 {
 		return false
 	}
-	matcher, err := gs.GetDomainMatcher()
-	if err != nil {
+	matcher, err := gs.cachedDomainMatcher()
+	if err != nil || matcher == nil {
 		return false
 	}
 	return matcher.ApplyDomain(domain)
+}
+
+// cachedDomainMatcher returns the resolved matcher, re-resolving only when the
+// GeoSite data has been replaced since it was cached.
+func (gs *GEOSITE) cachedDomainMatcher() (router.DomainMatcher, error) {
+	gen := geodata.GeoSiteGeneration()
+	gs.matcherMu.Lock()
+	defer gs.matcherMu.Unlock()
+	if gs.matcherResolved && gs.matcherGen == gen {
+		return gs.matcher, nil
+	}
+	matcher, err := gs.GetDomainMatcher()
+	if err != nil {
+		return nil, err
+	}
+	gs.matcher = matcher
+	gs.matcherGen = gen
+	gs.matcherResolved = true
+	return matcher, nil
 }
 
 func (gs *GEOSITE) Adapter() string {
