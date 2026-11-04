@@ -14,6 +14,7 @@ import (
 type packet struct {
 	pc        net.PacketConn
 	lAddr     netip.AddrPort
+	lAddrStd  net.UDPAddr // cached view of lAddr; LocalAddr returns &lAddrStd
 	buf       []byte
 	tunnel    C.Tunnel
 	additions []inbound.Addition
@@ -35,9 +36,22 @@ func (c *packet) WriteBack(b []byte, addr net.Addr) (n int, err error) {
 	return
 }
 
-// LocalAddr returns the source IP/Port of UDP Packet
+// LocalAddr returns the source IP/Port of UDP Packet.
+//
+// The address is built once per packet and cached. It used to call
+// net.UDPAddrFromAddrPort on every call, and the caller chain asks four times
+// per datagram (adapter/inbound/packet.go:13,15 and
+// constant/adapters.go NewUDPNatKeyForPacket), so every datagram allocated
+// four equivalent *net.UDPAddr values.
+//
+// The returned pointer is stable for the lifetime of this packet. All consumers
+// only read the address (metadata.RawSrcAddr is json:"-", the rest go through
+// SetRemoteAddr), and the packet itself is retained by the tunnel until Drop,
+// which is exactly as long as the address is observed. A new packet object is
+// created per datagram in handlePacketConn, so the cache cannot leak across
+// packets.
 func (c *packet) LocalAddr() net.Addr {
-	return net.UDPAddrFromAddrPort(c.lAddr)
+	return &c.lAddrStd
 }
 
 func (c *packet) Drop() {
