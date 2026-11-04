@@ -300,7 +300,6 @@ func (s *Sudoku) dialAndHandshake(ctx context.Context, cfg *sudoku.ProtocolConfi
 					PathRoot:     cfg.HTTPMaskPathRoot,
 					AuthKey:      sudoku.ClientAEADSeed(cfg.Key),
 					Upgrade:      upgrade,
-					Multiplex:    muxMode,
 					DialContext:  s.dialer.DialContext,
 				})
 				if err != nil {
