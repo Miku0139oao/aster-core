@@ -3,6 +3,7 @@ package geodata
 import (
 	"fmt"
 	"strings"
+	"sync/atomic"
 
 	"github.com/Miku0139oao/aster-core/common/singleflight"
 	"github.com/Miku0139oao/aster-core/component/geodata/router"
@@ -14,6 +15,9 @@ var (
 	geoMode        bool
 	geoLoaderName  = "memconservative"
 	geoSiteMatcher = "succinct"
+
+	geoSiteGeneration atomic.Uint64
+	geoIPGeneration   atomic.Uint64
 )
 
 //  geoLoaderName = "standard"
@@ -201,8 +205,18 @@ func LoadGeoIPMatcher(country string) (router.IPMatcher, error) {
 func ClearGeoSiteCache() {
 	loadGeoSiteMatcherListSF.Reset()
 	loadGeoSiteMatcherSF.Reset()
+	geoSiteGeneration.Add(1)
 }
 
 func ClearGeoIPCache() {
 	loadGeoIPMatcherSF.Reset()
+	geoIPGeneration.Add(1)
 }
+
+// GeoSiteGeneration returns a counter that changes whenever the loaded
+// GeoSite data is replaced. Rules cache their resolved matcher and compare
+// this value to know when to re-resolve.
+func GeoSiteGeneration() uint64 { return geoSiteGeneration.Load() }
+
+// GeoIPGeneration is the GeoIP counterpart of GeoSiteGeneration.
+func GeoIPGeneration() uint64 { return geoIPGeneration.Load() }

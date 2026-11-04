@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/netip"
 	"strings"
+	"sync"
 
 	"github.com/Miku0139oao/aster-core/component/geodata"
 	"github.com/Miku0139oao/aster-core/component/geodata/router"
@@ -21,6 +22,12 @@ type GEOIP struct {
 	adapter     string
 	noResolveIP bool
 	isSourceIP  bool
+
+	// matcher caches the resolved IP matcher; see the note on GEOSITE.
+	matcherMu       sync.Mutex
+	matcher         router.IPMatcher
+	matcherGen      uint64
+	matcherResolved bool
 }
 
 var _ C.Rule = (*GEOIP)(nil)
@@ -179,10 +186,19 @@ func (g *GEOIP) GetIPMatcher() (router.IPMatcher, error) {
 }
 
 func (g *GEOIP) getIPMatcher() (router.IPMatcher, error) {
+	gen := geodata.GeoIPGeneration()
+	g.matcherMu.Lock()
+	defer g.matcherMu.Unlock()
+	if g.matcherResolved && g.matcherGen == gen {
+		return g.matcher, nil
+	}
 	geoIPMatcher, err := geodata.LoadGeoIPMatcher(g.country)
 	if err != nil {
 		return nil, fmt.Errorf("[GeoIP] %w", err)
 	}
+	g.matcher = geoIPMatcher
+	g.matcherGen = gen
+	g.matcherResolved = true
 	return geoIPMatcher, nil
 }
 
