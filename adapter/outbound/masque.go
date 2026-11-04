@@ -236,7 +236,7 @@ func NewMasque(option MasqueOption) (*Masque, error) {
 		if len(prefixes) == 0 {
 			return nil, errors.New("missing local address")
 		}
-		outbound.tunDevice, err = newIPStack(option.IPStack, prefixes, uint32(mtu))
+		outbound.tunDevice, err = ipStackFactory(option.IPStack, prefixes, uint32(mtu))
 		if err != nil {
 			return nil, fmt.Errorf("create device: %w", err)
 		}
@@ -252,6 +252,12 @@ func NewMasque(option MasqueOption) (*Masque, error) {
 	if option.RemoteDnsResolve && len(option.Dns) > 0 {
 		nss, err := dns.ParseNameServer(option.Dns)
 		if err != nil {
+			// The stack was already built above; the caller drops the outbound
+			// on this error path, so nothing else would ever close it.
+			if outbound.tunDevice != nil {
+				_ = outbound.tunDevice.Close()
+			}
+			cancel()
 			return nil, err
 		}
 		for i := range nss {

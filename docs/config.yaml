@@ -1311,7 +1311,7 @@ proxies: # socks5
     # persistent-keepalive: 0
     # ip-stack:
     #   mode: auto # 可选：auto, gvisor, mips；auto 在编译了 gVisor 时使用 gVisor，否则使用 mihomo IP stack (MIPS)
-    #   congestion-controller: cubic # TCP 拥塞控制算法：cubic, reno, bbr；gVisor 会忽略该项
+    #   congestion-controller: cubic # TCP 拥塞控制算法：cubic, reno, bbr, bbr3；gVisor 会忽略该项
     # 一个出站代理的标识。当值不为空时，将使用指定的 proxy 发出连接
     # dialer-proxy: "ss1"
     # remote-dns-resolve: true # 强制 dns 远程解析，默认值为 false
@@ -1437,7 +1437,7 @@ proxies: # socks5
     udp: true
     # ip-stack:
     #   mode: auto # 可选：auto, gvisor, mips；auto 在编译了 gVisor 时使用 gVisor，否则使用 mihomo IP stack (MIPS)
-    #   congestion-controller: cubic # TCP 拥塞控制算法：cubic, reno, bbr；gVisor 会忽略该项
+    #   congestion-controller: cubic # TCP 拥塞控制算法：cubic, reno, bbr, bbr3；gVisor 会忽略该项
     # 一个出站代理的标识。当值不为空时，将使用指定的 proxy 发出连接
     # dialer-proxy: "ss1"
     # remote-dns-resolve: true # 强制 dns 远程解析，默认值为 false
@@ -1462,7 +1462,7 @@ proxies: # socks5
     # handshake-timeout: 30 # 单位为秒；配置后握手时不受外层连接超时影响；默认值为 0，表示仅使用外层连接超时
     # ip-stack:
     #   mode: auto # 可选：auto, gvisor, mips；auto 在编译了 gVisor 时使用 gVisor，否则使用 mihomo IP stack (MIPS)
-    #   congestion-controller: cubic # TCP 拥塞控制算法：cubic, reno, bbr；gVisor 会忽略该项
+    #   congestion-controller: cubic # TCP 拥塞控制算法：cubic, reno, bbr, bbr3；gVisor 会忽略该项
 
   # masque-h3-l4proxy
   - name: "masque-h3-l4proxy"
@@ -1499,7 +1499,7 @@ proxies: # socks5
     # handshake-timeout: 30 # 单位为秒；配置后握手时不受外层连接超时影响；默认值为 0，表示仅使用外层连接超时
     # ip-stack:
     #   mode: auto # 可选：auto, gvisor, mips；auto 在编译了 gVisor 时使用 gVisor，否则使用 mihomo IP stack (MIPS)
-    #   congestion-controller: cubic # TCP 拥塞控制算法：cubic, reno, bbr；gVisor 会忽略该项
+    #   congestion-controller: cubic # TCP 拥塞控制算法：cubic, reno, bbr, bbr3；gVisor 会忽略该项
 
   # tuic
   - name: tuic

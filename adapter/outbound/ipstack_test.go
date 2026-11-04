@@ -74,6 +74,7 @@ func TestIPStackOptionValidate(t *testing.T) {
 		{Mode: ipStackMips, CongestionController: "cubic"},
 		{Mode: ipStackMips, CongestionController: "reno"},
 		{Mode: ipStackMips, CongestionController: "bbr"},
+		{Mode: ipStackMips, CongestionController: "bbr3"},
 	}
 	for _, option := range valid {
 		if err := option.validate(); err != nil {
@@ -86,7 +87,7 @@ func TestIPStackOptionValidate(t *testing.T) {
 		wantSub string
 	}{
 		{IPStackOption{Mode: "wireguard"}, "invalid IP stack mode"},
-		{IPStackOption{Mode: ipStackMips, CongestionController: "bbr3"}, "invalid IP stack congestion controller"},
+		{IPStackOption{Mode: ipStackMips, CongestionController: "cubicx"}, "invalid IP stack congestion controller"},
 	}
 	for _, tc := range invalid {
 		err := tc.option.validate()
@@ -308,7 +309,7 @@ func TestNewOpenVPNRejectsInvalidIPStack(t *testing.T) {
 		Name:    "openvpn",
 		Server:  "vpn.example.com",
 		Port:    1194,
-		IPStack: IPStackOption{Mode: "mips", CongestionController: "bbr3"},
+		IPStack: IPStackOption{Mode: "mips", CongestionController: "cubicx"},
 	})
 	if err == nil {
 		t.Fatal("NewOpenVPN accepted an invalid ip-stack congestion controller")
@@ -389,4 +390,63 @@ func TestNewWireguardDeviceWrapsMips(t *testing.T) {
 	if err := device.Close(); err != nil {
 		t.Fatalf("second Close failed: %v", err)
 	}
+}
+
+// TestNewMasqueClosesIPStackWhenDnsParseFails covers the error path after the
+// stack is built: NewMasque used to return without closing it, and the caller
+// drops the outbound on error, so nothing ever reclaimed the device.
+func TestNewMasqueClosesIPStackWhenDnsParseFails(t *testing.T) {
+	parseNameServer := dns.ParseNameServer
+	dns.ParseNameServer = func([]string) ([]dns.NameServer, error) {
+		return nil, errors.New("name server parse failed")
+	}
+	defer func() { dns.ParseNameServer = parseNameServer }()
+
+	built := 0
+	closed := 0
+	original := ipStackFactory
+	ipStackFactory = func(option IPStackOption, localPrefixes []netip.Prefix, mtu uint32) (ipStack, error) {
+		built++
+		inner, err := original(option, localPrefixes, mtu)
+		if err != nil {
+			return nil, err
+		}
+		return &closeCountingStack{ipStack: inner, closed: &closed}, nil
+	}
+	defer func() { ipStackFactory = original }()
+
+	_, err := NewMasque(MasqueOption{
+		Name:             "masque",
+		Server:           "162.159.198.1",
+		Port:             443,
+		PrivateKey:       "MHcCAQEEILI1eOtnbEIh89Fj4yNDuFR6UjayCKI3NdLl3DhetimWoAoGCCqGSM49AwEHoUQDQgAEgyXrE8v+hHsHy3ewSb3WcRjYgCrM9T9hiE0Uv6k2DZ1+4kefrDT9v1Q/8wdRigTf6t6gGNUV8W+IUMdrfUt+9g==",
+		PublicKey:        "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEIaU7MToJm9NKp8YfGxR6r+/h4mcG7SxI8tsW8OR1A5tv/zCzVbCRRh2t87/kxnP6lAy0lkr7qYwu+ox+k3dr6w==",
+		Ip:               "172.16.0.2",
+		Network:          "h3",
+		IPStack:          IPStackOption{Mode: "mips"},
+		RemoteDnsResolve: true,
+		Dns:              []string{"1.1.1.1"},
+	})
+	if err == nil {
+		t.Fatal("NewMasque accepted an unparsable dns name server")
+	}
+	if built == 0 {
+		t.Fatal("expected the stack to have been built before the dns parse failed")
+	}
+	if closed == 0 {
+		t.Fatal("NewMasque leaked the ip stack on the dns parse error path")
+	}
+}
+
+type closeCountingStack struct {
+	ipStack
+	closed *int
+}
+
+func (s *closeCountingStack) Close() error {
+	*s.closed++
+	// Do not call through: the real mipstack device is only safe to close after
+	// Start, and this test fails before that point. Counting the call is what
+	// the regression is about.
+	return nil
 }

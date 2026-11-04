@@ -51,10 +51,11 @@ func (o IPStackOption) validate() error {
 		return fmt.Errorf("invalid IP stack mode %q; expected auto, gvisor, or mips", o.Mode)
 	}
 	switch o.CongestionController {
-	case "", mipstack.CongestionControlCUBIC, mipstack.CongestionControlReno, mipstack.CongestionControlBBR:
+	case "", mipstack.CongestionControlCUBIC, mipstack.CongestionControlReno,
+		mipstack.CongestionControlBBR, mipstack.CongestionControlBBR3:
 		return nil
 	default:
-		return fmt.Errorf("invalid IP stack congestion controller %q; expected cubic, reno, or bbr", o.CongestionController)
+		return fmt.Errorf("invalid IP stack congestion controller %q; expected cubic, reno, bbr, or bbr3", o.CongestionController)
 	}
 }
 
