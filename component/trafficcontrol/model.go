@@ -393,9 +393,15 @@ func CanonicalRule(ruleType, payload, target string) RuleSelector {
 	return RuleSelector{Type: ruleType, Payload: payload, Target: target, Fingerprint: hex.EncodeToString(sum[:])}
 }
 
+// canonicalRuleTypeReplacer is package-level so the replacer trie is built once
+// at init instead of on every canonicalRuleType call. strings.Replacer is
+// immutable and safe for concurrent use. This runs per session open, which is
+// per connection once traffic control has a rule policy.
+var canonicalRuleTypeReplacer = strings.NewReplacer("-", "", "_", "", " ", "")
+
 func canonicalRuleType(value string) string {
 	value = strings.ToUpper(strings.TrimSpace(value))
-	return strings.NewReplacer("-", "", "_", "", " ", "").Replace(value)
+	return canonicalRuleTypeReplacer.Replace(value)
 }
 
 func canonicalPayload(ruleType, payload string) string {

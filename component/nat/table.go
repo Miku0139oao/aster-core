@@ -10,11 +10,18 @@ import (
 	"github.com/Miku0139oao/aster-core/constant/features"
 )
 
-const natHitSlots = 64
+// natHitSlots is the number of last-hit cache slots. Each slot is sticky: once
+// a live flow occupies it, another flow mapping to the same slot never replaces
+// it, so an undersized table degrades to a full xsync lookup on every packet
+// for every other flow. 64 slots thrashed badly with a few hundred concurrent
+// UDP flows; 4096 keeps the common case in the one-entry fast path.
+// The slot array is a heap slice (32 KiB) rather than an inline array so Table
+// stays small; it is allocated once when the table is created.
+const natHitSlots = 4096
 
 type Table struct {
 	mapping    xsync.Map[C.UDPNatKey, *entry]
-	hits       [natHitSlots]atomic.Pointer[lastHit]
+	hits       []atomic.Pointer[lastHit]
 	maxEntries int64
 	size       atomic.Int64
 	rejected   atomic.Uint64
@@ -187,5 +194,5 @@ func New(limit ...int) *Table {
 	if len(limit) > 0 && limit[0] > 0 {
 		maxEntries = int64(limit[0])
 	}
-	return &Table{maxEntries: maxEntries}
+	return &Table{maxEntries: maxEntries, hits: make([]atomic.Pointer[lastHit], natHitSlots)}
 }
