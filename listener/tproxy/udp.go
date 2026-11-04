@@ -108,6 +108,7 @@ func handlePacketConn(pc net.PacketConn, tunnel C.Tunnel, buf []byte, lAddr, rAd
 	pkt := &packet{
 		pc:        pc,
 		lAddr:     lAddr,
+		lAddrStd:  *net.UDPAddrFromAddrPort(lAddr),
 		buf:       buf,
 		tunnel:    tunnel,
 		additions: additions,
