@@ -2,6 +2,8 @@ package packet
 
 import (
 	"net"
+	"net/netip"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -77,6 +79,38 @@ func TestEnhanceUDPConnWaitReadFrom(t *testing.T) {
 	}
 	if addr == nil {
 		t.Fatal("nil addr")
+	}
+}
+
+// TestUDPAddrWithIPShape pins the observable shape of the merged address
+// object. net.UDPAddrFromAddrPort returns len==cap IP slices and a zero Zone,
+// and callers are entitled to rely on that; keep the merged builder identical.
+func TestUDPAddrWithIPShape(t *testing.T) {
+	want4 := net.UDPAddrFromAddrPort(netip.MustParseAddrPort("192.0.2.1:12345"))
+	got4 := (&udpAddrWithIP{}).setIPv4([4]byte{192, 0, 2, 1}, 12345)
+	if !reflect.DeepEqual(want4, got4) {
+		t.Fatalf("ipv4 addr = %#v, want %#v", got4, want4)
+	}
+	if len(got4.IP) != 4 || cap(got4.IP) != 4 {
+		t.Fatalf("ipv4 IP len/cap = %d/%d, want 4/4", len(got4.IP), cap(got4.IP))
+	}
+
+	want6 := net.UDPAddrFromAddrPort(netip.MustParseAddrPort("[2001:db8::1]:443"))
+	var ip6 [16]byte
+	copy(ip6[:], want6.IP)
+	got6 := (&udpAddrWithIP{}).setIPv6(ip6, 443, "")
+	if !reflect.DeepEqual(want6, got6) {
+		t.Fatalf("ipv6 addr = %#v, want %#v", got6, want6)
+	}
+	if len(got6.IP) != 16 || cap(got6.IP) != 16 {
+		t.Fatalf("ipv6 IP len/cap = %d/%d, want 16/16", len(got6.IP), cap(got6.IP))
+	}
+
+	// A later call on the same object must not mutate an earlier address.
+	a := (&udpAddrWithIP{}).setIPv4([4]byte{192, 0, 2, 1}, 12345)
+	b := (&udpAddrWithIP{}).setIPv4([4]byte{198, 51, 100, 7}, 9999)
+	if !reflect.DeepEqual(a, want4) || !reflect.DeepEqual(b, net.UDPAddrFromAddrPort(netip.MustParseAddrPort("198.51.100.7:9999"))) {
+		t.Fatalf("addresses bled into each other: a=%#v b=%#v", a, b)
 	}
 }
 
