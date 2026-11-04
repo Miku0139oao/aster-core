@@ -12,6 +12,36 @@ type WaitReadFrom interface {
 	WaitReadFrom() (data []byte, put func(), addr net.Addr, err error)
 }
 
+// udpAddrWithIP keeps a datagram's source address and its IP bytes in one
+// allocation. Building net.UDPAddr{IP: from.Addr[:]} separately allocates the
+// address and the 4- or 16-byte slice backing it; this is on the per-datagram
+// receive path of every *net.UDPConn-backed UDP inbound.
+//
+// A fresh object is still allocated per datagram on purpose:
+// listener/socks documents that callers may retain the address past put(), so
+// pooling it would hand out mutated memory.
+type udpAddrWithIP struct {
+	addr net.UDPAddr
+	ip   [net.IPv6len]byte
+}
+
+func (u *udpAddrWithIP) setIPv4(ip [4]byte, port int) *net.UDPAddr {
+	copy(u.ip[:], ip[:])
+	// Three-index slice keeps len==cap==4, matching net.UDPAddrFromAddrPort.
+	u.addr.IP = u.ip[:4:4]
+	u.addr.Port = port
+	u.addr.Zone = ""
+	return &u.addr
+}
+
+func (u *udpAddrWithIP) setIPv6(ip [16]byte, port int, zone string) *net.UDPAddr {
+	copy(u.ip[:], ip[:])
+	u.addr.IP = u.ip[:net.IPv6len:net.IPv6len]
+	u.addr.Port = port
+	u.addr.Zone = zone
+	return &u.addr
+}
+
 type EnhancePacketConn interface {
 	net.PacketConn
 	WaitReadFrom
