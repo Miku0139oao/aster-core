@@ -1,10 +1,13 @@
 package config
 
 import (
+	"fmt"
 	"net/netip"
+	"strings"
 
 	C "github.com/Miku0139oao/aster-core/constant"
 
+	"github.com/metacubex/mipstack"
 	"go4.org/netipx"
 	"golang.org/x/exp/slices"
 )
@@ -81,6 +84,21 @@ type Tun struct {
 
 	// gvisor special config (Non-public option; do not include it in the document.)
 	ProcessorsPerChannel int `yaml:"processors-per-channel" json:"processors-per-channel,omitempty"`
+}
+
+// ValidateTunCongestionController mirrors sing-tun's mips validation before any
+// live TUN is replaced. Other stacks ignore this option. Names are case
+// insensitive, but whitespace is significant, and an empty value keeps the
+// stack's default congestion control.
+func ValidateTunCongestionController(stack C.TUNStack, name string) error {
+	if stack != C.TunMips || name == "" {
+		return nil
+	}
+	available := mipstack.AvailableCongestionControls()
+	if slices.Contains(available, strings.ToLower(name)) {
+		return nil
+	}
+	return fmt.Errorf("invalid tun congestion-controller %q, expected \"\" or one of: %s", name, strings.Join(available, ", "))
 }
 
 func (t Tun) Clone() Tun {

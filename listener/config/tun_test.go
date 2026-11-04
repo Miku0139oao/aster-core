@@ -2,10 +2,43 @@ package config
 
 import (
 	"net/netip"
+	"strings"
 	"testing"
 
 	C "github.com/Miku0139oao/aster-core/constant"
+
+	"github.com/metacubex/mipstack"
 )
+
+func TestValidateTunCongestionController(t *testing.T) {
+	accepted := []string{""}
+	for _, name := range mipstack.AvailableCongestionControls() {
+		accepted = append(accepted, name, strings.ToUpper(name))
+	}
+	for _, stack := range []C.TUNStack{C.TunMips, C.TunGvisor, C.TunSystem, C.TunMixed} {
+		t.Run(stack.String(), func(t *testing.T) {
+			for _, name := range accepted {
+				if err := ValidateTunCongestionController(stack, name); err != nil {
+					t.Errorf("rejected %q: %v", name, err)
+				}
+			}
+			for _, name := range []string{"not-a-controller", " cubic", "cubic ", "\tbbr\n", " "} {
+				err := ValidateTunCongestionController(stack, name)
+				if stack != C.TunMips {
+					if err != nil {
+						t.Errorf("inactive option %q must be ignored: %v", name, err)
+					}
+					continue
+				}
+				if err == nil {
+					t.Errorf("accepted invalid mips control %q", name)
+				} else if !strings.Contains(err.Error(), "invalid tun congestion-controller") || !strings.Contains(err.Error(), "bbr3") {
+					t.Errorf("error must identify the option and list available controls: %v", err)
+				}
+			}
+		})
+	}
+}
 
 func TestTunCloneDetachesAndSortCanonicalizesAllSlices(t *testing.T) {
 	original := Tun{

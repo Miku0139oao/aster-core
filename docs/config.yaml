@@ -161,6 +161,7 @@ tun:
   # strict-route: true # 将所有连接路由到 tun 来防止泄漏，但你的设备将无法其他设备被访问
   # disable-icmp-forwarding: true # 禁用 ICMP 转发，防止某些情况下的 ICMP 环回问题，ping 将不会显示真实的延迟
   # congestion-controller: cubic # TCP 拥塞控制算法: cubic, reno, bbr, bbr3；仅在 stack 为 mips 时生效
+  # mips 下会在重启接口前验证名称；支持大小写，不接受首尾空格
   route-address-set: # 将指定规则集中的目标 IP CIDR 规则添加到防火墙, 不匹配的流量将绕过路由, 仅支持 Linux，且需要 nftables，`auto-route` 和 `auto-redirect` 已启用。
     - ruleset-1
     - ruleset-2
@@ -2788,6 +2789,7 @@ listeners:
     # - com.android.captiveportallogin
     # disable-icmp-forwarding: true # 禁用 ICMP 转发，防止某些情况下的 ICMP 环回问题，ping 将不会显示真实的延迟
     # congestion-controller: cubic # TCP 拥塞控制算法: cubic, reno, bbr, bbr3；仅在 stack 为 mips 时生效
+    # mips 下会在重启接口前验证名称；支持大小写，不接受首尾空格
 # 入口配置与 Listener 等价，传入流量将和 socks,mixed 等入口一样按照 mode 所指定的方式进行匹配处理
 # shadowsocks,vmess 入口配置（传入流量将和 socks,mixed 等入口一样按照 mode 所指定的方式进行匹配处理）
 # ss-config: ss://2022-blake3-aes-256-gcm:vlmpIPSyHH6f4S8WVPdRIHIlzmB+GIRfoH3aNJ/t9Gg=@:23456

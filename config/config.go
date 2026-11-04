@@ -341,10 +341,8 @@ type RawTun struct {
 	UDPTimeout                            int64          `yaml:"udp-timeout" json:"udp-timeout,omitempty"`
 	ICMPTimeout                           int64          `yaml:"icmp-timeout" json:"icmp-timeout,omitempty"`
 	DisableICMPForwarding                 bool           `yaml:"disable-icmp-forwarding" json:"disable-icmp-forwarding,omitempty"`
-	// congestion-controller only affects the mips stack. Values are validated by
-	// sing-tun when the stack is created (mipstack.AvailableCongestionControls),
-	// matching upstream mihomo; an unknown name fails TUN startup with
-	// "invalid TCP congestion control" instead of being silently ignored.
+	// congestion-controller only affects the mips stack. Validate against
+	// mipstack's registered controls before replacing a live TUN listener.
 	CongestionController string `yaml:"congestion-controller" json:"congestion-controller,omitempty"`
 	FileDescriptor       int    `yaml:"file-descriptor" json:"file-descriptor"`
 
@@ -1869,6 +1867,9 @@ func ValidateTunProcessorsPerChannel(n int) error {
 
 func parseTun(rawTun RawTun, dns *DNS, general *General) error {
 	if err := ValidateTunDNSMode(rawTun.DNSMode); err != nil {
+		return err
+	}
+	if err := LC.ValidateTunCongestionController(rawTun.Stack, rawTun.CongestionController); err != nil {
 		return err
 	}
 	if err := ValidateTunProcessorsPerChannel(rawTun.ProcessorsPerChannel); err != nil {

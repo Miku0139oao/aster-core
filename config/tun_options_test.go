@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -70,6 +71,49 @@ func TestParseTunCongestionControllerAndProcessorsPerChannel(t *testing.T) {
 	}
 	if general.Tun.ProcessorsPerChannel != 3 {
 		t.Fatalf("processors-per-channel was not propagated: %d", general.Tun.ProcessorsPerChannel)
+	}
+}
+
+func TestParseTunCongestionControllerValidation(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		for _, tc := range []struct {
+			stack   string
+			control string
+			wantErr bool
+		}{
+			{stack: "mips", control: ""},
+			{stack: "mips", control: "BbR3"},
+			{stack: "mips", control: "not-a-controller", wantErr: true},
+			{stack: "mips", control: " cubic ", wantErr: true},
+			{stack: "gvisor", control: "not-a-controller"},
+			{stack: "system", control: "not-a-controller"},
+			{stack: "mixed", control: "not-a-controller"},
+		} {
+			t.Run(fmt.Sprintf("%s/%q/enabled=%t", tc.stack, tc.control, enabled), func(t *testing.T) {
+				body := fmt.Sprintf("tun:\n  enable: %t\n  stack: %s\n  congestion-controller: %q\n", enabled, tc.stack, tc.control)
+				raw, err := UnmarshalRawConfig([]byte(body))
+				if err != nil {
+					t.Fatal(err)
+				}
+				general := &General{}
+				err = parseTun(raw.Tun, &DNS{}, general)
+				if tc.wantErr {
+					if err == nil || !strings.Contains(err.Error(), "invalid tun congestion-controller") {
+						t.Fatalf("expected congestion-controller validation error, got %v", err)
+					}
+					if general.Tun.CongestionController != "" || general.Tun.Enable {
+						t.Fatal("invalid settings leaked into the parsed TUN config")
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if general.Tun.CongestionController != tc.control || general.Tun.Enable != enabled {
+					t.Fatalf("TUN config was changed during validation: %+v", general.Tun)
+				}
+			})
+		}
 	}
 }
 

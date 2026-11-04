@@ -105,6 +105,9 @@ type Tun struct {
 }
 
 func NewTun(options *TunOption) (*Tun, error) {
+	if err := LC.ValidateTunCongestionController(options.Stack, options.CongestionController); err != nil {
+		return nil, err
+	}
 	maxEntries, err := kerneldirect.NormalizeMaxEntries(options.KernelDirectMaxEntries)
 	if err != nil {
 		return nil, err

@@ -440,6 +440,9 @@ func patchConfigs(w http.ResponseWriter, r *http.Request) {
 			if err := config.ValidateTunDNSMode(merged.DNSMode); err != nil {
 				return LC.Tun{}, &tunPatchValidationError{err: err}
 			}
+			if err := LC.ValidateTunCongestionController(merged.Stack, merged.CongestionController); err != nil {
+				return LC.Tun{}, &tunPatchValidationError{err: err}
+			}
 			if err := config.ValidateTunProcessorsPerChannel(merged.ProcessorsPerChannel); err != nil {
 				return LC.Tun{}, &tunPatchValidationError{err: err}
 			}

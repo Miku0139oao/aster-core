@@ -181,6 +181,9 @@ func closeAllocatedListenerOnErr(allocated *Listener, err error) *Listener {
 }
 
 func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Listener, err error) {
+	if err := LC.ValidateTunCongestionController(options.Stack, options.CongestionController); err != nil {
+		return nil, err
+	}
 	if len(additions) == 0 {
 		additions = []inbound.Addition{
 			inbound.WithInName("DEFAULT-TUN"),
