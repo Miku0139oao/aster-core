@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Miku0139oao/aster-core/component/ca"
+
 	"github.com/metacubex/sing/common/bufio"
 	M "github.com/metacubex/sing/common/metadata"
 )
