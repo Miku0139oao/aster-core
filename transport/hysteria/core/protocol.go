@@ -1,7 +1,6 @@
 package core
 
 import (
-	"bytes"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -265,47 +264,76 @@ func (m udpMessage) Pack() []byte {
 	return data
 }
 
+// Unpack parses a datagram in place. It used to run bytes.Reader plus nine
+// binary.Read calls, each of which allocates a temporary for the reflected
+// value; that is the per-datagram cost on the hysteria v1 UDP receive path.
+//
+// The wire layout is unchanged, and so is the error behaviour, down to the
+// exact EOF reported for each truncation point (binary.Read reports io.EOF
+// when its field starts at end-of-input but ErrUnexpectedEOF when only part of
+// the field is present; io.ReadFull reports io.EOF when the length is zero and
+// ErrUnexpectedEOF otherwise). TestUDPMessageUnpackMatchesReference differentials
+// every truncation and mutation against the previous implementation, so this
+// equivalence is enforced rather than asserted.
 func (m *udpMessage) Unpack(data []byte) error {
-	reader := bytes.NewReader(data)
-	err := binary.Read(reader, binary.BigEndian, &m.SessionID)
-	if err != nil {
-		return err
+	if len(data) < 4 {
+		return readFieldEOF(len(data), 4)
 	}
-	var hostLen uint16
-	err = binary.Read(reader, binary.BigEndian, &hostLen)
-	if err != nil {
-		return err
+	m.SessionID = binary.BigEndian.Uint32(data[0:4])
+	if len(data) < 6 {
+		return readFieldEOF(len(data)-4, 2)
 	}
-	hostBytes := make([]byte, hostLen)
-	_, err = io.ReadFull(reader, hostBytes)
-	if err != nil {
-		return err
+	hostLen := int(binary.BigEndian.Uint16(data[4:6]))
+	offset := 6
+	if remaining := len(data) - offset; remaining < hostLen {
+		// io.ReadFull over a zero-length host returns nil, matching this branch.
+		return readFieldEOF(remaining, hostLen)
 	}
-	m.Host = string(hostBytes)
-	err = binary.Read(reader, binary.BigEndian, &m.Port)
-	if err != nil {
-		return err
+	// Converting a sub-slice of the input is a copy, exactly as string(hostBytes)
+	// was before; the bytes do not alias the caller's buffer.
+	m.Host = string(data[offset : offset+hostLen])
+	offset += hostLen
+	if len(data)-offset < 2 {
+		return readFieldEOF(len(data)-offset, 2)
 	}
-	err = binary.Read(reader, binary.BigEndian, &m.MsgID)
-	if err != nil {
-		return err
+	m.Port = binary.BigEndian.Uint16(data[offset : offset+2])
+	offset += 2
+	if len(data)-offset < 2 {
+		return readFieldEOF(len(data)-offset, 2)
 	}
-	err = binary.Read(reader, binary.BigEndian, &m.FragID)
-	if err != nil {
-		return err
+	m.MsgID = binary.BigEndian.Uint16(data[offset : offset+2])
+	offset += 2
+	if len(data)-offset < 1 {
+		return readFieldEOF(0, 1)
 	}
-	err = binary.Read(reader, binary.BigEndian, &m.FragCount)
-	if err != nil {
-		return err
+	m.FragID = data[offset]
+	offset++
+	if len(data)-offset < 1 {
+		return readFieldEOF(0, 1)
 	}
-	var dataLen uint16
-	err = binary.Read(reader, binary.BigEndian, &dataLen)
-	if err != nil {
-		return err
+	m.FragCount = data[offset]
+	offset++
+	if len(data)-offset < 2 {
+		return readFieldEOF(len(data)-offset, 2)
 	}
-	if reader.Len() != int(dataLen) {
+	dataLen := int(binary.BigEndian.Uint16(data[offset : offset+2]))
+	offset += 2
+	if len(data)-offset != dataLen {
 		return errors.New("invalid data length")
 	}
-	m.Data = data[len(data)-reader.Len():]
+	m.Data = data[offset:]
 	return nil
+}
+
+// readFieldEOF reproduces the error binary.Read / io.ReadFull return when a
+// field of want bytes starts with have bytes left: io.EOF when nothing of the
+// field is present, io.ErrUnexpectedEOF when it is partially present.
+func readFieldEOF(have, want int) error {
+	if have >= want {
+		return nil
+	}
+	if have == 0 {
+		return io.EOF
+	}
+	return io.ErrUnexpectedEOF
 }

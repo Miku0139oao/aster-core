@@ -3,6 +3,7 @@ package nat
 import (
 	"net"
 	"net/netip"
+	"strconv"
 	"sync"
 	"testing"
 
@@ -113,6 +114,44 @@ func BenchmarkTableExistingFlow64(b *testing.B) {
 		if !loaded || !admitted || got != sender {
 			b.Fatal("existing NAT flow was not found")
 		}
+	}
+}
+
+// BenchmarkTableExistingFlowK sweeps concurrent flow counts. The last-hit
+// cache is sticky per slot, so above natHitSlots flows every extra flow pays a
+// full xsync lookup on each packet. This is the regime that matters for a real
+// UDP association table; the fixed 64-flow benchmark cannot see it.
+func BenchmarkTableExistingFlowK(b *testing.B) {
+	for _, flows := range []int{32, 256, 1024} {
+		b.Run(strconv.Itoa(flows), func(b *testing.B) {
+			table := New()
+			sender := &benchmarkPacketSender{}
+			maker := func() C.PacketSender { return sender }
+			keys := make([]C.UDPNatKey, flows)
+			for i := range keys {
+				// Realistic ephemeral ports, unlike sequential 10000+i which can
+				// alias the low bits that select a slot.
+				keys[i] = C.UDPNatKey{AddrPort: netip.AddrPortFrom(
+					netip.AddrFrom4([4]byte{192, 0, 2, 1}), uint16(32768+(i*7919)%28232))}
+				if _, loaded, admitted := table.GetOrCreate(keys[i], maker); loaded || !admitted {
+					b.Fatal("failed to create NAT flow")
+				}
+			}
+			for i := range keys {
+				if _, loaded, admitted := table.GetOrCreate(keys[i], maker); !loaded || !admitted {
+					b.Fatal("failed to prime NAT last-hit cache")
+				}
+			}
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				got, loaded, admitted := table.GetOrCreate(keys[i%flows], maker)
+				if !loaded || !admitted || got != sender {
+					b.Fatal("existing NAT flow was not found")
+				}
+			}
+		})
 	}
 }
 

@@ -34,15 +34,13 @@ func (s *udpWaitSlot) rawRead(fd uintptr) (done bool) {
 	if readFrom != nil {
 		switch from := readFrom.(type) {
 		case *syscall.SockaddrInet4:
-			ip := from.Addr // copy from.Addr; ip escapes, so this line allocates 4 bytes
-			s.addr = &net.UDPAddr{IP: ip[:], Port: from.Port}
+			s.addr = (&udpAddrWithIP{}).setIPv4(from.Addr, from.Port)
 		case *syscall.SockaddrInet6:
-			ip := from.Addr // copy from.Addr; ip escapes, so this line allocates 16 bytes
 			zone := ""
 			if from.ZoneId != 0 {
 				zone = strconv.FormatInt(int64(from.ZoneId), 10)
 			}
-			s.addr = &net.UDPAddr{IP: ip[:], Port: from.Port, Zone: zone}
+			s.addr = (&udpAddrWithIP{}).setIPv6(from.Addr, from.Port, zone)
 		}
 	}
 	return true

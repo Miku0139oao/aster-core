@@ -141,6 +141,13 @@ func (i *Int64) MarshalJSON() ([]byte, error) {
 	return json.Marshal(i.Load())
 }
 
+// AppendText writes the integer without the intermediate []byte MarshalJSON
+// allocates. TrackerInfo serialises two of these per connection per
+// /connections snapshot.
+func (i *Int64) AppendText(b []byte) ([]byte, error) {
+	return strconv.AppendInt(b, i.Load(), 10), nil
+}
+
 func (i *Int64) UnmarshalJSON(b []byte) error {
 	var v int64
 	if err := json.Unmarshal(b, &v); err != nil {
@@ -219,6 +226,12 @@ func NewUint64(val uint64) (i Uint64) {
 
 func (i *Uint64) MarshalJSON() ([]byte, error) {
 	return json.Marshal(i.Load())
+}
+
+// AppendText writes the integer without the intermediate []byte. See
+// Int64.AppendText.
+func (i *Uint64) AppendText(b []byte) ([]byte, error) {
+	return strconv.AppendUint(b, i.Load(), 10), nil
 }
 
 func (i *Uint64) UnmarshalJSON(b []byte) error {

@@ -2,6 +2,7 @@ package constant
 
 import (
 	"errors"
+	"strconv"
 	"strings"
 )
 
@@ -34,6 +35,14 @@ func (e *DNSMode) UnmarshalText(data []byte) error {
 // MarshalText serialize EnhancedMode
 func (e DNSMode) MarshalText() ([]byte, error) {
 	return []byte(e.String()), nil
+}
+
+// AppendText is the allocation-free counterpart of the TextMarshaler path
+// encoding/json uses for this field once per connection per snapshot. It must
+// emit exactly what json.Marshal of the value emits, which for a TextMarshaler
+// is the quoted text; TestAppendTextMatchesMarshalJSON enforces that.
+func (e DNSMode) AppendText(b []byte) ([]byte, error) {
+	return strconv.AppendQuote(b, e.String()), nil
 }
 
 func (e DNSMode) String() string {
