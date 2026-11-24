@@ -110,10 +110,10 @@ func NewConn(conn net.Conn, tlsConn net.Conn, userUUID uuid.UUID) (*Conn, error)
 		}
 	}
 
-	if i, ok := t.FieldByName("input"); ok {
+	if i, ok := t.FieldByName("input"); ok && i.Type.Kind() == reflect.Ptr {
 		c.input = (*bytes.Reader)(unsafe.Add(p, i.Offset))
 	}
-	if r, ok := t.FieldByName("rawInput"); ok {
+	if r, ok := t.FieldByName("rawInput"); ok && r.Type.Kind() == reflect.Ptr {
 		c.rawInput = (*bytes.Buffer)(unsafe.Add(p, r.Offset))
 	}
 	return c, nil

@@ -215,7 +215,9 @@ func (vc *Conn) ReadBuffer(buffer *buf.Buffer) error {
 				}
 				needReturn = true
 				if vc.rawInput.Len() == 0 {
-					*vc.rawInput = bytes.Buffer{} // full reset
+					// Do not overwrite the buffer itself: it belongs to the TLS
+					// connection and may be pooled or re-allocated there on newer
+					// Go/TLS versions (Xray #7176). Dropping the reference is enough.
 					vc.rawInput = nil
 				}
 			}
