@@ -4,11 +4,36 @@ import (
 	"fmt"
 	"net/netip"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/Miku0139oao/aster-core/component/cidr"
 	"github.com/Miku0139oao/aster-core/component/geodata/strmatcher"
 	"github.com/Miku0139oao/aster-core/component/trie"
 )
+
+// isASCIILower reports whether s contains neither an uppercase ASCII byte nor a
+// non-ASCII byte. Such a string needs no case folding for the byte-wise
+// matchers below.
+func isASCIILower(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= utf8.RuneSelf || (c >= 'A' && c <= 'Z') {
+			return false
+		}
+	}
+	return true
+}
+
+// lowerDomain returns the form the substring and regex matchers expect. The
+// GeoSite lists store lowercase patterns and those matchers compare raw bytes,
+// unlike trie.DomainSet.Has which folds case as it walks. Hosts that are already
+// ASCII-lower -- the common case -- are returned without allocating.
+func lowerDomain(domain string) string {
+	if isASCIILower(domain) {
+		return domain
+	}
+	return strings.ToLower(domain)
+}
 
 var matcherTypeMap = map[Domain_Type]strmatcher.Type{
 	Domain_Plain:  strmatcher.Substr,
@@ -53,6 +78,14 @@ func (m *succinctDomainMatcher) ApplyDomain(domain string) bool {
 	if m.set.Has(domain) {
 		return true
 	}
+	if len(m.otherMatchers) == 0 && len(m.regexByTLD) == 0 && len(m.regexNoTLD) == 0 {
+		return false
+	}
+	// trie.DomainSet.Has folds ASCII case while it walks, but the substring
+	// matchers and the regex matchers below are raw byte comparisons, and
+	// regexByTLD is keyed by the literal TLD label (regexTLD lowercases it).
+	// Fold the host once for those paths, only after the set has missed.
+	domain = lowerDomain(domain)
 	for _, matcher := range m.otherMatchers {
 		if matcher.Match(domain) {
 			return true
