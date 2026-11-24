@@ -52,7 +52,9 @@ func NewShadowSocks(options *ShadowSocksOption) (*ShadowSocks, error) {
 	if err != nil {
 		return nil, err
 	}
-	if options.Password == "" && len(options.Users) == 0 {
+	// cipher "none" carries no key at all, so it is the one method allowed to
+	// have neither a password nor users.
+	if options.Password == "" && len(options.Users) == 0 && !strings.EqualFold(options.Cipher, "none") {
 		return nil, errors.New("shadowsocks: missing password")
 	}
 	return &ShadowSocks{

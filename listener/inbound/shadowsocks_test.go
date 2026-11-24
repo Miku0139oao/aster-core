@@ -265,6 +265,35 @@ var shadowsocksMultiUserCipherList = append(append([]string{}, shadowaead.List..
 
 func TestInboundShadowSocks_MultiUsers(t *testing.T) {
 	t.Parallel()
+	// cipher none needs no key, so a bare listener must still construct; every
+	// other method has to reject an empty password and empty users.
+	t.Run("NoneCipherWithoutPassword", func(t *testing.T) {
+		t.Parallel()
+		in, err := inbound.NewShadowSocks(&inbound.ShadowSocksOption{
+			BaseOption: inbound.BaseOption{
+				NameStr: "shadowsocks_inbound",
+				Listen:  "127.0.0.1",
+				Port:    "0",
+			},
+			Cipher: shadowsocks.MethodNone,
+		})
+		if !assert.NoError(t, err) {
+			return
+		}
+		_ = in.Close()
+	})
+	t.Run("AEADWithoutPassword", func(t *testing.T) {
+		t.Parallel()
+		_, err := inbound.NewShadowSocks(&inbound.ShadowSocksOption{
+			BaseOption: inbound.BaseOption{
+				NameStr: "shadowsocks_inbound",
+				Listen:  "127.0.0.1",
+				Port:    "0",
+			},
+			Cipher: "aes-128-gcm",
+		})
+		assert.Error(t, err)
+	})
 	t.Run("InvalidConfigs", func(t *testing.T) {
 		t.Parallel()
 		tests := []struct {
