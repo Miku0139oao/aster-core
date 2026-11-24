@@ -1,6 +1,6 @@
 module github.com/Miku0139oao/aster-core
 
-go 1.27.3
+go 1.27.4
 
 require (
 	github.com/bahlo/generic-list-go v0.2.0

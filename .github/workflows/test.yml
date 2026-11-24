@@ -28,9 +28,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest, go-version: "1.27.3", gvisor: true }
-          - { os: windows-latest, go-version: "1.27.3", gvisor: false }
-          - { os: macos-latest, go-version: "1.27.3", gvisor: false }
+          - { os: ubuntu-latest, go-version: "1.27.4", gvisor: true }
+          - { os: windows-latest, go-version: "1.27.4", gvisor: false }
+          - { os: macos-latest, go-version: "1.27.4", gvisor: false }
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -73,7 +73,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
         with:
-          go-version: "1.27.3"
+          go-version: "1.27.4"
           cache-dependency-path: |
             go.sum
             test/go.sum
@@ -103,7 +103,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
         with:
-          go-version: "1.27.3"
+          go-version: "1.27.4"
 
       # -count=1 keeps a re-run from being served a cached pass. It matters more
       # here than elsewhere because races surface intermittently, so re-running
