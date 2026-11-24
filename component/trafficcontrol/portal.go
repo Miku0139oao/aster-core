@@ -18,6 +18,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/Miku0139oao/aster-core/component/mptcp"
 )
 
 type portalService struct {
@@ -51,7 +53,12 @@ func (m *Manager) preparePortal(config PortalConfig) (*portalService, error) {
 	if strings.TrimSpace(config.Listen) == "" {
 		return nil, nil
 	}
-	listener, err := net.Listen("tcp", config.Listen)
+	// The portal is reachable remotely when Listen binds a public address, and
+	// Go enables MPTCP on listeners by default on Linux. Pin it off, matching
+	// every other inbound listener (see adapter/inbound/listen.go).
+	lc := net.ListenConfig{}
+	mptcp.SetNetListenConfig(&lc, false)
+	listener, err := lc.Listen(context.Background(), "tcp", config.Listen)
 	if err != nil {
 		return nil, err
 	}

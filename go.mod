@@ -12,7 +12,7 @@ require (
 	github.com/gofrs/uuid/v5 v5.5.1
 	github.com/golang/snappy v1.0.0
 	github.com/insomniacslk/dhcp v0.0.0-20261014062924-c6bb46ad3f3a
-	github.com/klauspost/compress v1.20.3
+	github.com/klauspost/compress v1.20.5
 	github.com/mdlayher/netlink v1.11.2
 	github.com/metacubex/age v0.0.0-20260603010618-28d156b4ea78
 	github.com/metacubex/amneziawg-go v0.0.0-20260908071407-0c1c6f40ecd7
