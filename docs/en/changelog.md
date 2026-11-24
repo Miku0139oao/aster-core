@@ -16,6 +16,26 @@ Aster Core does not have an official Aster `v*` release yet. GitHub's `Prereleas
 
 For the full feature and compatibility overview, see [Aster vs. Mihomo](/en/reference/mihomo-differences). This page keeps the dated Aster highlights without reproducing the upstream Mihomo history.
 
+## Unreleased | 2026-11-25 Mihomo 1.19.34 sync and Xray security items
+
+- **Remotely triggerable dependency bugs:** `klauspost/compress` 1.20.3 can be panicked by a crafted zstd frame on the uTLS certificate-decompression path (now 1.20.5); `gobwas/ws` 1.4.0 allocated from a peer-declared frame length without bound (now 1.5.0); `andybalholm/brotli` 1.1.1 over-allocated on crafted streams (now 1.3.0). `govulncheck` now finds nothing reachable in this tree (three findings before; one needed the Go 1.27.4 standard library).
+- **Go 1.27.4:** the `net/http` `MaxBytesReader` header race (GO-2026-6859) is fixed only in the 1.27.4 standard library, so `go.mod` and both CI workflows moved to it.
+- **MPTCP:** Go 1.27 enables MPTCP on every Linux listener by default. The main inbounds and the API already follow `inbound-mptcp` (default false), but the Linux `redir` inbound and the traffic-control portal (its address is user-configurable, possibly `0.0.0.0`) used a bare `net.Listen` and inherited it. Both now pin it off like tproxy already did.
+- **Vision:** the `unsafe` offset reads of the TLS connection's `input`/`rawInput` now require those fields to be pointer-typed, and the read path no longer writes `*rawInput` back (the buffer belongs to the TLS conn and may become a pooled pointer). The TLS libraries linked today still store them by value, so this is not a live crash — it removes a future landmine (Xray #7176).
+- **VLESS/VMess WebSocket:** a failed upgrade (`request.Write` or a non-101 response) now closes the underlying TCP conn instead of leaking it until GC (Xray #7395).
+- **Snell v6:** outbound and inbound v6 support with `mode` (default / unshaped / unsafe-raw) and `userkey` (ClientID). v6 replaces simple-obfs with PSK-derived shaping, so http/tls obfs are rejected on v6.
+- **Shadowsocks multi-user:** the inbound accepts `users: {name: password}` and the matched name reaches IN-USER rules. On 2022-blake3-aes-* the existing `password` is the server PSK and each user password is the user PSK (client password `iPSK:uPSK`); legacy AEAD requires an empty `password` and tries every user per packet. Adds `generate ss-password <128|256|512>`.
+- **GOST relay WebSocket:** `gost-relay` gains `ws`/`ws-opts` for relay+wss/mws/mwss. The CONNECT response is now consumed on the first read, because with `nodelay=false` GOST piggybacks it on the target's first bytes and a blocking read at dial time would stall.
+- **Rule case folding:** the GeoSite succinct matcher's substring/regex lookups and its TLD index compared raw bytes, so mixed-case hosts missed. The host is now folded once after the set misses; hosts that are already ASCII-lower stay allocation-free.
+- **DNS:** new `dns.fake-ip-disable-mapping` to stop mapping real filtered IPs back to domains in fake-ip mode; the default fake-ip-filter's `msftncsi` typo is fixed.
+- **Other upstream fixes:** ShadowTLS v2 with X25519MLKEM768, uTLS randomized-fingerprint weights, mieru inbound `tcp-idle-timeout` (seconds, >= 60), xhttp expired-connection reuse, Linux `/proc` scan when a process exits, Windows 386 `PROCESS_MEMORY_COUNTERS`, empty age secret keys, subscription-userinfo log verb, HTTP proxy CONNECT leftover bytes, SSH close on write error, httpupgrade share links, TUN invalid `dns-mode` now ignored, and dependency updates for `sing` / `sing-tun` / `sing-shadowsocks` / `tfo-go` (tfo-go fixes TFO silently not working on Go 1.27.2+).
+
+### Compatibility notes
+
+- Snell v6 is not compatible with pre-v5 obfs; `mode` must match the server.
+- With Shadowsocks multi-user enabled, `users` and the legacy AEAD single `password` cannot be combined.
+- `gost-relay`'s `ws` is an additive transport; existing configurations are unaffected.
+
 ## Unreleased | 2026-09-07 retained-memory regression fixes
 
 - **DNS compact cache:** `getMsgFromCache` expands a compact A/AAAA entry once and does not `cloneMsg` the result. Full-message cache hits are back to about 5 allocs / 264 B; `LookupIPv4CacheHit` stays 88 B / 3 allocs.
