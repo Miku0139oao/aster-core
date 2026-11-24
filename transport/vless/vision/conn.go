@@ -33,8 +33,13 @@ type Conn struct {
 
 	// [*tls.Conn] or other tls-like [net.Conn]'s internal variables
 	netConn  net.Conn      // tlsConn.NetConn()
-	input    *bytes.Reader // &tlsConn.input or nil
-	rawInput *bytes.Buffer // &tlsConn.rawInput or nil
+	input    *bytes.Reader // &tlsConn.input or its pointer field's target
+	rawInput *bytes.Buffer // &tlsConn.rawInput or its pointer field's target
+	// Whether the TLS struct holds the buffer inline (value field). Only then
+	// may the read path overwrite it; for a pointer field the buffer belongs to
+	// the TLS connection and may be pooled.
+	inputInline    bool
+	rawInputInline bool
 
 	// TLS sniffing state, mutated by FilterTLS on both paths.
 	filterMu             sync.Mutex
@@ -200,7 +205,9 @@ func (vc *Conn) ReadBuffer(buffer *buf.Buffer) error {
 				}
 				if vc.input.Len() == 0 {
 					needReturn = true
-					*vc.input = bytes.Reader{} // full reset
+					if vc.inputInline {
+						*vc.input = bytes.Reader{} // drop the reference to rawInput's memory
+					}
 					vc.input = nil
 				} else { // buffer is full
 					return nil
@@ -215,9 +222,9 @@ func (vc *Conn) ReadBuffer(buffer *buf.Buffer) error {
 				}
 				needReturn = true
 				if vc.rawInput.Len() == 0 {
-					// Do not overwrite the buffer itself: it belongs to the TLS
-					// connection and may be pooled or re-allocated there on newer
-					// Go/TLS versions (Xray #7176). Dropping the reference is enough.
+					if vc.rawInputInline {
+						*vc.rawInput = bytes.Buffer{} // drop the reference to its memory
+					}
 					vc.rawInput = nil
 				}
 			}
