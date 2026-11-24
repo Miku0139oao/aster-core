@@ -149,8 +149,8 @@ func checkTunName(tunName string) (ok bool) {
 	return true
 }
 
-// validateDNSMode rejects unknown `dns-mode` values before any interface work
-// starts. The empty value preserves sing-tun's DNSModeOrDefault() default:
+// validateDNSMode reports whether `dns-mode` is one of the values sing-tun
+// understands. The empty value preserves sing-tun's DNSModeOrDefault() default:
 // "hijack" when auto-route is enabled, "disabled" otherwise (and always
 // "disabled" on darwin). sing-tun v0.4.28 gates the Linux system-DNS setup
 // (resolvectl registration) on that default, so an older config with
@@ -164,6 +164,19 @@ func validateDNSMode(dnsMode string) error {
 	default:
 		return fmt.Errorf("invalid dns-mode: %s", dnsMode)
 	}
+}
+
+// normalizeDNSMode ignores an unrecognised `dns-mode` instead of aborting
+// listener creation (upstream mihomo 7907040f). Aster's config layer still
+// rejects unknown values during YAML parsing and PATCH /configs
+// (config.ValidateTunDNSMode), so this only relaxes listeners built directly
+// through the API; falling back to the empty value keeps sing-tun's default.
+func normalizeDNSMode(dnsMode string) string {
+	if err := validateDNSMode(dnsMode); err != nil {
+		log.Warnln("[TUN] ignored invalid dns-mode: %s", dnsMode)
+		return ""
+	}
+	return dnsMode
 }
 
 // closeAllocatedListenerOnErr is deferred from New after Listener allocation.
@@ -358,9 +371,7 @@ func New(options LC.Tun, tunnel C.Tunnel, additions ...inbound.Addition) (l *Lis
 		excludeMACAddress = append(excludeMACAddress, addr)
 	}
 
-	if err := validateDNSMode(options.DNSMode); err != nil {
-		return nil, err
-	}
+	options.DNSMode = normalizeDNSMode(options.DNSMode)
 	// gVisor sizes its per-channel processor slices with this value, so a
 	// negative count would panic during endpoint creation. Validate here as
 	// well: the listener/inbound path does not go through config.parseTun.

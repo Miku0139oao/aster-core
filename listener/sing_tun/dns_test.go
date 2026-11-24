@@ -107,3 +107,16 @@ func TestValidateDNSModeAcceptsKnownValues(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeDNSModeIgnoresUnknownValue(t *testing.T) {
+	for _, dnsMode := range []string{"", tun.DNSModeDisabled, tun.DNSModeNative, tun.DNSModeHijack} {
+		if got := normalizeDNSMode(dnsMode); got != dnsMode {
+			t.Fatalf("normalizeDNSMode(%q) = %q, want unchanged", dnsMode, got)
+		}
+	}
+	for _, dnsMode := range []string{"bogus", "Hijack", "disabled "} {
+		if got := normalizeDNSMode(dnsMode); got != "" {
+			t.Fatalf("normalizeDNSMode(%q) = %q, want empty mode", dnsMode, got)
+		}
+	}
+}
