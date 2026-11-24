@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -39,10 +40,16 @@ type Listener struct {
 	config       LC.ShadowsocksServer
 	listeners    []net.Listener
 	udpListeners []net.PacketConn
-	service      shadowsocks.Service
+	service      service
 	simpleObfs   func(net.Conn) net.Conn
 	closeOnce    sync.Once
 	closeErr     error
+}
+
+// service is the common part of shadowsocks.Service and shadowsocks.MultiService
+type service interface {
+	network.TCPConnectionHandler
+	network.UDPHandler
 }
 
 var _listener *Listener
@@ -85,6 +92,8 @@ func New(config LC.ShadowsocksServer, lc C.InboundListenConfig, tunnel C.Tunnel,
 	}()
 
 	switch {
+	case len(config.Users) > 0:
+		sl.service, err = newMultiService(config, udpTimeout, h)
 	case config.Cipher == shadowsocks.MethodNone:
 		sl.service = shadowsocks.NewNoneService(udpTimeout, h)
 	case common.Contains(shadowaead.List, config.Cipher):
@@ -242,6 +251,48 @@ func New(config LC.ShadowsocksServer, lc C.InboundListenConfig, tunnel C.Tunnel,
 	}
 
 	return sl, nil
+}
+
+// newMultiService creates a service that identifies the user by its password,
+// the matched username is passed to the tunnel as metadata.InUser.
+//
+// For 2022-blake3-aes-* methods, config.Password is the server PSK (iPSK) and each user password is
+// the user PSK (uPSK), so the client password is "iPSK:uPSK".
+// For legacy AEAD methods, each user password is used directly and config.Password must be empty.
+// Legacy AEAD has no user identity in the packet, so every user is tried for each packet, which makes
+// the cost grow linearly with the number of users.
+func newMultiService(config LC.ShadowsocksServer, udpTimeout int64, handler shadowsocks.Handler) (service, error) {
+	var multiService shadowsocks.MultiService[string]
+	var err error
+	switch {
+	case common.Contains(shadowaead.List, config.Cipher):
+		if config.Password != "" {
+			return nil, fmt.Errorf("shadowsocks: password must be empty when users is set for method: %s", config.Cipher)
+		}
+		multiService, err = shadowaead.NewMultiService[string](config.Cipher, udpTimeout, handler)
+	case common.Contains(shadowaead_2022.List, config.Cipher):
+		multiService, err = shadowaead_2022.NewMultiServiceWithPassword[string](config.Cipher, config.Password, udpTimeout, handler, ntp.Now)
+		if errors.Is(err, os.ErrInvalid) { // 2022-blake3-chacha*-poly1305 can't identify users
+			err = fmt.Errorf("shadowsocks: users is not supported for method: %s", config.Cipher)
+		}
+	default:
+		err = fmt.Errorf("shadowsocks: users is not supported for method: %s", config.Cipher)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	userNameList := make([]string, 0, len(config.Users))
+	userPasswordList := make([]string, 0, len(config.Users))
+	for name, password := range config.Users {
+		userNameList = append(userNameList, name)
+		userPasswordList = append(userPasswordList, password)
+	}
+	err = multiService.UpdateUsersWithPasswords(userNameList, userPasswordList)
+	if err != nil {
+		return nil, err
+	}
+	return multiService, nil
 }
 
 func (l *Listener) Close() error {

@@ -20,6 +20,7 @@ func TestFailedInterfaceBackedListenersRemainClosable(t *testing.T) {
 
 	shadowsocks, err := NewShadowSocks(&ShadowSocksOption{
 		BaseOption: BaseOption{NameStr: "shadowsocks", Listen: "127.0.0.1", Port: "0"},
+		Password:   "password",
 		Cipher:     "invalid",
 	})
 	require.NoError(t, err)
