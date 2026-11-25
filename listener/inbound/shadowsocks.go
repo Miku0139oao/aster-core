@@ -1,6 +1,7 @@
 package inbound
 
 import (
+	"errors"
 	"strings"
 
 	C "github.com/Miku0139oao/aster-core/constant"
@@ -11,15 +12,16 @@ import (
 
 type ShadowSocksOption struct {
 	BaseOption
-	Password   string     `inbound:"password"`
-	Cipher     string     `inbound:"cipher"`
-	UDP        bool       `inbound:"udp,omitempty"`
-	MuxOption  MuxOption  `inbound:"mux-option,omitempty"`
-	ShadowTLS  ShadowTLS  `inbound:"shadow-tls,omitempty"`
-	ResTLS     ResTLS     `inbound:"res-tls,omitempty"`
-	JLSConfig  JLSConfig  `inbound:"jls-config,omitempty"`
-	KcpTun     KcpTun     `inbound:"kcp-tun,omitempty"`
-	SimpleObfs SimpleObfs `inbound:"simple-obfs,omitempty"`
+	Password   string            `inbound:"password,omitempty"`
+	Users      map[string]string `inbound:"users,omitempty"`
+	Cipher     string            `inbound:"cipher"`
+	UDP        bool              `inbound:"udp,omitempty"`
+	MuxOption  MuxOption         `inbound:"mux-option,omitempty"`
+	ShadowTLS  ShadowTLS         `inbound:"shadow-tls,omitempty"`
+	ResTLS     ResTLS            `inbound:"res-tls,omitempty"`
+	JLSConfig  JLSConfig         `inbound:"jls-config,omitempty"`
+	KcpTun     KcpTun            `inbound:"kcp-tun,omitempty"`
+	SimpleObfs SimpleObfs        `inbound:"simple-obfs,omitempty"`
 }
 
 type SimpleObfs struct {
@@ -50,6 +52,11 @@ func NewShadowSocks(options *ShadowSocksOption) (*ShadowSocks, error) {
 	if err != nil {
 		return nil, err
 	}
+	// cipher "none" carries no key at all, so it is the one method allowed to
+	// have neither a password nor users.
+	if options.Password == "" && len(options.Users) == 0 && !strings.EqualFold(options.Cipher, "none") {
+		return nil, errors.New("shadowsocks: missing password")
+	}
 	return &ShadowSocks{
 		Base:   base,
 		config: options,
@@ -57,6 +64,7 @@ func NewShadowSocks(options *ShadowSocksOption) (*ShadowSocks, error) {
 			Enable:     true,
 			Listen:     base.RawAddress(),
 			Password:   options.Password,
+			Users:      options.Users,
 			Cipher:     options.Cipher,
 			Udp:        options.UDP,
 			MuxOption:  options.MuxOption.Build(),

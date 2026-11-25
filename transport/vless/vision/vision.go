@@ -110,11 +110,26 @@ func NewConn(conn net.Conn, tlsConn net.Conn, userUUID uuid.UUID) (*Conn, error)
 		}
 	}
 
+	// The TLS connection keeps these buffers by value today, but a library
+	// update may switch them to pointers that it pools and re-allocates
+	// (XTLS/Xray-core #7176). Resolve the field either way: an inline field is
+	// addressed directly, a pointer field is dereferenced, and the read path
+	// only writes the buffers back for the inline form.
 	if i, ok := t.FieldByName("input"); ok {
-		c.input = (*bytes.Reader)(unsafe.Add(p, i.Offset))
+		if i.Type.Kind() == reflect.Ptr {
+			c.input = *(**bytes.Reader)(unsafe.Add(p, i.Offset))
+		} else {
+			c.input = (*bytes.Reader)(unsafe.Add(p, i.Offset))
+			c.inputInline = true
+		}
 	}
 	if r, ok := t.FieldByName("rawInput"); ok {
-		c.rawInput = (*bytes.Buffer)(unsafe.Add(p, r.Offset))
+		if r.Type.Kind() == reflect.Ptr {
+			c.rawInput = *(**bytes.Buffer)(unsafe.Add(p, r.Offset))
+		} else {
+			c.rawInput = (*bytes.Buffer)(unsafe.Add(p, r.Offset))
+			c.rawInputInline = true
+		}
 	}
 	return c, nil
 }

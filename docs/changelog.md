@@ -16,6 +16,26 @@ Aster Core 目前尚未發布正式的 Aster `v*` 版本。GitHub 上的 `Prerel
 
 完整的功能差異與相容性說明，請看[Aster 與 Mihomo 的差異](/reference/mihomo-differences)；本頁只整理有日期的 Aster 變更重點。
 
+## 未發布｜2026-11-25 同步 Mihomo 1.19.34、Xray 安全項
+
+- **可遠端觸發的依賴漏洞：** `klauspost/compress` 1.20.3 在 uTLS 解壓縮伺服器憑證的 zstd 路徑上可被特製 frame 打成 panic，升到 1.20.5；`gobwas/ws` 1.4.0 對對端宣告的 frame 長度無上限配置，升到 1.5.0；`andybalholm/brotli` 1.1.1 對特製壓縮流過度配置，升到 1.3.0。`govulncheck` 對本樹已無可利用項目（原本 3 項，其中 net/http 一項需 Go 1.27.4）。
+- **Go 1.27.4：** `net/http` 的 `MaxBytesReader` header race（GO-2026-6859）只在 1.27.4 修正，`go.mod` 與兩個 CI workflow 同步升級。
+- **MPTCP：** Go 1.27 在 Linux 上預設對所有監聽器開啟 MPTCP。核心入站與 API 早已由 `inbound-mptcp`（預設 false）統一關閉，但 Linux `redir` 入站與 traffic-control 入口網站（位址可由使用者設為 0.0.0.0）走裸 `net.Listen` 而漏掉；兩者已比照 tproxy 顯式關閉。
+- **Vision：** 讀取 TLS 連線 `input`/`rawInput` 的 `unsafe` 位移改為先確認欄位為指標型別，且不再回寫 `*rawInput`（緩衝區屬 TLS 連線，未來版本可能改為 pooled 指標）。現行連結的 tls/utls 仍是值型別，所以不是現行 crash，只是拆掉未來的定時炸彈（Xray #7176）。
+- **VLESS/VMess WebSocket：** 升級失敗（`request.Write` 或非 101 回應）時關閉底層 TCP，不再等 GC（Xray #7395）。
+- **Snell v6：** 新增出站與入站 v6 支援，`mode`（default／unshaped／unsafe-raw）與 `userkey`（ClientID）；v6 以 PSK 導出的流量塑形取代 simple-obfs，因此 v6 不支援 http／tls obfs。
+- **Shadowsocks 多使用者：** 入站支援 `users: {名稱: 密碼}`，命中名稱可用於 IN-USER 規則；2022-blake3-aes-* 以上方 `password` 為伺服端 PSK、使用者密碼為 uPSK（客戶端填 `iPSK:uPSK`），舊 AEAD 需留空 `password` 且每包逐使用者嘗試。另新增 `generate ss-password <128|256|512>`。
+- **GOST relay WebSocket：** `gost-relay` 支援 `ws`／`ws-opts`，可組合 relay+wss/mws/mwss；CONNECT 回應改為第一次讀取時才消費，避免 `nodelay=false` 時與目標首包綁在一起造成阻塞。
+- **規則大小寫：** GeoSite succinct matcher 的 substring／regex 與其 TLD 索引原本是原始位元組比對，混合大小寫主機名會漏配；現在集合未命中後才折一次大小寫，已是 ASCII 小寫的主機維持零配置。
+- **DNS：** 新增 `dns.fake-ip-disable-mapping`，關閉 fake-ip 模式下把真實 IP 反查回網域的行為；預設 fake-ip-filter 的 `msftncsi` 拼字修正。
+- **其他上游修正：** ShadowTLS v2 搭配 X25519MLKEM768、utls 隨機指紋權重、mieru 入站 `tcp-idle-timeout`（秒，≥60）、xhttp 重用過期連線、Linux `/proc` 掃描遇到程序結束、Windows 386 `PROCESS_MEMORY_COUNTERS`、age 空 secret key、subscription-userinfo log 格式、HTTP proxy CONNECT 殘留位元組、SSH 底層寫入失敗、httpupgrade 分享連結、TUN 無效 `dns-mode` 改為忽略、`sing`／`sing-tun`／`sing-shadowsocks`／`tfo-go` 依賴更新（tfo-go 修正 Go 1.27.2+ 的 TFO 失效）。
+
+### 相容性注意
+
+- Snell v6 與 v5 以前的 obfs 不相容；`mode` 必須與伺服端一致。
+- Shadowsocks 多使用者啟用後，`users` 與舊 AEAD 的單一 `password` 不能同時使用。
+- `gost-relay` 的 `ws` 是新增傳輸，舊設定不受影響。
+
 ## 未發布｜2026-09-07 記憶體回退修正
 
 - **DNS compact cache：** `getMsgFromCache` 對精簡 A／AAAA 只 `expand` 一次，不再接著 `cloneMsg`。完整訊息 cache hit 回到約 5 allocs／264 B；`LookupIPv4CacheHit` 仍是 88 B／3 allocs。

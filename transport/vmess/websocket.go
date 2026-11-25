@@ -375,6 +375,13 @@ func streamWebsocketWithEarlyDataConn(conn net.Conn, c *WebsocketConfig) (net.Co
 }
 
 func streamWebsocketConn(ctx context.Context, conn net.Conn, c *WebsocketConfig, earlyData *bytes.Buffer) (_ net.Conn, err error) {
+	// A failed upgrade used to leave the TCP conn open until the GC ran.
+	defer func() {
+		if err != nil {
+			_ = conn.Close()
+		}
+	}()
+
 	u, err := url.Parse(c.Path)
 	if err != nil {
 		return nil, fmt.Errorf("parse url %s error: %w", c.Path, err)

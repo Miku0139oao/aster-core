@@ -1,18 +1,18 @@
 module github.com/Miku0139oao/aster-core
 
-go 1.27.3
+go 1.27.4
 
 require (
 	github.com/bahlo/generic-list-go v0.2.0
 	github.com/cilium/ebpf v0.22.0
 	github.com/coreos/go-iptables v0.8.0
 	github.com/dlclark/regexp2 v1.12.0
-	github.com/enfein/mieru/v3 v3.39.0
-	github.com/gobwas/ws v1.4.0
+	github.com/enfein/mieru/v3 v3.40.0
+	github.com/gobwas/ws v1.5.0
 	github.com/gofrs/uuid/v5 v5.5.1
 	github.com/golang/snappy v1.0.0
 	github.com/insomniacslk/dhcp v0.0.0-20261014062924-c6bb46ad3f3a
-	github.com/klauspost/compress v1.20.3
+	github.com/klauspost/compress v1.20.5
 	github.com/mdlayher/netlink v1.11.2
 	github.com/metacubex/age v0.0.0-20260603010618-28d156b4ea78
 	github.com/metacubex/amneziawg-go v0.0.0-20260908071407-0c1c6f40ecd7
@@ -41,17 +41,17 @@ require (
 	github.com/metacubex/sing v0.5.9
 	github.com/metacubex/sing-mux v0.3.12
 	github.com/metacubex/sing-quic v0.0.0-20260904234848-1c242664697a
-	github.com/metacubex/sing-shadowsocks v0.2.13
+	github.com/metacubex/sing-shadowsocks v0.2.14
 	github.com/metacubex/sing-shadowsocks2 v0.2.8
-	github.com/metacubex/sing-tun v0.4.28
+	github.com/metacubex/sing-tun v0.4.29
 	github.com/metacubex/sing-vmess v0.2.5
 	github.com/metacubex/sing-wireguard v0.0.0-20261002050126-e5fa1a607406
 	github.com/metacubex/smux v0.0.0-20260105030934-d0c8756d3141
 	github.com/metacubex/ssh v0.1.0
 	github.com/metacubex/tailscale v0.0.0-20260821153257-ff0ecd818181
-	github.com/metacubex/tfo-go v0.0.0-20260623020846-376a77860b8c
+	github.com/metacubex/tfo-go v0.0.0-20261026151606-08d83ec08c84
 	github.com/metacubex/tls v0.1.9
-	github.com/metacubex/utls v1.8.8
+	github.com/metacubex/utls v1.9.0-alpha.1
 	github.com/metacubex/wireguard-go v0.0.0-20250820062549-a6cecdd7f57f
 	github.com/miekg/dns v1.1.73
 	github.com/mroth/weightedrand/v2 v2.1.0
@@ -83,7 +83,7 @@ require (
 	github.com/Yawning/aez v0.0.0-20211027044916-e49e68abd344 // indirect
 	github.com/ajg/form v1.7.1 // indirect
 	github.com/akutz/memconn v0.1.0 // indirect
-	github.com/andybalholm/brotli v1.1.1 // indirect
+	github.com/andybalholm/brotli v1.3.0 // indirect
 	github.com/bodgit/plumbing v1.3.0 // indirect
 	github.com/bodgit/windows v1.0.1 // indirect
 	github.com/coder/websocket v1.8.12 // indirect
@@ -97,7 +97,6 @@ require (
 	github.com/gaukas/godicttls v0.0.4 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/gobwas/httphead v0.1.0 // indirect
-	github.com/gobwas/pool v0.2.1 // indirect
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8 // indirect
 	github.com/google/btree v1.1.3 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect

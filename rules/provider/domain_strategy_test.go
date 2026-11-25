@@ -110,3 +110,28 @@ func TestDomainStrategyDumpMrsEarlyStop(t *testing.T) {
 	})
 	assert.Equal(t, 1, count)
 }
+
+// Provider domain rules are lowercased on insert by trie.ValidAndSplitDomain and
+// matched through trie.DomainSet.Has, which folds ASCII case as it walks. No
+// per-call lowering is needed, so this locks the behavior in.
+func TestDomainStrategyFoldsHostCase(t *testing.T) {
+	strategy := NewDomainStrategy()
+	strategy.Reset()
+	for _, domain := range []string{"example.com", ".suffix.example.org", "*.wild.example.net", "中文.example"} {
+		strategy.Insert(domain)
+	}
+	strategy.FinishInsert()
+
+	hosts := map[string]bool{
+		"EXAMPLE.COM":            true,
+		"WWW.SUFFIX.EXAMPLE.ORG": true,
+		"www.wild.example.net":   true,
+		"中文.EXAMPLE":             true,
+		"www.中文.example":         false,
+		"EXAMPLE.INVALID":        false,
+	}
+	for host, want := range hosts {
+		metadata := &C.Metadata{Host: host}
+		assert.Equal(t, want, strategy.Match(metadata, C.RuleMatchHelper{}), host)
+	}
+}

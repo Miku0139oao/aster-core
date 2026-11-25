@@ -1,11 +1,13 @@
 package redir
 
 import (
+	"context"
 	"net"
 	"sync/atomic"
 
 	"github.com/Miku0139oao/aster-core/adapter/inbound"
 	"github.com/Miku0139oao/aster-core/component/keepalive"
+	"github.com/Miku0139oao/aster-core/component/mptcp"
 	C "github.com/Miku0139oao/aster-core/constant"
 )
 
@@ -39,7 +41,13 @@ func New(addr string, tunnel C.Tunnel, additions ...inbound.Addition) (*Listener
 		}
 	}
 
-	l, err := net.Listen("tcp", addr)
+	// Go enables MPTCP on every listener by default on Linux (see net's
+	// defaultMPTCPEnabledListen), so a bare net.Listen would opt this inbound
+	// into MPTCP even though inbound-mptcp defaults to false everywhere else.
+	// tproxy pins it off the same way.
+	lc := net.ListenConfig{}
+	mptcp.SetNetListenConfig(&lc, false)
+	l, err := lc.Listen(context.Background(), "tcp", addr)
 	if err != nil {
 		return nil, err
 	}
