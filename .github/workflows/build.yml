@@ -311,22 +311,6 @@ jobs:
         cat checksums.txt
       shell: bash
 
-    - name: Delete current prerelease
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        set -euo pipefail
-        TAG="Prerelease-${GITHUB_REF_NAME}"
-        PREV_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" --jq .object.sha 2>/dev/null || true)"
-        echo "PREV_SHA=${PREV_SHA}" >> "$GITHUB_ENV"
-        RELEASE_ID="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --jq ".[] | select(.tag_name == \"${TAG}\") | .id")"
-        if [ -n "${RELEASE_ID}" ]; then
-          gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}"
-        fi
-        TAG_REF="$(gh api "repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/${TAG}" --jq ".[] | select(.ref == \"refs/tags/${TAG}\") | .ref")"
-        if [ -n "${TAG_REF}" ]; then
-          gh api --method DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/${TAG}"
-        fi
     - name: Set Env
       run: |
         echo "BUILDTIME=$(TZ=Asia/Shanghai date)" >> "$GITHUB_ENV"
@@ -352,10 +336,13 @@ jobs:
           RANGE="${RANGE_END}~80..${RANGE_END}"
         fi
         echo "Release notes range: ${RANGE}"
+        # The range starts at the fixed baseline, so the notes grow with
+        # every push to main; genReleaseNote.sh caps each section instead
+        # and points at Full Changelog for the rest. Keep this as a
+        # warning only: a long body must never block the upload.
         bash ./.github/genReleaseNote.sh -v "${RANGE}"
         if [ "$(wc -l < release.md)" -gt 250 ]; then
-          echo "Generated notes are too long for range ${RANGE}" >&2
-          exit 1
+          echo "::warning::Generated notes are longer than 250 lines for range ${RANGE}"
         fi
         {
           echo "Release created at ${BUILDTIME}"
@@ -367,6 +354,25 @@ jobs:
           echo
           cat release.md
         } > release.txt
+
+    # Delete only after the notes are generated: this used to run first,
+    # so any later failure (notes too long, bad range) left the repo with
+    # no prerelease at all until the next green push. Deleting moves the
+    # tag onto this commit, which the upload step relies on.
+    - name: Delete current prerelease
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set -euo pipefail
+        TAG="Prerelease-${GITHUB_REF_NAME}"
+        RELEASE_ID="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --jq ".[] | select(.tag_name == \"${TAG}\") | .id")"
+        if [ -n "${RELEASE_ID}" ]; then
+          gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}"
+        fi
+        TAG_REF="$(gh api "repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/${TAG}" --jq ".[] | select(.ref == \"refs/tags/${TAG}\") | .ref")"
+        if [ -n "${TAG_REF}" ]; then
+          gh api --method DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/${TAG}"
+        fi
 
     - name: Upload Prerelease
       uses: softprops/action-gh-release@c12583777ecdfd3be55c69cf75464299dc01057e # v3
@@ -468,8 +474,7 @@ jobs:
           echo "Release notes range: ${RANGE}"
           bash ./.github/genReleaseNote.sh -v "${RANGE}"
           if [ "$(wc -l < release.md)" -gt 250 ]; then
-            echo "Generated notes are too long for range ${RANGE}" >&2
-            exit 1
+            echo "::warning::Generated notes are longer than 250 lines for range ${RANGE}"
           fi
           {
             echo "Verify a downloaded asset with \`sha256sum --check --ignore-missing checksums.txt\` (the list covers every file in this release)."
